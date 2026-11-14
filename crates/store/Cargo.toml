@@ -1,0 +1,23 @@
+[package]
+name = "restbook-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+# Encrypted history. Enabling this builds SQLCipher from source (needs a C
+# toolchain and a few minutes on first build).
+sqlcipher = ["dep:base64", "dep:chrono", "dep:keyring", "dep:rand", "dep:rusqlite"]
+
+[dependencies]
+restbook-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+base64 = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
+keyring = { version = "3", optional = true }
+rand = { version = "0.8", optional = true }
+rusqlite = { version = "0.42", features = ["bundled-sqlcipher"], optional = true }

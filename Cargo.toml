@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/transport", "crates/store", "crates/devcli"]
+# The GPUI app is excluded from the workspace on purpose: it can be built on its
+# own (`cd crates/app && cargo run`) without pulling GPUI into the engine build.
+exclude = ["crates/app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.82"
+
+[workspace.dependencies]
+restbook-core = { path = "crates/core" }
+restbook-store = { path = "crates/store" }
+restbook-transport = { path = "crates/transport" }
+
+async-trait = "0.1"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+futures = "0.3"
+# native-tls (SChannel on Windows) keeps the build free of a C toolchain;
+# rustls/ring would need one. Flip to "rustls-tls" if you have MSVC Build Tools.
+reqwest = { version = "0.12", default-features = false, features = [
+    "native-tls",
+    "http2",
+    "json",
+    "cookies",
+    "gzip",
+    "brotli",
+    "deflate",
+    "multipart",
+    "stream",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "fs"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+url = "2"

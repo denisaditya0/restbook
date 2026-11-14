@@ -1,0 +1,5 @@
+[toolchain]
+# GPUI builds on Windows with either MSVC or GNU. This machine has no Visual
+# Studio Build Tools, so the GNU toolchain is pinned here: it keeps the app
+# crate on the same toolchain as the engine and links with MinGW's `ld`.
+channel = "stable-x86_64-pc-windows-gnu"
