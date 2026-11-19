@@ -145,16 +145,20 @@ crypto_dll_name() {
     grep -a -o -m 1 -E 'libcrypto-[0-9]+-[a-z0-9_]+\.dll' "$1" 2>/dev/null || true
 }
 
-# Copy `$name` from the OpenSSL tree beside the build into `$out`. Only that
+# Copy `$dll` from the OpenSSL tree beside the build into `$out`. Only that
 # tree's copy is trusted: a DLL found in System32 or on PATH may be a different
 # major or a differently configured build, and the machine that installs the
 # artifact has neither.
+#
+# The parameter is `dll`, not `name`: `sh` has no `local`, so assigning `name`
+# here would overwrite the app name the installer's icon and `.iss` paths are
+# built from — which ISCC then reports as a missing file.
 copy_crypto_dll() {
-    name=$1
+    dll=$1
     for dir in "${openssl_dir:-/nonexistent}/bin" "${openssl_dir:-/nonexistent}/lib"; do
-        if [ -f "$dir/$name" ]; then
-            cp "$dir/$name" "$out/"
-            echo "package: $name from $dir" >&2
+        if [ -f "$dir/$dll" ]; then
+            cp "$dir/$dll" "$out/"
+            echo "package: $dll from $dir" >&2
             return 0
         fi
     done
@@ -218,9 +222,9 @@ winpath() {
 # Skipped, with the reason, when the pieces an installer needs are not all
 # here: the bare directory is still a usable artifact.
 build_installer() {
-    crypto_dll=$1
+    dll=$1
 
-    if [ -z "$crypto_dll" ]; then
+    if [ -z "$dll" ]; then
         echo "package: the exe needs no DLL beside it, and restbook.iss expects" >&2
         echo "package: one; skipping the installer, dist/ is still runnable" >&2
         return 0
@@ -248,7 +252,7 @@ build_installer() {
         "/DIconFile=$(winpath "$root/crates/app/icons/$name.ico")" \
         "/DArchitecture=$relarch" \
         "/DAppId=$app_id" \
-        "/DCryptoDll=$crypto_dll" \
+        "/DCryptoDll=$dll" \
         "$(winpath "$root/crates/app/packaging/$name.iss")"
 }
 
