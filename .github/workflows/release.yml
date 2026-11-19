@@ -219,19 +219,52 @@ jobs:
 
       # SQLCipher links libcrypto dynamically, so `libsqlite3-sys`'s build
       # script needs an OpenSSL tree in `OPENSSL_DIR`; `package.sh` copies the
-      # matching DLL beside the exe. `choco` is the deterministic source, and
-      # the path is found rather than assumed.
+      # matching DLL beside the exe. `choco` is the deterministic source.
+      #
+      # `OPENSSL_LIB_DIR` is not optional: the OpenSSL for Windows layout keeps
+      # MinGW `.dll.a` files in `lib\`, and the `.lib` files MSVC needs under
+      # `lib\VC\x64\MD` — the `/MD` CRT, which is what rustc links against. A
+      # bare `OPENSSL_DIR` therefore resolves to `lib\` and the link dies with
+      # `LNK1181: cannot open input file 'libcrypto.lib'`.
       - name: Install OpenSSL (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           choco install openssl --no-progress -y
+
           $root = Get-ChildItem 'C:\Program Files\OpenSSL*' -Directory |
+            Where-Object { Test-Path (Join-Path $_.FullName 'include\openssl\ssl.h') } |
             Select-Object -First 1
-          if (-not $root) { throw 'OpenSSL install directory not found' }
+          if (-not $root) { throw 'OpenSSL SDK directory not found' }
+
+          # Never accept `lib\VC\Win32`, which exists in the same tree and
+          # would be a 32-bit import library.
+          $candidates = @(
+            "$($root.FullName)\lib\VC\x64\MD",
+            "$($root.FullName)\lib\VC\x64\MT",
+            "$($root.FullName)\lib\x64",
+            "$($root.FullName)\lib"
+          )
+          $lib = $candidates |
+            Where-Object { Test-Path (Join-Path $_ 'libcrypto.lib') } |
+            Select-Object -First 1
+          if (-not $lib) {
+            # Last resort, still refusing the 32-bit tree beside the 64-bit one.
+            $found = Get-ChildItem -Path $root.FullName -Recurse -Filter 'libcrypto.lib' |
+              Where-Object { $_.FullName -notmatch '\\Win32\\' } |
+              Select-Object -First 1
+            if ($found) { $lib = $found.DirectoryName }
+          }
+          if (-not $lib) {
+            throw "libcrypto.lib not found; looked in: $($candidates -join ', ')"
+          }
+
           $dir = $root.FullName -replace '\\', '/'
+          $lib = $lib -replace '\\', '/'
           "OPENSSL_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "OPENSSL_LIB_DIR=$lib" | Out-File -FilePath $env:GITHUB_ENV -Append
           Write-Host "OPENSSL_DIR=$dir"
+          Write-Host "OPENSSL_LIB_DIR=$lib"
 
       # One packaging script for every OS; it already knows each one's shape.
       - name: Package
@@ -245,10 +278,17 @@ jobs:
           set -euo pipefail
           mkdir -p out
           # A bare exe is not enough: it imports libcrypto at load time, so the
-          # DLL travels with it. R3 replaces this zip with an Inno Setup
-          # installer.
-          7z a -tzip "out/restbook-${VERSION}-${PLATFORM}.zip" \
-            dist/restbook-app.exe dist/libcrypto-3-x64.dll
+          # DLL travels with it. The name follows the OpenSSL major version, so
+          # it is found rather than assumed. R3 replaces this zip with an Inno
+          # Setup installer.
+          dll=$(find dist -maxdepth 1 -name 'libcrypto-*.dll' -print -quit)
+          test -n "$dll" || { echo "::error::no libcrypto DLL in dist" >&2; exit 1; }
+          test -f dist/restbook-app.exe
+          # `cd dist` so the archive holds the two files at its root instead of
+          # a `dist/` directory.
+          ( cd dist && 7z a -tzip "../out/restbook-${VERSION}-${PLATFORM}.zip" \
+              restbook-app.exe "$(basename "$dll")" )
+          7z l "out/restbook-${VERSION}-${PLATFORM}.zip"
 
       - name: Collect macOS artifact
         if: runner.os == 'macOS'
