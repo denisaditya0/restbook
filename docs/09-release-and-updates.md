@@ -1,0 +1,281 @@
+# restbook — release and updates
+
+How a build becomes a downloadable artifact, what the app checks for, and what
+still has to be built. Scope and non-goals stay in
+[`00-scope.md`](00-scope.md); per-OS prerequisites are in
+[`05-cross-platform.md`](05-cross-platform.md).
+
+**Status:** `.github/workflows/release.yml` builds and publishes a release for
+the three targets below that fit the free-tier budget; the rest of the matrix
+is still a specification. `scripts/package.sh` produces one artifact per OS
+with its branding applied, but no installer. The update check in
+`crates/app/src/updater.rs` is phase 1 — it fetches a manifest, compares
+versions, and reports. Nothing is downloaded or replaced. The manifest URL is
+compiled in from the build's release channel, so a packaged app checks on its
+own (R1).
+
+A local release build is **not** possible on the development machine: a release
+profile makes `gpui-pre-windows`' build script compile HLSL with `fxc.exe`, and
+there is no Windows SDK there. `windows-2025` has it, which is one of the
+reasons the workflow exists.
+
+## Versioning
+
+One number, three places that must agree:
+
+| Place | Owns |
+|---|---|
+| `[workspace.package] version` in `Cargo.toml` | the engine crates |
+| `[package] version` in `crates/app/Cargo.toml` | the app, which is a separate workspace |
+| the git tag | the release |
+
+`crates/app` is excluded from the root workspace on purpose (GPUI must stay out
+of the engine build), so it carries its own version instead of inheriting
+`workspace.package`. A bump touches both, plus `Cargo.lock` in each workspace.
+`updater::CURRENT_VERSION` is `env!("CARGO_PKG_VERSION")`, which for the app
+crate means the app's own number — so a stale app version makes the app
+advertise the wrong build to itself.
+
+Tags are the bare version: `0.2.0`, `0.2.0-beta.1`. No `v` prefix, no build
+metadata, so the tag, the manifest, and `semver::Version` all agree.
+
+## Channels
+
+Two channels, two manifests, one code path:
+
+| Channel | Manifest asset | Published as |
+|---|---|---|
+| `stable` | `latest.json` | a normal release |
+| `beta` | `latest-beta.json` | a prerelease (`0.2.0-beta.1`) |
+
+Both channels work with the existing check because `semver::Version` already
+orders prereleases correctly: an app on `0.1.0` offered `0.2.0-beta.1` sees an
+update, and an app on `0.2.0-beta.1` offered `0.2.0` sees an update too. Nothing
+in `interpret()` needs a channel concept; the channel is which manifest URL the
+build was pointed at.
+
+That leaves one real gap, now closed: `updater::manifest_url()` used to read
+`RESTBOOK_UPDATE_URL` at **runtime** with `std::env::var` only, and a GUI app
+launched from Explorer or Finder has no useful environment — a packaged build
+reported itself unconfigured and could never learn about a later release.
+The URL is now derived from the compiled version's channel and baked in:
+
+```rust
+// crates/app/src/updater.rs — runtime env still wins, so a test or a developer
+// can point one build anywhere; then the build-time env; then the channel.
+pub(crate) fn manifest_url() -> Option<String> {
+    runtime_override().or_else(build_override).or_else(channel_url)
+}
+
+fn manifest_url_for(repo: &str, version: &Version) -> String {
+    if version.pre.is_empty() {
+        format!("https://github.com/{repo}/releases/latest/download/latest.json")
+    } else {
+        format!("https://github.com/{repo}/releases/tags/beta-latest/download/latest-beta.json")
+    }
+}
+```
+
+`RELEASE_REPO` defaults to `denisaditya0/restbook`; the release workflow sets
+`RESTBOOK_UPDATE_REPO` to `github.repository`, so a fork's builds poll the fork.
+Both `option_env!` variables are tracked by Cargo, so changing either rebuilds
+the crate.
+
+This has to ship in the **first** release. A `0.1.1` that checks for updates
+cannot reach a `0.1.0` that does not, because the URL is compiled into the
+binary the user already installed.
+
+## Where the manifest lives
+
+GitHub Releases hosts the binaries, and the manifest is just another asset — so
+no server, no API token, no rate limit:
+
+```
+stable  https://github.com/<owner>/restbook/releases/latest/download/latest.json
+```
+
+`releases/latest` resolves to the newest **non-prerelease** release, which is
+exactly the stable channel. It cannot serve beta, because a prerelease is never
+"latest". So the beta channel is a permanent release tagged `beta-latest` whose
+only asset is `latest-beta.json`, and a beta build points at:
+
+```
+beta    https://github.com/<owner>/restbook/releases/tags/beta-latest/download/latest-beta.json
+```
+
+Both URLs are static: updating a channel means replacing one asset, and no
+client ever calls `api.github.com` (60 unauthenticated requests per hour).
+
+`beta-latest` is refreshed by **every** release, not just prereleases. A beta
+build polls it for the rest of its life, so if a stable release only updated
+`latest.json`, everyone who installed a beta would sit on that beta and never be
+told the stable version exists. Mirrored, the beta channel is simply "the newest
+release on either channel", and a beta user is promoted to stable automatically.
+
+The mirror never moves backwards: a patch on an old line (`0.1.2` while
+`0.2.0-beta.1` is out) leaves the channel where it is. That comparison needs a
+real semver rule — `sort -V` puts `0.2.0` *before* `0.2.0-beta.1`, while semver
+says the plain release is newer — so the workflow carries a small
+`semver_gt` helper instead of sorting version strings.
+
+## The manifest contract
+
+The shape is fixed by `updater::Manifest`; extra keys are ignored, so the
+manifest can grow without breaking old builds.
+
+```json
+{
+  "version": "0.2.0",
+  "notes": "Import dialog, faster history, smaller binary.",
+  "assets": {
+    "windows-x86_64": {
+      "url": "https://github.com/owner/restbook/releases/download/0.2.0/restbook-0.2.0-windows-x86_64.exe",
+      "sha256": "…",
+      "signature": "…"
+    },
+    "windows-aarch64": { "…": "…" },
+    "macos-aarch64": { "…": "…" },
+    "macos-x86_64": { "…": "…" },
+    "linux-x86_64": { "…": "…" },
+    "linux-aarch64": { "…": "…" }
+  }
+}
+```
+
+Keys are `updater::platform_key()`, i.e. `std::env::consts::OS` and `ARCH`:
+`windows`, `macos`, `linux`; `x86_64`, `aarch64`. Deriving them instead of
+hand-writing a table is what stops a new target from silently requesting the
+wrong asset. `sha256` and `signature` are already parsed and currently unused;
+the installer phase consumes them before writing anything, and an entry may
+omit them, so a channel can be published before signing exists.
+
+## Artifact matrix
+
+One native runner per target. Nothing is cross-compiled: GPUI needs the target's
+X11/Wayland/fontconfig development packages, and Apple's SDK and `codesign` only
+exist on macOS.
+
+**Wired today (3 of 6).** The workflow ships the entries marked ✅; the other
+two are one matrix row each when their user base justifies the extra billed
+minutes (macOS is 10×, Windows 2×, Linux 1×).
+
+| Job | Runner | Target | Artifact |
+|---|---|---|---|
+| Windows x86_64 ✅ | `windows-2025` | `x86_64-pc-windows-msvc` | `restbook-<v>-windows-x86_64.zip` |
+| Windows ARM64 | `windows-11-arm` | `aarch64-pc-windows-msvc` | `restbook-<v>-windows-aarch64.exe` |
+| macOS ARM64 ✅ | `macos-26` | `aarch64-apple-darwin` | `restbook-<v>-macos-aarch64.dmg` |
+| macOS x86_64 | `macos-26-intel` | `x86_64-apple-darwin` | `restbook-<v>-macos-x86_64.dmg` |
+| Linux x86_64 ✅ | `ubuntu-22.04` | `x86_64-unknown-linux-gnu` | `restbook-<v>-linux-x86_64.tar.gz` |
+| Linux ARM64 | `ubuntu-24.04-arm` | `aarch64-unknown-linux-gnu` | `restbook-<v>-linux-aarch64.tar.gz` |
+
+Two interim deviations from the table above, both from R3 not being done yet:
+
+- **Windows ships a zip, not an `.exe`.** The bare binary imports
+  `libcrypto-3-x64.dll` at load time, so the DLL has to travel with it; the
+  matrix's single `.exe` presumes the Inno Setup package that does not exist
+  yet.
+- **The Linux artifact is built `--no-default-features`.** `scripts/package.sh`
+  does that on Linux, which means plaintext JSONL rather than SQLCipher there.
+  Change it when a Linux build with the encrypted store is worth the extra
+  minutes (and the `libssl-dev` dependency).
+
+Runner labels move with GitHub's images — the labels above are the ones a
+working pipeline used, not a commitment. What matters is the indirection: one
+native runner per target, never a cross-compile.
+
+Two constraints decide the runners:
+
+- **Linux x86_64 builds on the oldest image we support.** glibc symbols are
+  versioned at link time: a binary built on 24.04 (glibc 2.39) fails on 22.04
+  (2.35) with `GLIBC_2.39 not found`. Building on 22.04 keeps the floor low.
+- **`.exe` means the installer, not the binary.** Windows ships an Inno Setup
+  package (app + icon, Start-menu and optional desktop shortcut with an
+  `AppUserModelID` matching the one `branding::APP_ID` and the build resource
+  carry). A bare exe also works, but it gets a generic taskbar identity. Note
+  that the icon and version block in the exe come from `crates/app/build.rs`,
+  which needs the MSVC toolchain: the GNU `ld` drops the resource section. The
+  matrix below builds `windows-msvc` already.
+
+`RUSTUP_TOOLCHAIN: stable` must be set for the whole workflow: both
+`rust-toolchain.toml` files pin `stable-x86_64-pc-windows-gnu`, which does not
+exist on the Linux and macOS runners.
+
+CI builds the app crate on Linux with `--no-default-features`: SQLCipher costs
+several minutes of C, and no CI job opens a window. macOS keeps the default,
+because CommonCrypto needs no OpenSSL there. The encrypted path is exercised on
+Windows and by the `dbus-run-session` tests.
+
+## Flow
+
+What `.github/workflows/release.yml` does, in order:
+
+1. **Bump both versions, commit, tag, push the tag.** The tag must equal the app
+   version or the workflow fails rather than shipping a mislabeled build.
+2. **Verify** on a Linux runner: tag/version equality for both workspaces, and
+   ancestry on the default branch.
+3. **Test** on the cheap runner (`cargo test --workspace`, plus the app crate
+   with `--no-default-features`) before Windows and macOS minutes are spent.
+4. **Build the three artifacts** in parallel on native runners, each uploading
+   an Actions artifact. No job touches the release yet, so a failed matrix
+   leaves nothing on GitHub.
+5. **Assemble and publish** in one job: create the release as a **draft**, write
+   the channel manifest from the downloaded bytes' own checksums, upload every
+   asset, then un-draft. Stable also gets `--latest`; a version with a
+   prerelease suffix is a GitHub prerelease and publishes `latest-beta.json`.
+
+A re-run resumes rather than duplicates: the release is created only if the tag
+has none, and uploads use `--clobber`, so replacing one failed artifact does not
+touch the others.
+
+Triggers:
+
+```sh
+git tag 0.1.0 && git push origin 0.1.0      # normal release
+git tag 0.2.0-beta.1 && git push origin 0.2.0-beta.1   # beta channel
+```
+
+`workflow_dispatch` takes the same tag plus a `dry_run` flag, which builds and
+tests without creating anything — the way to check the matrix after a runner
+label moves.
+
+## What the app does with it
+
+- On launch, if `settings.check_updates` is true and a manifest URL is
+  configured, one background check runs and nothing else — an available version
+  becomes a flash message pointing at Settings.
+- Settings › Updates always checks on demand, shows the compiled version, and
+  names the manifest URL it reads.
+- `Outcome::Available` with no asset for this platform is still reported as an
+  update, with the platform named: "newer exists, but nothing to install here".
+
+## Milestones (R1..)
+
+`R` items are the distance between the tree and a downloadable release. None of
+them is on disk; each one is independent of the UI/engine milestone tables.
+
+| # | Deliverable | State |
+|---|---|---|
+| R1 | Baked-in manifest URL | **Done.** `updater::manifest_url()` derives the channel URL from the compiled version (`RELEASE_REPO`, overridable with `RESTBOOK_UPDATE_REPO`) and bakes it in, so a packaged build checks without any environment; `RESTBOOK_UPDATE_URL` still overrides it at build or run time |
+| R2 | CI matrix | **3 of 6 done**: `.github/workflows/release.yml` builds Windows x86_64, macOS arm64 and Linux x86_64 on native runners, verifies tag/version/ancestry, runs the test suites, then publishes a draft→release with a derived channel manifest. The ARM64 and macOS Intel rows remain |
+| R3 | Installers | `scripts/package.sh` produces a bare exe / `.app` / tarball. Inno Setup for Windows and a `.dmg` for macOS are specified, not built |
+| R4 | Signing and notarization | Nothing signed. `sha256`/`signature` are already parsed from the manifest and unused, so the contract does not change when this lands |
+| R5 | Download and install | The updater fetches, compares, and reports. Nothing is downloaded or replaced, so a user who is told about a newer version still installs by hand |
+
+Until R2-R3 exist for a given target, a release is a **local artifact**, not a channel: build it
+with `sh scripts/package.sh --release` and hand it to whoever needs it. Note
+that the pinned Windows GNU toolchain drops the `.rsrc` section (see
+`crates/app/build.rs`), so such an artifact carries neither the icon nor the
+version block; only the MSVC build in the R2 matrix has them.
+
+## Not done yet
+
+- No installer or notarization: `scripts/package.sh` produces an artifact per OS
+  (a bare exe, a `.app`, an install-prefix tarball) but nothing that installs
+  itself. The per-OS branding those artifacts need is already in place — see
+  [Branding per OS](05-cross-platform.md#branding-per-os).
+- No code signing: an unsigned macOS build needs right-click → Open the first
+  time, and Windows SmartScreen warns until a certificate exists.
+- No download/install phase — the app cannot apply an update yet.
+- No delta updates, no mirrors, no self-hosted fallback.
+- Only three of six targets are built; the workflow does not yet produce the
+  two ARM64 artifacts or the macOS Intel one.

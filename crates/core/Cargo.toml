@@ -5,12 +5,31 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+# `NetworkConfig::validate` (core::net) checks PEMs and proxy URLs by handing
+# them to reqwest. The trait and model stay dependency-free without it; the
+# transport crate enables this, so the app build always has it.
+network-validation = ["dep:reqwest"]
+
 [dependencies]
 async-trait.workspace = true
 base64.workspace = true
 chrono.workspace = true
+reqwest = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
+# PKCE needs SHA-256 (RFC 7636 S256); a random-number crate is not needed
+# because the verifier and state come from `uuid::Uuid::new_v4()`.
+sha2 = "0.10"
 thiserror.workspace = true
 url.workspace = true
 uuid.workspace = true
+# OpenAPI 3 documents are YAML far more often than JSON, so the importer needs
+# a parser for both. Chosen over `serde_yaml`, which is unmaintained, and
+# `serde_yml`, which is a deprecated shim.
+yaml_serde = "0.10"
+
+[dev-dependencies]
+# The fake transport's tests are async; no other engine test needs a runtime.
+tokio = { workspace = true, features = ["rt", "macros"] }

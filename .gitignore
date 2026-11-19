@@ -2,3 +2,7 @@
 **/*.rs.bk
 .restbook/
 .env
+# Packaged desktop app (`scripts/package.sh`).
+dist/
+# Reference checkouts (e.g. read-only clones of projects we borrow ideas from).
+.refs/

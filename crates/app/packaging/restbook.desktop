@@ -1,0 +1,29 @@
+[Desktop Entry]
+# The Linux branding surface: what a launcher, a dock and a file manager read.
+#
+# This is a template, not a file to install as-is. `scripts/package.sh`
+# substitutes `@APP_ID@` and `@NAME@` and installs the result as
+# `share/applications/<app id>.desktop` inside the package.
+#
+# Three of these keys are load-bearing, and all three must agree with
+# `crates/app/src/branding.rs` or the app gets its own icon missing and its
+# window ungrouped in the taskbar:
+#
+#   * the file *name* is `<app id>.desktop`, matching the window's `app_id`;
+#   * `StartupWMClass` is the app id, which is how a compositor pairs a running
+#     window with this entry;
+#   * `Icon` is the app id, resolved against
+#     `share/icons/hicolor/<size>/apps/<app id>.png`.
+#
+# `Name` is the display name and is free to differ from the identifier.
+Type=Application
+Version=1.5
+Name=@NAME@
+Comment=Local-first HTTP client with encrypted history
+Exec=restbook-app %u
+Terminal=false
+Categories=Development;Network;
+Keywords=HTTP;REST;API;Client;Request;
+StartupNotify=true
+StartupWMClass=@APP_ID@
+Icon=@APP_ID@

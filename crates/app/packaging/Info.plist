@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The macOS branding surface: the bundle's `Contents/Info.plist`.
+
+  This is a template. `scripts/package-macos.sh` substitutes `@APP_ID@`,
+  `@NAME@`, `@VERSION@` and `@ICON@` and writes the result into
+  `restbook.app/Contents/Info.plist`.
+
+  macOS does not read an icon or an app name out of the executable, so unlike
+  Windows this file is the whole of the app's identity on the platform:
+  `CFBundleName` is the application-menu title and the Dock label,
+  `CFBundleIdentifier` is what the Keychain `apple-native` backend keys its
+  access prompt on, and `CFBundleIconFile` names the `.icns` that
+  `scripts/icons.sh` renders beside the binary.
+
+  `LSMinimumSystemVersion` is macOS 11: GPUI's cocoa backend uses the
+  `NSWindow`/`NSVisualEffectView` APIs that landed there, and nothing older can
+  run the app regardless of what the Rust target says.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>@NAME@</string>
+    <key>CFBundleDisplayName</key>
+    <string>@NAME@</string>
+    <key>CFBundleIdentifier</key>
+    <string>@APP_ID@</string>
+    <key>CFBundleVersion</key>
+    <string>@VERSION@</string>
+    <key>CFBundleShortVersionString</key>
+    <string>@VERSION@</string>
+    <key>CFBundleExecutable</key>
+    <string>restbook-app</string>
+    <key>CFBundleIconFile</key>
+    <string>@ICON@</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleSignature</key>
+    <string>????</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <!-- A normal foreground app: it has a window and a Dock tile. -->
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.developer-tools</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <!--
+      The File menu's Open Recent and any future file-open path surface here;
+      restbook has no document types yet, so the array is deliberately empty
+      rather than absent: Finder still needs the key to know the bundle is not
+      claiming any extension.
+    -->
+    <key>CFBundleDocumentTypes</key>
+    <array/>
+</dict>
+</plist>

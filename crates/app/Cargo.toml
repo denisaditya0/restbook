@@ -3,14 +3,92 @@ name = "restbook-app"
 version = "0.1.0"
 edition = "2021"
 publish = false
+# The resource compiler needs the icon before the crate compiles, and it is the
+# only per-OS branding the build itself owns: Windows embeds `icons/restbook.ico`
+# in the exe's resource section, which is where Explorer, the taskbar and the
+# Alt-Tab switcher read it from. macOS and Linux take their icon from packaging
+# instead (the `.app` bundle and the hicolor theme), because neither reads one
+# out of the binary.
+build = "build.rs"
 
 # Standalone workspace: the engine must build without GPUI in the dependency
 # graph, and GPUI moves fast enough that we do not want it in the shared lockfile.
 [workspace]
 
+# GPUI, wgpu, taffy, tree-sitter, and serde are far too slow at opt-level 0:
+# an unoptimized debug build spends its frame budget in layout and text
+# shaping, which reads as a sluggish app regardless of how little it
+# allocates. Optimize the dependencies fully and keep the app crate at
+# opt-level 1 so `cargo run` stays incremental while the hot libraries are
+# compiled the way a release build compiles them.
+[profile.dev]
+opt-level = 1
+debug = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[features]
+# The encrypted history database, on by default: this app is run locally and
+# SQLCipher is the point of "local-first, encrypted by default". It builds
+# SQLCipher and therefore needs `OPENSSL_DIR`; `scripts/dev.sh` detects it on
+# any machine. A build without an OpenSSL dev tree opts out with
+# `--no-default-features` and falls back to plaintext JSONL.
+default = ["sqlcipher"]
+sqlcipher = ["restbook-store/sqlcipher"]
+
 [dependencies]
-gpui-kit = "0.7"
+# `env_logger` is the sink `main` installs; `log` is the facade the app logs
+# through, so `log::info!` reaches the terminal and the interaction log by name.
+env_logger = "0.11"
+# The history and response panes stamp rows with `chrono`, matching the
+# workspace's own version so one `DateTime<Utc>` speaks both the engine and the
+# UI. The default features (clock, std, formatting) are what `Utc::now` and
+# `format` need; the app crate does not use the workspace's `serde` feature.
+chrono = "0.4"
+# `log` is the facade the app logs through; `env_logger` is the sink that
+# `main` installs. A direct dependency makes `log::info!` available by name.
+log = "0.4"
+# `tree-sitter` brings the JSON grammar and the incremental highlighter that
+# `gpui-component` exposes. HTML is the only other response type the pane
+# labels, so it gets a grammar; everything else stays plain text.
+gpui-kit = { version = "0.7", features = ["tree-sitter", "tree-sitter-html"] }
 restbook-core = { path = "../core" }
 restbook-store = { path = "../store" }
 restbook-transport = { path = "../transport" }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The update check reuses the reqwest already in the graph through
+# restbook-transport. `blocking` is what lets the check run on a worker thread
+# without GPUI having to own a tokio reactor; `native-tls` matches the engine's
+# choice, so there is no second TLS stack.
+reqwest = { version = "0.12", default-features = false, features = [
+    "blocking",
+    "json",
+    "native-tls",
+] }
+semver = "1"
+# Completion for `{{name}}` speaks the editor's own protocol: the kit's
+# `CompletionProvider` hands back `lsp_types` items read out of a `ropey`
+# document and wrapped in `anyhow`. These versions are pinned to the ones
+# `gpui-base 0.7.3` links — a second copy of any of them would not typecheck
+# against the trait.
+anyhow = "1"
+lsp-types = { version = "0.97", features = ["proposed"] }
+ropey = "=2.0.0-beta.1"
+
+[dev-dependencies]
+# `test-support` swaps GPUI's real platform for the mock one (`TestAppContext`,
+# `VisualTestContext`), which lays out and paints into a virtual window with no
+# GPU. It is enabled on `gpui` itself rather than on `gpui-kit`: the kit's own
+# `test-support` pulls in a `gpui-fast` chain whose pinned `cocoa` conflicts
+# with the one `gpui-pre-macos` links. `gpui-kit` re-exports all of `gpui`, so
+# the test types are still reached through it.
+gpui-pre = { version = "=0.3.9", features = ["test-support"] }
+
+# Branding, per target. Only Windows embeds an icon in the binary; see
+# `build.rs`. Nothing is added for macOS or Linux because neither reads an icon
+# out of the executable: macOS takes it from the `.app` bundle's `Info.plist`,
+# and Linux takes it from the icon theme named by the window's `app_id`.
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"

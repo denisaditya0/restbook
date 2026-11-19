@@ -1,0 +1,38 @@
+<!--
+  The app icon, in the one format every platform can be rasterized from.
+
+  This is the *source*: `scripts/icons.sh` renders it to the PNG set, the `.ico`
+  Windows wants, and the `.icns` macOS wants. Nothing at runtime reads this file
+  — the window title and the taskbar identity come from `src/branding.rs`, and
+  the Dock and taskbar images come from the files this renders. Keeping one SVG
+  and deriving everything from it is what stops the three platforms from drifting
+  into three slightly different logos.
+
+  The mark is a request arrow in a rounded square: `↗` is what "send this
+  request" looks like, and the square is the app's own `rounded_sm` chip shape
+  from `workspace/chrome.rs` scaled up. Colors are the built-in theme's, so the
+  icon and the window agree — see `themes/default-dark.jsonc`.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="restbook">
+  <defs>
+    <linearGradient id="surface" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b3245" />
+      <stop offset="1" stop-color="#1b2030" />
+    </linearGradient>
+  </defs>
+
+  <!-- The tile. `rx` is 512/5, the same corner-to-size ratio the sidebar chips use. -->
+  <rect x="0" y="0" width="512" height="512" rx="102" fill="url(#surface)" />
+
+  <!-- The arrow shaft, then its head: one stroked path reads as a single gesture. -->
+  <g
+    fill="none"
+    stroke="#6ea8fe"
+    stroke-width="44"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <path d="M168 344 L344 168" />
+    <path d="M212 168 H344 V300" />
+  </g>
+</svg>

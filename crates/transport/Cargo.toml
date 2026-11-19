@@ -6,9 +6,22 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-restbook-core.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
+# The shared jar has to be inspectable (list and clear), which `reqwest::Jar`
+# does not allow, so the store itself is owned here and handed to reqwest as a
+# `CookieStore`. Same version reqwest 0.12 uses, so the trait matches.
+cookie_store = { version = "0.22", features = ["preserve_order"] }
 futures.workspace = true
 reqwest.workspace = true
+# The network settings live in `core`; validating them means handing PEMs to
+# reqwest, which is opt-in there.
+restbook-core = { workspace = true, features = ["network-validation"] }
 tokio.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+# The integration tests drive a real listener and a real runtime; the tokio
+# dependency above is the crate's own reactor, this only adds the test macros
+# and the socket/io halves.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util"] }

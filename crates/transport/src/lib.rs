@@ -1,18 +1,25 @@
 //! `reqwest` adapter for the restbook engine.
 //!
-//! The important detail here is runtime isolation. `reqwest` needs a tokio
-//! reactor, while GUI frameworks (GPUI included) run their own executor. So this
-//! type owns a tokio runtime on a dedicated thread and exposes only plain
-//! futures: callers `.await` from whatever executor they happen to be on.
+//! Runtime isolation: `reqwest` needs a tokio reactor while GUI frameworks run
+//! their own executor, so this type owns a tokio runtime on a dedicated thread.
+//! Network settings and the shared cookie jar live in a client cache; redirects
+//! are followed by hand so each hop can be recorded for `ResponseRecord`.
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use cookie_store::CookieStore;
 use futures::channel::oneshot;
+use reqwest::header::{HeaderValue, LOCATION};
 use reqwest::redirect::Policy;
 use reqwest::Client;
 use restbook_core::{
-    CancelToken, Error, PartData, PreparedBody, PreparedRequest, ResponseRecord, Result, Transport,
+    parse_token_response, CancelToken, Error, NetworkConfig, OAuthTransport, PartData,
+    PreparedBody, PreparedRequest, Progress, Proxy, RedirectHop, ResponseRecord, Result,
+    TokenRequest, TokenResponse, Transport,
 };
 
 const MAX_REDIRECTS: usize = 10;
@@ -20,7 +27,7 @@ const CANCEL_POLL: Duration = Duration::from_millis(25);
 
 pub struct ReqwestTransport {
     runtime: tokio::runtime::Handle,
-    clients: Clients,
+    clients: ClientCache,
 }
 
 impl ReqwestTransport {
@@ -53,8 +60,31 @@ impl ReqwestTransport {
 
         Ok(Self {
             runtime,
-            clients: Clients::build()?,
+            clients: ClientCache::default(),
         })
+    }
+
+    /// Start from saved settings. An unusable setting is reported by the first
+    /// send rather than here, so a bad saved value cannot keep the window shut.
+    pub fn with_config(self, config: NetworkConfig) -> Self {
+        self.clients.set_config(config);
+        self
+    }
+
+    /// Replace the network settings. Clients are rebuilt on the next send; the
+    /// cookie jar is kept, so cookies survive a settings change.
+    pub fn set_config(&self, config: NetworkConfig) -> Result<()> {
+        config.validate()?;
+        self.clients.set_config(config);
+        Ok(())
+    }
+
+    pub fn config(&self) -> NetworkConfig {
+        self.clients
+            .config
+            .read()
+            .map(|config| config.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -64,53 +94,6 @@ impl Default for ReqwestTransport {
     }
 }
 
-/// Redirect policy lives on the client, not the request, so each combination is
-/// built once and reused (connection pools are per client).
-struct Clients {
-    follow: Client,
-    follow_insecure: Client,
-    manual: Client,
-    manual_insecure: Client,
-}
-
-impl Clients {
-    fn build() -> std::io::Result<Self> {
-        Ok(Self {
-            follow: build_client(true, false)?,
-            follow_insecure: build_client(true, true)?,
-            manual: build_client(false, false)?,
-            manual_insecure: build_client(false, true)?,
-        })
-    }
-
-    fn pick(&self, follow_redirects: bool, insecure: bool) -> Client {
-        match (follow_redirects, insecure) {
-            (true, false) => self.follow.clone(),
-            (true, true) => self.follow_insecure.clone(),
-            (false, false) => self.manual.clone(),
-            (false, true) => self.manual_insecure.clone(),
-        }
-    }
-}
-
-fn build_client(follow_redirects: bool, insecure: bool) -> std::io::Result<Client> {
-    let mut builder = Client::builder()
-        .user_agent(concat!("restbook/", env!("CARGO_PKG_VERSION")))
-        // One jar per client: cookies survive across requests, like a browser.
-        .cookie_store(true)
-        .redirect(if follow_redirects {
-            Policy::limited(MAX_REDIRECTS)
-        } else {
-            Policy::none()
-        });
-
-    if insecure {
-        builder = builder.danger_accept_invalid_certs(true);
-    }
-
-    builder.build().map_err(std::io::Error::other)
-}
-
 #[async_trait]
 impl Transport for ReqwestTransport {
     async fn execute(
@@ -118,14 +101,24 @@ impl Transport for ReqwestTransport {
         request: PreparedRequest,
         cancel: CancelToken,
     ) -> Result<ResponseRecord> {
-        let client = self
-            .clients
-            .pick(request.follow_redirects, request.insecure);
+        self.execute_with_progress(request, cancel, Progress::new())
+            .await
+    }
+
+    async fn execute_with_progress(
+        &self,
+        request: PreparedRequest,
+        cancel: CancelToken,
+        progress: Progress,
+    ) -> Result<ResponseRecord> {
+        // The cached client never follows redirects; `run` follows the chain
+        // itself so each hop can be recorded.
+        let client = self.clients.client(request.insecure)?;
 
         // Bridge: hand the work to the tokio runtime, await a plain channel.
         let (sender, receiver) = oneshot::channel();
         self.runtime.spawn(async move {
-            let _ = sender.send(run(client, request, cancel).await);
+            let _ = sender.send(run(client, request, cancel, progress).await);
         });
 
         match receiver.await {
@@ -133,98 +126,465 @@ impl Transport for ReqwestTransport {
             Err(_) => Err(Error::Transport("request task was dropped".to_owned())),
         }
     }
+
+    fn cookies(&self, url: &str) -> Vec<String> {
+        self.clients.cookies(url)
+    }
+
+    fn clear_cookies(&self) {
+        self.clients.clear();
+    }
 }
 
+#[async_trait]
+impl OAuthTransport for ReqwestTransport {
+    async fn fetch_token(&self, request: TokenRequest) -> Result<TokenResponse> {
+        // The token endpoint is contacted with the same trust and proxy policy
+        // as an ordinary request; a dedicated client is not needed.
+        let client = self.clients.client(false)?;
+
+        let (sender, receiver) = oneshot::channel();
+        self.runtime.spawn(async move {
+            let _ = sender.send(run_token(client, request).await);
+        });
+
+        match receiver.await {
+            Ok(result) => result,
+            Err(_) => Err(Error::Transport("token task was dropped".to_owned())),
+        }
+    }
+}
+
+/// POST a [`TokenRequest`] and parse the reply.
+///
+/// A non-2xx reply is not automatically an error: many servers send an OAuth
+/// error body with a status like 400, and that body carries the real cause. So
+/// the body is parsed first and its [`Error::OAuth`] is preferred; only when it
+/// is not an OAuth error does the status itself become the message.
+async fn run_token(client: Client, request: TokenRequest) -> Result<TokenResponse> {
+    let mut builder = client.post(&request.token_url).form(&request.form);
+    if let Some((user, password)) = request.basic_auth {
+        builder = builder.basic_auth(user, Some(password));
+    }
+
+    let response = builder.send().await.map_err(transport_error)?;
+    let status = response.status();
+    let body = response.bytes().await.map_err(transport_error)?;
+
+    if status.is_success() {
+        return parse_token_response(&body);
+    }
+
+    match parse_token_response(&body) {
+        Err(error @ Error::OAuth(_)) => Err(error),
+        _ => Err(Error::Transport(format!(
+            "token endpoint returned {}",
+            status.as_u16()
+        ))),
+    }
+}
+
+/// The clients the transport can serve, plus the shared jar.
+///
+/// A `reqwest::Client` is a connection pool and is expensive to build, so the
+/// two variants (trusting, and `insecure`) are cached. Changing the settings
+/// bumps `generation`, which makes every cached client stale at once without
+/// having to know which of them was in use.
+#[derive(Default)]
+struct ClientCache {
+    config: RwLock<NetworkConfig>,
+    generation: AtomicU64,
+    clients: Mutex<HashMap<bool, (u64, Client)>>,
+    /// The shared cookie store. Owned here rather than by a `reqwest::Jar`
+    /// because the app needs to *read* and *clear* it, and `Jar` exposes
+    /// neither. [`SharedJar`] adapts it to what reqwest expects.
+    jar: Arc<SharedJar>,
+}
+
+/// A `cookie_store::CookieStore` behind the trait reqwest takes, with the read
+/// and clear operations `reqwest::Jar` does not have.
+#[derive(Default)]
+struct SharedJar(Mutex<CookieStore>);
+
+impl SharedJar {
+    fn cookie_pairs(&self, url: &url::Url) -> Vec<String> {
+        let Ok(jar) = self.0.lock() else {
+            return Vec::new();
+        };
+        jar.matches(url)
+            .into_iter()
+            .map(|cookie| format!("{}={}", cookie.name(), cookie.value()))
+            .collect()
+    }
+
+    fn clear(&self) {
+        if let Ok(mut jar) = self.0.lock() {
+            jar.clear();
+        }
+    }
+}
+
+impl reqwest::cookie::CookieStore for SharedJar {
+    fn set_cookies(&self, cookie_headers: &mut dyn Iterator<Item = &HeaderValue>, url: &url::Url) {
+        let Ok(mut jar) = self.0.lock() else {
+            return;
+        };
+        // The same path `reqwest::Jar` takes: parse each `Set-Cookie` and let
+        // the store decide whether it is acceptable for this URL. `parse`
+        // inserts as a side effect.
+        for header in cookie_headers {
+            if let Ok(text) = header.to_str() {
+                let _ = jar.parse(text, url);
+            }
+        }
+    }
+
+    fn cookies(&self, url: &url::Url) -> Option<HeaderValue> {
+        let pairs = self.cookie_pairs(url);
+        if pairs.is_empty() {
+            return None;
+        }
+        HeaderValue::from_str(&pairs.join("; ")).ok()
+    }
+}
+
+impl ClientCache {
+    fn set_config(&self, config: NetworkConfig) {
+        if let Ok(mut current) = self.config.write() {
+            if *current == config {
+                return;
+            }
+            *current = config;
+        }
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        if let Ok(mut clients) = self.clients.lock() {
+            clients.clear();
+        }
+    }
+
+    fn client(&self, insecure: bool) -> Result<Client> {
+        let generation = self.generation.load(Ordering::SeqCst);
+
+        if let Ok(clients) = self.clients.lock() {
+            if let Some((built, client)) = clients.get(&insecure) {
+                if *built == generation {
+                    return Ok(client.clone());
+                }
+            }
+        }
+
+        let config = self
+            .config
+            .read()
+            .map_err(|_| Error::Transport("network settings lock poisoned".to_owned()))?
+            .clone();
+        let client = build_client(&config, &self.jar, insecure)?;
+
+        if let Ok(mut clients) = self.clients.lock() {
+            clients.insert(insecure, (generation, client.clone()));
+        }
+        Ok(client)
+    }
+
+    fn cookies(&self, url: &str) -> Vec<String> {
+        let Ok(url) = url::Url::parse(url) else {
+            return Vec::new();
+        };
+        self.jar.cookie_pairs(&url)
+    }
+
+    fn clear(&self) {
+        self.jar.clear();
+    }
+}
+
+fn build_client(config: &NetworkConfig, jar: &Arc<SharedJar>, insecure: bool) -> Result<Client> {
+    let mut builder = Client::builder()
+        .user_agent(concat!("restbook/", env!("CARGO_PKG_VERSION")))
+        // One jar for the process: cookies survive across requests and across
+        // transports, like a browser. The jar outlives a settings change.
+        .cookie_provider(jar.clone())
+        // Redirects are followed by `run`, so each hop can be reported.
+        .redirect(Policy::none());
+
+    if let Some(timeout) = config.default_timeout() {
+        builder = builder.timeout(timeout);
+    }
+
+    builder = match &config.proxy {
+        Proxy::FromEnvironment => builder,
+        Proxy::None => builder.no_proxy(),
+        Proxy::Url(url) => builder.proxy(
+            reqwest::Proxy::all(url.as_str())
+                .map_err(|error| Error::Proxy(format!("{url}: {error}")))?,
+        ),
+    };
+
+    if insecure {
+        builder = builder.danger_accept_invalid_certs(true);
+    }
+
+    if let Some(roots) = &config.extra_roots {
+        let anchors = reqwest::Certificate::from_pem_bundle(roots.as_bytes())
+            .map_err(|error| Error::Tls(format!("trusted certificate: {error}")))?;
+        for anchor in anchors {
+            builder = builder.add_root_certificate(anchor);
+        }
+    }
+
+    if let Some(cert) = &config.client_cert {
+        let identity =
+            reqwest::Identity::from_pkcs8_pem(cert.cert_pem.as_bytes(), cert.key_pem.as_bytes())
+                .map_err(|error| Error::Tls(format!("client certificate: {error}")))?;
+        builder = builder.identity(identity);
+    }
+
+    builder.build().map_err(|error| {
+        // A failure with TLS material configured is almost always that material,
+        // so it is reported as one instead of a generic transport error.
+        if insecure || config.extra_roots.is_some() || config.client_cert.is_some() {
+            Error::Tls(error.to_string())
+        } else {
+            Error::Transport(error.to_string())
+        }
+    })
+}
+
+/// Send, following redirects when asked to, and keep the chain.
 async fn run(
     client: Client,
     request: PreparedRequest,
     cancel: CancelToken,
+    progress: Progress,
 ) -> Result<ResponseRecord> {
     let method = reqwest::Method::from_bytes(request.method.as_str().as_bytes())
         .map_err(|error| Error::Transport(error.to_string()))?;
 
-    let mut builder = client.request(method, request.url.clone());
-    if let Some(timeout_ms) = request.timeout_ms {
-        builder = builder.timeout(Duration::from_millis(timeout_ms));
-    }
-    for (key, value) in &request.headers {
-        builder = builder.header(key.as_str(), value.as_str());
-    }
-
-    builder = apply_body(builder, request.body).await?;
-
+    let mut url = request.url.clone();
+    let mut headers = request.headers.clone();
+    let body = request.body;
+    // Worked out before the body is sent, so the progress denominator is stable
+    // across redirect hops, including hops that drop the body.
+    let sent_total = body_len(&body);
+    // A redirect that drops the body must not resend it on a later hop.
+    let mut body_dropped = false;
+    let mut redirects: Vec<RedirectHop> = Vec::new();
     let started = Instant::now();
-    let send = builder.send();
-    tokio::pin!(send);
 
-    let response = tokio::select! {
-        result = &mut send => result.map_err(|error| Error::Transport(error.to_string()))?,
-        _ = wait_for_cancel(cancel.clone()) => return Err(Error::Cancelled),
-    };
+    // The body length, when known up front, so a progress bar has a denominator.
+    // Upload progress itself is coarse: reqwest does not report per-chunk sends
+    // for buffered bodies, so the body is marked sent once the request is out.
+    if let Some(total) = sent_total {
+        progress.set_sent_total(total);
+    }
 
-    let status = response.status().as_u16();
-    let headers = response
+    loop {
+        let mut builder = client.request(method.clone(), url.clone());
+        if let Some(timeout_ms) = request.timeout_ms {
+            builder = builder.timeout(Duration::from_millis(timeout_ms));
+        }
+        for (key, value) in &headers {
+            builder = builder.header(key.as_str(), value.as_str());
+        }
+        // A user-supplied Content-Type wins over the one the body would add.
+        // The body still decides the bytes; only the header is theirs.
+        let has_content_type = headers
+            .iter()
+            .any(|(key, _)| key.eq_ignore_ascii_case("content-type"));
+        builder = apply_body(
+            builder,
+            if body_dropped {
+                &PreparedBody::None
+            } else {
+                &body
+            },
+            has_content_type,
+        )
+        .await?;
+
+        let send = builder.send();
+        tokio::pin!(send);
+        let response = tokio::select! {
+            result = &mut send => result.map_err(transport_error)?,
+            _ = wait_for_cancel(cancel.clone()) => return Err(Error::Cancelled),
+        };
+
+        let status = response.status().as_u16();
+        if request.follow_redirects && (300..400).contains(&status) {
+            if let Some(next) = redirect_target(&response, &url) {
+                if redirects.len() >= MAX_REDIRECTS {
+                    return Err(Error::Transport(format!(
+                        "too many redirects (stopped after {MAX_REDIRECTS})"
+                    )));
+                }
+                redirects.push(RedirectHop {
+                    status,
+                    location: next.to_string(),
+                });
+
+                // 303, and 301/302 on anything but GET/HEAD, degrade to GET and
+                // drop the body, which is what browsers do.
+                let to_get = status == 303
+                    || (matches!(status, 301 | 302)
+                        && method != reqwest::Method::GET
+                        && method != reqwest::Method::HEAD);
+                if to_get {
+                    body_dropped = true;
+                    headers.retain(|(key, _)| !is_entity_header(key));
+                }
+
+                url = next;
+                continue;
+            }
+        }
+
+        let headers = response
+            .headers()
+            .iter()
+            .map(|(name, value)| {
+                (
+                    name.as_str().to_owned(),
+                    value.to_str().unwrap_or_default().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        // Headers are in; the body follows. From here the progress sink is
+        // useful to a UI: it has a status and can show a byte counter.
+        progress.headers_received();
+        progress.set_received_total(content_length(&response));
+        progress.sent(
+            sent_total.unwrap_or(0),
+            started.elapsed().as_millis() as u64,
+        );
+
+        let body = read_body(response, &cancel, &progress, started).await?;
+
+        return Ok(ResponseRecord {
+            status,
+            headers,
+            body: body.into(),
+            duration_ms: started.elapsed().as_millis() as u64,
+            received_at: chrono::Utc::now(),
+            final_url: Some(url.to_string()),
+            redirects,
+        });
+    }
+}
+
+/// Stream the response body, reporting bytes as they arrive and staying
+/// cancellable between chunks. The whole body is still returned: history needs
+/// it, so this is progress reporting, not streaming-to-disk.
+async fn read_body(
+    mut response: reqwest::Response,
+    cancel: &CancelToken,
+    progress: &Progress,
+    started: Instant,
+) -> Result<Vec<u8>> {
+    let mut body = Vec::new();
+    loop {
+        let chunk = tokio::select! {
+            result = response.chunk() => result.map_err(transport_error)?,
+            _ = wait_for_cancel(cancel.clone()) => return Err(Error::Cancelled),
+        };
+        let Some(chunk) = chunk else {
+            break;
+        };
+        body.extend_from_slice(&chunk);
+        progress.received(body.len() as u64, started.elapsed().as_millis() as u64);
+    }
+    Ok(body)
+}
+
+/// The length of a request body when it is knowable without reading a file.
+fn body_len(body: &PreparedBody) -> Option<u64> {
+    match body {
+        PreparedBody::Bytes { data, .. } => Some(data.len() as u64),
+        PreparedBody::Form(fields) => Some(
+            fields
+                .iter()
+                .map(|(key, value)| key.len() + value.len() + 2)
+                .sum::<usize>() as u64,
+        ),
+        // A file or multipart length is only known after reading and framing.
+        PreparedBody::None | PreparedBody::File(_) | PreparedBody::Multipart(_) => None,
+    }
+}
+
+/// The response length, when trusting it is meaningful.
+///
+/// A `Content-Length` on a compressed response counts the *compressed* bytes,
+/// while a decoded body has no `Content-Length` at all. Reporting the compressed
+/// figure as a total would make the counter overshoot, so a response that
+/// advertises a content encoding is treated as having an unknown total.
+fn content_length(response: &reqwest::Response) -> Option<u64> {
+    if response
         .headers()
-        .iter()
-        .map(|(name, value)| {
-            (
-                name.as_str().to_owned(),
-                value.to_str().unwrap_or_default().to_owned(),
-            )
-        })
-        .collect::<Vec<_>>();
+        .contains_key(reqwest::header::CONTENT_ENCODING)
+    {
+        return None;
+    }
+    response.content_length()
+}
 
-    let body = tokio::select! {
-        result = response.bytes() => result.map_err(|error| Error::Transport(error.to_string()))?,
-        _ = wait_for_cancel(cancel) => return Err(Error::Cancelled),
-    };
+/// The absolute URL a 3xx points at, or `None` when there is no usable
+/// `Location` header.
+fn redirect_target(response: &reqwest::Response, current: &url::Url) -> Option<url::Url> {
+    let location = response.headers().get(LOCATION)?.to_str().ok()?;
+    current.join(location).ok()
+}
 
-    Ok(ResponseRecord {
-        status,
-        headers,
-        body: body.to_vec(),
-        duration_ms: started.elapsed().as_millis() as u64,
-        received_at: chrono::Utc::now(),
-    })
+/// Headers that describe the body and must not survive a redirect that drops it.
+fn is_entity_header(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "content-type" | "content-length" | "content-encoding" | "transfer-encoding"
+    )
+}
+
+fn transport_error(error: reqwest::Error) -> Error {
+    Error::Transport(error.to_string())
 }
 
 async fn apply_body(
     builder: reqwest::RequestBuilder,
-    body: PreparedBody,
+    body: &PreparedBody,
+    has_content_type: bool,
 ) -> Result<reqwest::RequestBuilder> {
     Ok(match body {
         PreparedBody::None => builder,
         PreparedBody::Bytes { mime, data } => {
-            let builder = if mime.is_empty() {
+            let builder = if mime.is_empty() || has_content_type {
                 builder
             } else {
                 builder.header(reqwest::header::CONTENT_TYPE, mime)
             };
-            builder.body(data)
+            builder.body(data.clone())
         }
-        PreparedBody::Form(fields) => builder.form(&fields),
+        PreparedBody::Form(fields) => builder.form(fields),
         PreparedBody::File(path) => {
-            let data = read_file(&path).await?;
+            let data = read_file(path).await?;
             builder.body(data)
         }
         PreparedBody::Multipart(parts) => {
             let mut form = reqwest::multipart::Form::new();
             for part in parts {
-                form = match part.data {
-                    PartData::Text(text) => form.text(part.name, text),
+                form = match &part.data {
+                    PartData::Text(text) => form.text(part.name.clone(), text.clone()),
                     PartData::File {
                         path,
                         mime,
                         file_name,
                     } => {
-                        let data = read_file(&path).await?;
-                        let mut file = reqwest::multipart::Part::bytes(data).file_name(file_name);
+                        let data = read_file(path).await?;
+                        let mut file =
+                            reqwest::multipart::Part::bytes(data).file_name(file_name.clone());
                         if let Some(mime) = mime {
                             file = file
-                                .mime_str(&mime)
+                                .mime_str(mime)
                                 .map_err(|error| Error::Transport(error.to_string()))?;
                         }
-                        form.part(part.name, file)
+                        form.part(part.name.clone(), file)
                     }
                 };
             }
@@ -245,5 +605,293 @@ async fn wait_for_cancel(cancel: CancelToken) {
             return;
         }
         tokio::time::sleep(CANCEL_POLL).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use restbook_core::{Auth, Body, Method, Progress, RequestDef, VarContext};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    /// A request the transport can send, prepared through the real engine so the
+    /// tests exercise exactly what the app hands to the wire.
+    fn prepared(method: Method, url: &str, body: Body) -> PreparedRequest {
+        let mut request = RequestDef::new(method, url);
+        request.body = body;
+        restbook_core::prepare(&request, &VarContext::new()).unwrap()
+    }
+
+    /// Accept one connection, read the request head, and answer with `response`.
+    /// Returns the bound address. The server is a bare socket so the tests do
+    /// not depend on a web framework.
+    async fn serve_once(response: String) -> std::net::SocketAddr {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            // Read until the end of the head; bodies are ignored by these tests.
+            let mut buffer = [0u8; 1024];
+            loop {
+                let read = stream.read(&mut buffer).await.unwrap();
+                if read == 0 || buffer[..read].windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            stream.write_all(response.as_bytes()).await.unwrap();
+            stream.shutdown().await.unwrap();
+        });
+
+        address
+    }
+
+    #[tokio::test]
+    async fn a_real_send_reports_received_bytes() {
+        let response =
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nContent-Type: text/plain\r\n\r\nhello world";
+        let address = serve_once(response.to_owned()).await;
+
+        let transport = ReqwestTransport::default();
+        let progress = Progress::new();
+        let record = transport
+            .execute_with_progress(
+                prepared(Method::Get, &format!("http://{address}/"), Body::None),
+                CancelToken::new(),
+                progress.clone(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(record.status, 200);
+        assert_eq!(record.text(), "hello world");
+
+        let snapshot = progress.snapshot();
+        assert!(snapshot.headers_received);
+        assert_eq!(snapshot.received_bytes, 11);
+        assert_eq!(snapshot.received_total, Some(11));
+    }
+
+    /// Like [`serve_once`], but captures the whole request (head and body) so a
+    /// test can assert how a form was encoded on the wire.
+    async fn serve_once_capturing(
+        response: String,
+    ) -> (std::net::SocketAddr, tokio::task::JoinHandle<String>) {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+
+        let handle = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut raw = Vec::new();
+            let mut buffer = [0u8; 1024];
+            loop {
+                let read = stream.read(&mut buffer).await.unwrap();
+                if read == 0 {
+                    break;
+                }
+                raw.extend_from_slice(&buffer[..read]);
+                // Stop once the head and the promised body have both arrived.
+                if let Some(end) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&raw[..end]).to_ascii_lowercase();
+                    let length = head
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length:"))
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    if raw.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            stream.write_all(response.as_bytes()).await.unwrap();
+            stream.shutdown().await.unwrap();
+            String::from_utf8_lossy(&raw).into_owned()
+        });
+
+        (address, handle)
+    }
+
+    #[tokio::test]
+    async fn fetch_token_posts_the_form_and_parses_the_reply() {
+        let body = r#"{"access_token":"abc","token_type":"Bearer"}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let (address, captured) = serve_once_capturing(response).await;
+
+        let config = restbook_core::OAuthConfig {
+            grant: restbook_core::OAuthGrant::ClientCredentials,
+            client_id: "client-1".to_owned(),
+            client_secret: String::new(),
+            token_url: format!("http://{address}/token"),
+            ..restbook_core::OAuthConfig::default()
+        };
+        let request = config.client_credentials_request().unwrap();
+
+        let transport = ReqwestTransport::default();
+        let token = transport.fetch_token(request).await.unwrap();
+        assert_eq!(token.access_token, "abc");
+        assert_eq!(token.token_type.as_deref(), Some("Bearer"));
+
+        let raw = captured.await.unwrap();
+        assert!(raw.contains("grant_type=client_credentials"));
+        assert!(raw.contains("client_id=client-1"));
+    }
+
+    #[tokio::test]
+    async fn fetch_token_prefers_the_oauth_error_body() {
+        let body = r#"{"error":"invalid_client","error_description":"bad secret"}"#;
+        let response = format!(
+            "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let address = serve_once(response).await;
+
+        let config = restbook_core::OAuthConfig {
+            grant: restbook_core::OAuthGrant::ClientCredentials,
+            client_id: "client-1".to_owned(),
+            client_secret: "wrong".to_owned(),
+            token_url: format!("http://{address}/token"),
+            ..restbook_core::OAuthConfig::default()
+        };
+        let request = config.client_credentials_request().unwrap();
+
+        let transport = ReqwestTransport::default();
+        let error = transport.fetch_token(request).await.unwrap_err();
+        assert!(
+            matches!(&error, Error::OAuth(message) if message == "invalid_client: bad secret"),
+            "got {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_json_body_reports_a_known_upload_size() {
+        let response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+        let address = serve_once(response.to_owned()).await;
+
+        let transport = ReqwestTransport::default();
+        let progress = Progress::new();
+        transport
+            .execute_with_progress(
+                prepared(
+                    Method::Post,
+                    &format!("http://{address}/things"),
+                    Body::Raw {
+                        mime: "application/json".to_owned(),
+                        text: "{\"hello\":true}".to_owned(),
+                    },
+                ),
+                CancelToken::new(),
+                progress.clone(),
+            )
+            .await
+            .unwrap();
+
+        // The 14-byte raw body gives the bar a denominator.
+        assert_eq!(progress.snapshot().sent_bytes, 14);
+        assert_eq!(progress.snapshot().sent_total, Some(14));
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_slow_response_stops_the_read() {
+        // A server that sends headers but never finishes the body.
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buffer = [0u8; 1024];
+            let _ = stream.read(&mut buffer).await;
+            // Promise 100 bytes, deliver none.
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n")
+                .await
+                .unwrap();
+            // Hold the connection open until the test drops it.
+            std::future::pending::<()>().await;
+        });
+
+        let transport = ReqwestTransport::default();
+        let cancel = CancelToken::new();
+        let trigger = cancel.clone();
+        // Cancel shortly after the request goes out.
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            trigger.cancel();
+        });
+
+        let error = transport
+            .execute(
+                prepared(Method::Get, &format!("http://{address}/"), Body::None),
+                cancel,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::Cancelled));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn auth_header_from_the_engine_reaches_the_wire() {
+        // The engine turns `Auth::Bearer` into a header in `prepare()`; this
+        // proves the transport sends what it is handed rather than re-deriving.
+        let mut request = RequestDef::new(Method::Get, "https://example.com/");
+        request.auth = Auth::Bearer {
+            token: "abc".to_owned(),
+        };
+        let prepared = restbook_core::prepare(&request, &VarContext::new()).unwrap();
+        assert!(prepared
+            .headers
+            .contains(&("authorization".to_owned(), "Bearer abc".to_owned())));
+    }
+
+    #[test]
+    fn an_entity_header_is_recognised_whatever_its_case() {
+        assert!(is_entity_header("Content-Type"));
+        assert!(is_entity_header("content-length"));
+        assert!(is_entity_header("TRANSFER-ENCODING"));
+        assert!(!is_entity_header("authorization"));
+        assert!(!is_entity_header("cookie"));
+    }
+
+    #[test]
+    fn a_relative_location_is_resolved_against_the_hop() {
+        let base = url::Url::parse("https://example.com/a/b").unwrap();
+        assert_eq!(base.join("/c").unwrap().as_str(), "https://example.com/c");
+        assert_eq!(base.join("d").unwrap().as_str(), "https://example.com/a/d");
+    }
+
+    #[test]
+    fn settings_that_did_not_change_keep_the_cached_client() {
+        let cache = ClientCache::default();
+        cache.client(false).unwrap();
+        cache.client(false).unwrap();
+        // A hit returns the cached pool instead of rebuilding it; a rebuild is
+        // only observable through the generation staying put.
+        assert_eq!(cache.generation.load(Ordering::SeqCst), 0);
+        assert_eq!(cache.clients.lock().unwrap().len(), 1);
+
+        cache.set_config(NetworkConfig {
+            proxy: Proxy::None,
+            ..NetworkConfig::default()
+        });
+        assert_eq!(cache.generation.load(Ordering::SeqCst), 1);
+        assert!(cache.clients.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_same_settings_do_not_invalidate_the_cache() {
+        let cache = ClientCache::default();
+        cache.set_config(NetworkConfig::default());
+        assert_eq!(cache.generation.load(Ordering::SeqCst), 0);
     }
 }

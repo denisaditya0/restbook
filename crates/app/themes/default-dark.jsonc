@@ -1,0 +1,98 @@
+// The built-in theme. This file is the *design system*: the metric tokens every
+// pane draws from, in one place, so a new theme is a new file and not an edit to
+// Rust. It is embedded with `include_str!` at build time (see `theme.rs`), so the
+// packaged app never reads it from disk.
+//
+// It declares `"appearance": "dark"`, so its `colors` block applies only when the
+// app paints dark. In light mode every role falls through to the live component
+// theme (`cx.theme()`), which keeps the light look the component theme's look. A
+// file with no `appearance` overlays in both modes, and a file only needs the
+// colors it wants to *differ* from; every role it leaves out keeps the component
+// theme's value.
+//
+//   {
+//     "name": "Solarized-ish",
+//     "appearance": "dark",
+//     "colors": { "background": "#002b36", "foreground": "#eee8d5" }
+//   }
+//
+// `metrics` has no live fallback the way colors do: a number the file omits uses
+// the built-in default in `Metrics::default`. Only set the ones you mean to move.
+//
+// Values the app does not recognize are ignored rather than fatal: a file written
+// for a newer build still loads.
+{
+  "name": "Default Dark",
+  "appearance": "dark",
+
+  // A soft charcoal rather than the component theme's near-black `#0a0a0a`:
+  // layers sit a step apart so panes and the frame read as one surface without
+  // the window collapsing into a black hole. Accents are slightly desaturated
+  // for the same reason.
+  "colors": {
+    // Surfaces, from the frame inward.
+    "background": "#1b1d21",
+    "tab_bar": "#16181b",
+    "tab_active": "#1b1d21",
+    "sidebar": "#17191c",
+    "title_bar": "#141619",
+    "status_bar": "#16181b",
+    "chrome_border": "#2a2d33",
+
+    // Interactive rows.
+    "list_hover": "#22252a",
+    "list_active": "#2a2d34",
+    "sidebar_accent": "#2a2d34",
+    "segmented": "#202329",
+    "hover": "#23262b",
+    "selected": "#2d3037",
+
+    // Text.
+    "foreground": "#e6e8ec",
+    "muted": "#9aa0aa",
+    "subtle": "#6f7580",
+
+    // Lines.
+    "border": "#2a2d33",
+    "input_border": "#353941",
+
+    // Status and method accents.
+    "success": "#6fcf97",
+    "warning": "#e2c07a",
+    "info": "#6cb6e8",
+    "danger": "#ec7a7a"
+  },
+
+  // Spacing and type. Sizes are in logical pixels, the unit the rest of the app
+  // already uses, so a value here and a value in a pane mean the same thing.
+  // Zoom multiplies this whole block (see `Metrics::scaled`).
+  "metrics": {
+    // Font sizes.
+    "font_body": 13.0,
+    "font_small": 12.0,
+    "font_xs": 11.0,
+    "font_badge": 10.5,
+
+    // The spacing scale, a 2/4/6/8/12/16/24/32 ramp. Feature code names a step
+    // (`space_xs`, `space_sm`, …) instead of writing a pixel literal, so the
+    // rhythm stays related and zoom moves all of it at once.
+    "space_2xs": 2.0,
+    "space_xs": 4.0,
+    "space_1p5": 6.0,
+    "space_sm": 8.0,
+    "space_md": 12.0,
+    "space_lg": 16.0,
+    "space_xl": 24.0,
+    "space_2xl": 32.0,
+
+    // Fixed row and bar heights.
+    "row_height": 26.0,
+    "body_row_height": 18.0,
+    "status_height": 24.0,
+    "header_height": 36.0,
+
+    // Padding the panes and chips share.
+    "gutter": 12.0,
+    "chip_padding": 10.0
+  }
+}

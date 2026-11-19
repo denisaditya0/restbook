@@ -134,6 +134,15 @@ pub enum Auth {
         #[serde(default)]
         location: ApiKeyLocation,
     },
+    /// An OAuth 2.0 client configuration plus the token fetched for this send.
+    #[serde(rename = "oauth2")]
+    OAuth2 {
+        #[serde(flatten)]
+        config: crate::oauth::OAuthConfig,
+        /// Supplied by the caller at send time; never persisted.
+        #[serde(skip)]
+        access_token: Option<String>,
+    },
 }
 
 /// A request as the user defined it. Contains `{{variables}}`; it is not
@@ -181,14 +190,96 @@ impl RequestDef {
     }
 }
 
+/// One hop of a redirect chain: what was answered, and where it pointed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedirectHop {
+    pub status: u16,
+    /// Absolute, already resolved against the hop it came from.
+    pub location: String,
+}
+
 /// What came back. `body` stays raw bytes; text decoding is a view concern.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseRecord {
     pub status: u16,
     pub headers: Vec<(String, String)>,
-    pub body: Vec<u8>,
+    pub body: ResponseBody,
     pub duration_ms: u64,
     pub received_at: chrono::DateTime<chrono::Utc>,
+    /// The URL that actually answered, after any redirects. `None` on records
+    /// written before this field existed.
+    #[serde(default)]
+    pub final_url: Option<String>,
+    /// Every hop that was followed, oldest first. Empty when nothing redirected
+    /// or when redirects were not followed, so an un-followed 3xx is a plain
+    /// 3xx and not a one-hop chain.
+    #[serde(default)]
+    pub redirects: Vec<RedirectHop>,
+}
+
+/// Where a response's bytes live. `Memory` is every response today; `File` is
+/// the streamed-to-disk shape (B18). `untagged` keeps a memory body serialising
+/// as a bare array, so records written before this enum still parse.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ResponseBody {
+    Memory(Vec<u8>),
+    File(FileBody),
+}
+
+/// A body streamed to disk instead of buffered. `preview` is the first few KiB
+/// kept so the response pane can render something without a re-read; `etag` and
+/// `resume_from` are the resume contract, carried from day one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileBody {
+    pub path: String,
+    pub len: u64,
+    #[serde(default)]
+    pub preview: Vec<u8>,
+    #[serde(default)]
+    pub etag: Option<String>,
+    #[serde(default)]
+    pub resume_from: u64,
+}
+
+impl From<Vec<u8>> for ResponseBody {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self::Memory(bytes)
+    }
+}
+
+impl From<String> for ResponseBody {
+    fn from(text: String) -> Self {
+        Self::Memory(text.into_bytes())
+    }
+}
+
+impl ResponseBody {
+    /// The bytes a reader can render now: the whole body in memory, or the
+    /// preview for a file body.
+    pub fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Memory(bytes) => bytes,
+            Self::File(file) => &file.preview,
+        }
+    }
+
+    /// The body's real size: the buffered length, or the file's recorded length
+    /// (which can exceed the preview).
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Memory(bytes) => bytes.len(),
+            Self::File(file) => file.len as usize,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn is_file(&self) -> bool {
+        matches!(self, Self::File(_))
+    }
 }
 
 impl ResponseRecord {
@@ -201,7 +292,7 @@ impl ResponseRecord {
     }
 
     pub fn text(&self) -> std::borrow::Cow<'_, str> {
-        String::from_utf8_lossy(&self.body)
+        String::from_utf8_lossy(self.body.as_bytes())
     }
 
     pub fn header(&self, name: &str) -> Option<&str> {
@@ -217,4 +308,119 @@ pub struct Environment {
     pub name: String,
     #[serde(default)]
     pub vars: Vec<Kv>,
+}
+
+/// A node in a collection tree: either a folder (which nests further) or a
+/// saved request. Tagged so the export shape stays self-describing.
+///
+/// Variants stay unboxed so the tagged JSON and pattern matches stay direct;
+/// a collection tree is small and not a hot path.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CollectionItem {
+    Folder(Folder),
+    Request(SavedRequest),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Folder {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub items: Vec<CollectionItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedRequest {
+    pub id: String,
+    pub name: String,
+    pub request: RequestDef,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Collection {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub items: Vec<CollectionItem>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::oauth::{OAuthConfig, OAuthGrant};
+
+    #[test]
+    fn oauth_config_is_flattened_into_the_auth_object() {
+        let auth = Auth::OAuth2 {
+            config: OAuthConfig {
+                client_id: "client-1".to_owned(),
+                token_url: "https://auth.example.com/token".to_owned(),
+                scopes: vec!["read".to_owned()],
+                ..OAuthConfig::default()
+            },
+            access_token: Some("secret-token".to_owned()),
+        };
+
+        let json = serde_json::to_value(&auth).unwrap();
+        assert_eq!(json["type"], "oauth2");
+        assert_eq!(json["grant"], "authorization_code");
+        assert_eq!(json["client_id"], "client-1");
+        assert_eq!(json["scopes"][0], "read");
+        // The token is supplied per send and must never be exported.
+        assert!(json.get("access_token").is_none());
+
+        let back: Auth = serde_json::from_value(json).unwrap();
+        match back {
+            Auth::OAuth2 {
+                config,
+                access_token,
+            } => {
+                assert_eq!(config.grant, OAuthGrant::AuthorizationCode);
+                assert_eq!(config.client_id, "client-1");
+                assert!(config.pkce, "PKCE is on unless an export says otherwise");
+                assert!(access_token.is_none());
+            }
+            other => panic!("expected OAuth2, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_old_export_without_oauth_fields_still_loads() {
+        let auth: Auth =
+            serde_json::from_str(r#"{"type":"api_key","name":"X","value":"y"}"#).unwrap();
+        assert!(matches!(auth, Auth::ApiKey { .. }));
+    }
+
+    #[test]
+    fn a_memory_body_serialises_as_a_bare_array() {
+        let body = ResponseBody::Memory(b"ok".to_vec());
+        let json = serde_json::to_string(&body).unwrap();
+        assert_eq!(json, "[111,107]", "the shape older records were saved in");
+
+        // A record written before the enum still parses as Memory.
+        let old: ResponseBody = serde_json::from_str("[111,107]").unwrap();
+        assert_eq!(old.as_bytes(), b"ok");
+        assert!(!old.is_file());
+    }
+
+    #[test]
+    fn a_file_body_keeps_its_metadata_and_preview() {
+        let body = ResponseBody::File(FileBody {
+            path: "/tmp/body.bin".to_owned(),
+            len: 5_000,
+            preview: b"head".to_vec(),
+            etag: Some("\"abc\"".to_owned()),
+            resume_from: 128,
+        });
+        let json = serde_json::to_value(&body).unwrap();
+        assert_eq!(json["len"], 5_000);
+        assert_eq!(json["resume_from"], 128);
+
+        let back: ResponseBody = serde_json::from_value(json).unwrap();
+        assert_eq!(back.len(), 5_000, "len is the file's full size");
+        assert_eq!(back.as_bytes(), b"head", "the preview is what renders");
+        assert!(back.is_file());
+    }
 }

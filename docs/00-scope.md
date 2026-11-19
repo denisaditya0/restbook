@@ -1,7 +1,8 @@
 # restbook — scope
 
 A local-first desktop HTTP client, inspired by Postman, Insomnia, Yaak, and
-Bruno. Original code; no forked or vendored sources.
+Bruno. Original code; no forked or vendored sources. Zaku is a reference for
+interaction and layout only — none of its AGPL code is used (see the ledger).
 
 ## Product principles
 
@@ -20,7 +21,7 @@ Bruno. Original code; no forked or vendored sources.
 - Headers table with per-row enable/disable
 - Bodies: none, raw (JSON/XML/text), form-urlencoded, multipart with files, binary
 - Auth: none, basic, bearer, API key (header or query), OAuth 2.0 (PKCE + client
-  credentials) — *OAuth deferred past milestone 2*
+  credentials)
 - Response: status, timing, size, pretty/raw body, headers, cookies
 - Environments, secret variables, `{{var}}` interpolation with scope precedence
 - Collections with nested folders and search
@@ -39,13 +40,27 @@ Bruno. Original code; no forked or vendored sources.
 
 ## Milestones
 
+The detailed, kept-current tables live with each side of the split:
+
+- UI (GPUI): [`01-ui-plan.md`](01-ui-plan.md) — U1..U55 done, X1..X6 and
+  U56..U60 planned (the `X` items change current behaviour)
+- Engine (model, transport, storage): [`02-backend-plan.md`](02-backend-plan.md) —
+  B1..B18 done, B19..B24 planned
+- Release and updates: [`09-release-and-updates.md`](09-release-and-updates.md) —
+  R1 done, R2..R5 planned
+
+The scaffold milestones below are the origin of both, kept for history.
+
 | # | Deliverable | State |
 |---|---|---|
 | M1 | Workspace, core model, templating, preparation | done in scaffold |
 | M2 | reqwest transport + `devcli` harness | done in scaffold |
 | M3 | SQLCipher store + keyring unlock + search | done, feature-gated |
-| M4 | GPUI shell wired to the engine | shell only |
-| M5 | Import/export, curl paste, code generation | not started |
+| M4 | GPUI shell wired to the engine | done: docked panes, send, history |
+| M5 | Import/export, curl paste, code generation | import/export done (B13); curl paste in the UI |
+
+The engine's kept-current milestones are B1..B18, with B19..B24 planned, in
+[`02-backend-plan.md`](02-backend-plan.md).
 
 ## Inspiration ledger
 
@@ -56,10 +71,15 @@ Bruno. Original code; no forked or vendored sources.
 | Paste-curl, local-first UX | Yaak | Interaction ideas | Plugin runtime |
 | Feature vocabulary | Postman | Parameter tables, env switcher | Cloud, workspaces-as-a-service |
 | Widgets, dock layout | `gpui-kit` | Components | Building a widget system |
+| Dense pane layout, request tabs, progress UX | Zaku | Interaction and layout ideas; a progress sink on the transport | Its Zed-derived crate graph, AGPL code, `.toml`-as-request files |
 
 ## Known gaps in this scaffold
 
-- The SQLCipher store is off by default; enable it with `--features sqlcipher` (needs `OPENSSL_DIR`).
-- No OAuth 2.0 flow yet.
-- Response cookie view is not modelled beyond the cookie jar.
+- The app prefers SQLCipher, which is a default feature: `cargo run` needs an
+  OpenSSL dev tree, so `scripts/dev.sh` detects `OPENSSL_DIR` for it (see the
+  README). Without one, `--no-default-features` falls back to plaintext JSONL
+  in the same per-user data directory.
+- No OAuth 2.0 authorization-code browser flow yet: the engine builds the
+  authorize URL and exchanges a code, and the app fetches client-credentials
+  tokens, but the local redirect listener is not wired.
 - `devcli` persists plaintext JSONL by design; only the app path is encrypted.

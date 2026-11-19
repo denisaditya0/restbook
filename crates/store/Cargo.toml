@@ -16,8 +16,28 @@ restbook-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
+# The facade only; the app installs the sink. A skipped collection or
+# environment is a line in `<data dir>/restbook.log`, not a lost console write.
+log = "0.4"
+
 base64 = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
-keyring = { version = "3", optional = true }
 rand = { version = "0.8", optional = true }
 rusqlite = { version = "0.42", features = ["bundled-sqlcipher"], optional = true }
+
+# The OS credential store. keyring 3 has no default backend, and without one it
+# silently `pub use mock` — an in-memory store. The master key would then change
+# on every launch, so the encrypted history would be unreadable the next time
+# the app started. Each platform has to opt in explicitly.
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", features = ["windows-native"], optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"], optional = true }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"], optional = true }
+
+[dev-dependencies]
+# Tests build without the `sqlcipher` feature, where `chrono` is optional.
+chrono.workspace = true

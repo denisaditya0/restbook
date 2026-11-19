@@ -1,0 +1,427 @@
+# Build the desktop app on native runners and publish a GitHub Release.
+#
+# The six-target matrix in `docs/09-release-and-updates.md` is the full plan;
+# this workflow ships the three targets that cover the most users without two
+# extra billed runners (macOS is 10x the minutes, Windows 2x, Linux 1x):
+#
+#   windows-2025   x86_64-pc-windows-msvc   restbook-<v>-windows-x86_64.zip
+#   macos-26       aarch64-apple-darwin     restbook-<v>-macos-aarch64.dmg
+#   ubuntu-22.04   x86_64-unknown-linux-gnu restbook-<v>-linux-x86_64.tar.gz
+#
+# Adding a target is one matrix entry plus, if its packaging differs, one step.
+# The `windows-11-arm` and `ubuntu-24.04-arm` entries from the docs are left out
+# on purpose: both are still the least stable runner labels, and neither has a
+# user base this app can justify yet.
+#
+# Nothing here is cross-compiled. GPUI needs the target's own X11/Wayland/
+# fontconfig headers on Linux, Apple's SDK on macOS, and the MSVC linker plus
+# the Windows SDK's `fxc.exe` for a release profile on Windows (see
+# `docs/09-release-and-updates.md`, "Artifact matrix").
+#
+#   push a tag         the only manual step: `git push origin 0.1.0`
+#   workflow_dispatch  re-release an existing tag; `dry_run` builds only
+#
+# A release is published only after every build job succeeded, and as a draft
+# until the manifest is attached, so a failed matrix leaves nothing public.
+
+name: Release
+
+on:
+  push:
+    tags:
+      # Bare semver, optionally with a prerelease suffix: 0.1.0, 0.2.0-beta.1.
+      # `docs/09` owns the convention; a mismatch is rejected by `verify`.
+      - "[0-9]+.[0-9]+.[0-9]+*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish (e.g. 0.1.0)"
+        required: true
+        type: string
+      dry_run:
+        description: "Build only; create and publish nothing"
+        required: false
+        type: boolean
+        default: false
+
+# A release is not cancelled halfway by a newer push; a re-run resumes it.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # A release build wants reproducible, non-incremental artifacts.
+  CARGO_INCREMENTAL: "0"
+  # Both `rust-toolchain.toml` files pin `stable-x86_64-pc-windows-gnu`, which
+  # does not exist on the Linux or macOS runners. The environment variable
+  # overrides the toolchain file, so every job runs plain `stable`.
+  RUSTUP_TOOLCHAIN: stable
+  RUST_BACKTRACE: "1"
+
+jobs:
+  # Tag, version, and ancestry, before a single runner is paid for.
+  verify:
+    name: Verify tag
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+      channel: ${{ steps.meta.outputs.channel }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # A tag push checks out that tag; a manual run checks out the tag it
+          # was given instead of the branch the button was pressed on.
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+      - id: meta
+        shell: bash
+        env:
+          TAG_INPUT: ${{ inputs.tag }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+
+          tag="${TAG_INPUT:-${GITHUB_REF_NAME}}"
+          version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' crates/app/Cargo.toml | head -n 1)
+          engine=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n 1)
+
+          echo "tag: $tag" >&2
+          echo "app version: $version" >&2
+          echo "engine version: $engine" >&2
+
+          if [ -z "$version" ] || [ -z "$engine" ]; then
+            echo "::error::could not read a version from Cargo.toml" >&2
+            exit 1
+          fi
+
+          # The tag is the release identity: it must equal the app's version,
+          # which is what `updater::CURRENT_VERSION` advertises.
+          if [ "$tag" != "$version" ]; then
+            echo "::error::tag $tag does not match crates/app version $version" >&2
+            exit 1
+          fi
+          if [ "$engine" != "$version" ]; then
+            echo "::error::engine version $engine does not match app version $version" >&2
+            exit 1
+          fi
+
+          # A tag on an unmerged commit is a build nobody can reproduce.
+          git fetch --no-tags origin \
+            "+refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}"
+          if ! git merge-base --is-ancestor "${tag}^{commit}" "refs/remotes/origin/${DEFAULT_BRANCH}"; then
+            echo "::error::tag $tag is not on ${DEFAULT_BRANCH}" >&2
+            exit 1
+          fi
+
+          # A version with a prerelease suffix is the beta channel: its own
+          # manifest asset, published as a GitHub prerelease.
+          case "$version" in
+            *-*) channel=beta ;;
+            *) channel=stable ;;
+          esac
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
+  # Engine and app tests, on the cheap runner, before the matrix spends
+  # Windows and (especially) macOS minutes. SQLCipher is off here for the same
+  # reason it is off in the Linux artifact: it costs minutes of C per job.
+  test:
+    name: Test
+    needs: verify
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            crates/app -> target
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake libssl-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev \
+            libxcb1-dev libxcb-randr0-dev libxcb-xfixes0-dev libxcb-shape0-dev \
+            libxcb-xinput-dev libxcb-render0-dev libxcb-sync-dev \
+            libxcb-present-dev libxcb-damage0-dev libxcb-composite0-dev \
+            libfontconfig1-dev libfreetype6-dev libzstd-dev
+
+      - name: Engine tests
+        run: cargo test --workspace
+
+      - name: App tests
+        working-directory: crates/app
+        run: cargo test --no-default-features
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: [verify, test]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows x86_64: MSVC, so the icon and version block from
+          # `crates/app/build.rs` survive (GNU `ld` drops `.rsrc`).
+          - os: windows-2025
+            platform: windows-x86_64
+          # macOS on Apple silicon: the `.app` bundle is produced by
+          # `scripts/package.sh`, the `.dmg` by the step below.
+          - os: macos-26
+            platform: macos-aarch64
+          # The oldest image the app supports: glibc is versioned at link
+          # time, so a 24.04 build fails on 22.04 with `GLIBC_2.39 not found`.
+          - os: ubuntu-22.04
+            platform: linux-x86_64
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+      PLATFORM: ${{ matrix.platform }}
+      # Read by `updater::RELEASE_REPO` at compile time, so the binary polls the
+      # repository it was built from rather than a hard-coded owner.
+      RESTBOOK_UPDATE_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+      # The app is its own workspace with its own lockfile, so the cache has
+      # to be told about `crates/app` rather than assuming the root.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "crates/app -> target"
+          key: ${{ matrix.platform }}
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev \
+            libxcb1-dev libxcb-randr0-dev libxcb-xfixes0-dev libxcb-shape0-dev \
+            libxcb-xinput-dev libxcb-render0-dev libxcb-sync-dev \
+            libxcb-present-dev libxcb-damage0-dev libxcb-composite0-dev \
+            libfontconfig1-dev libfreetype6-dev libzstd-dev
+
+      # SQLCipher links libcrypto dynamically, so `libsqlite3-sys`'s build
+      # script needs an OpenSSL tree in `OPENSSL_DIR`; `package.sh` copies the
+      # matching DLL beside the exe. `choco` is the deterministic source, and
+      # the path is found rather than assumed.
+      - name: Install OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install openssl --no-progress -y
+          $root = Get-ChildItem 'C:\Program Files\OpenSSL*' -Directory |
+            Select-Object -First 1
+          if (-not $root) { throw 'OpenSSL install directory not found' }
+          $dir = $root.FullName -replace '\\', '/'
+          "OPENSSL_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "OPENSSL_DIR=$dir"
+
+      # One packaging script for every OS; it already knows each one's shape.
+      - name: Package
+        shell: bash
+        run: bash scripts/package.sh --release
+
+      - name: Collect Windows artifact
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          # A bare exe is not enough: it imports libcrypto at load time, so the
+          # DLL travels with it. R3 replaces this zip with an Inno Setup
+          # installer.
+          7z a -tzip "out/restbook-${VERSION}-${PLATFORM}.zip" \
+            dist/restbook-app.exe dist/libcrypto-3-x64.dll
+
+      - name: Collect macOS artifact
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          app=$(find dist -maxdepth 1 -name '*.app' -print -quit)
+          test -n "$app"
+          hdiutil create -quiet -volname restbook -srcfolder "$app" \
+            -ov -format UDZO "out/restbook-${VERSION}-${PLATFORM}.dmg"
+
+      - name: Collect Linux artifact
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          # `package.sh` already names it `restbook-<v>-linux-<arch>.tar.gz`;
+          # the copy pins the release's spelling regardless of `uname -m`.
+          tarball=$(find dist -maxdepth 1 -name '*.tar.gz' -print -quit)
+          test -n "$tarball"
+          cp "$tarball" "out/restbook-${VERSION}-${PLATFORM}.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: asset-${{ matrix.platform }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 7
+
+  # The only job that writes: it assembles the assets, writes the channel
+  # manifest from their own checksums, and publishes the draft. A build job
+  # cannot touch the release, so a partially failed matrix has nothing to undo.
+  publish:
+    name: Publish release
+    needs: [verify, build]
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run == false }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      VERSION: ${{ needs.verify.outputs.version }}
+      TAG: ${{ needs.verify.outputs.tag }}
+      CHANNEL: ${{ needs.verify.outputs.channel }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: Publish
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # True when `$1` sorts after `$2` under semver, which `sort -V` alone
+          # cannot answer: it puts `0.2.0` before `0.2.0-beta.1`, while semver
+          # says the plain release is the newer one.
+          semver_gt() {
+            a=$1
+            b=$2
+            abase=${a%%-*}
+            bbase=${b%%-*}
+
+            if [ "$abase" != "$bbase" ]; then
+              # Different bases: numeric fields decide, and `sort -V` is exact.
+              [ "$(printf '%s\n%s\n' "$abase" "$bbase" | sort -V | tail -n 1)" = "$abase" ]
+              return
+            fi
+
+            case "$a" in
+              *-*) case "$b" in
+                     *-*) ;;                       # both prereleases
+                     *) return 1 ;;                # plain base beats prerelease
+                   esac ;;
+              *)   case "$b" in
+                     *-*) return 0 ;;
+                     *) return 1 ;;
+                   esac ;;
+            esac
+
+            # Both are prereleases of the same base. Equal is not newer; a
+            # shared prefix (`beta.1` vs `beta.1.1`) still orders by `sort -V`.
+            [ "$a" != "$b" ] &&
+              [ "$(printf '%s\n%s\n' "$a" "$b" | sort -V | tail -n 1)" = "$a" ]
+          }
+
+          # The beta channel is a single permanent release holding the newest
+          # manifest of either channel. A beta build polls it forever, so a
+          # stable release has to appear there too or beta users are stranded
+          # on the beta they installed.
+          mirror_to_beta_channel() {
+            src=$1
+
+            if ! gh release view beta-latest >/dev/null 2>&1; then
+              # Created on the first release; every later one replaces the
+              # asset in place. `--prerelease` keeps it out of `latest`.
+              gh release create beta-latest --prerelease --title "beta channel" \
+                --notes "The current beta manifest. Replaced in place on every release."
+            fi
+
+            # Never move the channel backwards: a patch on an old line must not
+            # replace a newer beta. Nothing to compare against on a first run.
+            tmp=$(mktemp)
+            current=''
+            if gh release download beta-latest --pattern latest-beta.json \
+                 --output "$tmp" --clobber 2>/dev/null; then
+              current=$(jq -r '.version // empty' "$tmp" 2>/dev/null || true)
+            fi
+            rm -f "$tmp"
+
+            if [ -n "$current" ] && ! semver_gt "$VERSION" "$current"; then
+              echo "beta channel keeps $current, not older than $VERSION"
+              return 0
+            fi
+
+            # `gh release upload` has no rename; a beta release already wrote
+            # the file under this name.
+            if [ "$src" != latest-beta.json ]; then cp "$src" latest-beta.json; fi
+            gh release upload beta-latest latest-beta.json --clobber
+          }
+
+          cd release
+          ls -l
+
+          # One release per tag; a re-run resumes the draft instead of
+          # duplicating it. `--generate-notes` gives the release, and the
+          # manifest's `notes`, the commit range since the previous tag.
+          # An existing release is left in whatever draft/published state it
+          # has: GitHub refuses to turn a published release back into a draft,
+          # and the channel flag is set at the end anyway.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists; updating it"
+          else
+            extra=()
+            if [ "$CHANNEL" = beta ]; then extra+=(--prerelease); fi
+            gh release create "$TAG" --draft --verify-tag \
+              --title "restbook $VERSION" --generate-notes "${extra[@]}"
+          fi
+
+          notes=$(gh release view "$TAG" --json body --jq .body)
+
+          # The manifest is derived, never hand-written: the URL follows the
+          # repository and tag, and the checksum is computed from the bytes
+          # about to be uploaded.
+          assets='{}'
+          for file in *; do
+            [ -f "$file" ] || continue
+            rest=${file#"restbook-${VERSION}-"}
+            key=${rest%.zip}; key=${key%.dmg}; key=${key%.tar.gz}
+            sha=$(sha256sum "$file" | cut -d' ' -f1)
+            url="https://github.com/${REPO}/releases/download/${TAG}/${file}"
+            assets=$(jq --arg k "$key" --arg u "$url" --arg s "$sha" \
+              '. + {($k): {url: $u, sha256: $s}}' <<<"$assets")
+          done
+
+          if [ "$CHANNEL" = beta ]; then manifest=latest-beta.json; else manifest=latest.json; fi
+          jq -n --arg version "$VERSION" --arg notes "$notes" --argjson assets "$assets" \
+            '{version: $version, notes: $notes, assets: $assets}' > "$manifest"
+          cat "$manifest"
+
+          gh release upload "$TAG" ./* --clobber
+
+          # Only now is anything visible: the draft becomes the release, and
+          # stable also becomes `releases/latest` (which is what the updater's
+          # stable URL resolves).
+          if [ "$CHANNEL" = beta ]; then
+            gh release edit "$TAG" --draft=false --prerelease
+          else
+            gh release edit "$TAG" --draft=false --latest
+          fi
+
+          mirror_to_beta_channel "$manifest"
