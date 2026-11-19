@@ -36,7 +36,15 @@ JSONL history — that is the build to test the fallback path.
 The same script also puts the detected prefix's `bin` first on `PATH`, because
 the app links libcrypto dynamically and the loader needs the matching DLL at run
 time. `sh scripts/package.sh [--release]` builds `dist/` with the exe and that
-DLL beside it; every other entry in the import table is a Windows DLL.
+DLL beside it, taking the DLL's name from the exe's import table so the two
+cannot disagree; every other entry in the import table is a Windows DLL.
+
+On Windows a non-debug build is a **GUI** binary (`windows_subsystem = "windows"`
+in `main.rs`), so launching the exe opens no console window beside it. A debug
+build deliberately keeps the console: that is where `cargo run` prints the
+`log::*` lines. A packaged run has no terminal to print to, so it tees to
+`<data dir>\restbook.log` (see `logging.rs`) — including a panic, which would
+otherwise leave nothing behind after a crash.
 
 `cargo run` on this machine links GPUI through MinGW/GNU: the first build is
 slow, and `dlltool.exe` must be on `PATH` (see the README). There is no devcli

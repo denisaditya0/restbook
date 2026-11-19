@@ -82,10 +82,11 @@ sh scripts/package.sh            # or --release
 
 What `dist/` holds depends on the machine you run it on:
 
-- **Windows** — `restbook-app.exe` and `libcrypto-3-x64.dll`, the one file the exe
-  does not get from Windows. If [Inno Setup](https://jrsoftware.org/isinfo.php)
-  is installed, `restbook-<version>-windows-x86_64.exe` as well: one installer
-  carrying both, with a Start-menu entry and an uninstaller.
+- **Windows** — `restbook-app.exe` and the `libcrypto-<major>-x64.dll` it imports,
+  the one file the exe does not get from Windows. If
+  [Inno Setup](https://jrsoftware.org/isinfo.php) is installed,
+  `restbook-<version>-windows-x86_64.exe` as well: one installer carrying both,
+  with a Start-menu entry and an uninstaller.
 - **macOS** — `restbook.app`, and `restbook-<version>-macos-<arch>.dmg` around it
   with an `Applications` symlink, so the image installs by dragging.
 - **Linux** — a prefix tree plus `restbook-<version>-linux-<arch>.tar.gz`, and
@@ -363,9 +364,12 @@ runtime, with a warning on stderr.
 
 At *run* time the exe needs the OpenSSL DLL it was linked against. The `dev`
 scripts put the detected prefix's `bin` first on `PATH` for `cargo run`/`cargo
-test`, and `package.sh` copies `libcrypto-3-x64.dll` next to the exe, which is
-where the Windows loader looks first. (Everything else in the import table,
-`icuuc.dll` included, ships with Windows 10+.)
+test`, and `package.sh` reads that DLL's name out of the exe's own import table
+(`libcrypto-3-x64.dll` for OpenSSL 3, `-4-` for OpenSSL 4) and copies it next to
+the exe, which is where the Windows loader looks first. (Everything else in the
+import table, `icuuc.dll` included, ships with Windows 10+.) A DLL that does not
+match makes the process die in the loader, before `main` can log anything:
+Windows reports it as *the application was unable to start correctly*.
 
 Verified on this machine: the roundtrip test creates the keyring entry, opens an
 encrypted database, writes a history entry, and searches it back. The database

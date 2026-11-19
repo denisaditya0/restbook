@@ -23,6 +23,13 @@ log = "0.4"
 base64 = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
 rand = { version = "0.8", optional = true }
+# `bundled-sqlcipher` compiles SQLCipher and links libcrypto dynamically: open
+# SSL comes from `OPENSSL_DIR` (see `scripts/dev.sh`) and the matching DLL ships
+# beside the exe. `bundled-sqlcipher-vendored-openssl` would remove that
+# dependency, but it compiles OpenSSL with `openssl-src`, which needs a full Perl
+# — something a `mingw64` build does not have here (MSYS's is stripped and
+# OpenSSL rejects Strawberry Perl for that target). See
+# `docs/05-cross-platform.md`.
 rusqlite = { version = "0.42", features = ["bundled-sqlcipher"], optional = true }
 
 # The OS credential store. keyring 3 has no default backend, and without one it

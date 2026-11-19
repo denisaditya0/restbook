@@ -8,6 +8,17 @@
 //! `--preview <pane>` (or `--preview all`) replaces the workspace with one pane
 //! over fixture data; see [`preview`].
 
+// Without this the exe keeps the console subsystem Rust defaults to, so every
+// launch from Explorer, a Start-menu entry or the installer's postinstall run
+// opens a terminal window beside the app. Release is the GUI build: no console,
+// and the tee in `logging` is where its lines go. Debug keeps the console on
+// purpose, since `cargo run` is where a developer reads them, and a test build
+// keeps it too or `cargo test --release` would swallow its own output.
+#![cfg_attr(
+    all(windows, not(debug_assertions), not(test)),
+    windows_subsystem = "windows"
+)]
+
 mod actions;
 mod branding;
 mod completion;

@@ -101,22 +101,64 @@ package_windows() {
     openssl_dir=$(sh "$root/scripts/dev.sh" --print-openssl-dir 2>/dev/null || true)
 
     mkdir -p "$out"
-    cp "$target/$profile/restbook-app.exe" "$out/"
+    exe="$target/$profile/restbook-app.exe"
+    cp "$exe" "$out/"
 
     # `libsqlite3-sys` links libcrypto with the `dylib` kind, so the built exe
     # imports it at load time. Windows' loader searches the exe's directory
     # first, which is why the DLL is copied next to it instead of relying on
     # PATH.
-    crypto_dll=
-    if [ -n "$openssl_dir" ] && [ -f "$openssl_dir/bin/libcrypto-3-x64.dll" ]; then
-        cp "$openssl_dir/bin/libcrypto-3-x64.dll" "$out/"
-        crypto_dll=libcrypto-3-x64.dll
+    #
+    # The name comes from the exe, not from this script: OpenSSL numbers it by
+    # major version, and a hardcoded `-3-` is how an installer once shipped a
+    # DLL its own exe did not import. The exe then failed in the loader — "The
+    # application was unable to start correctly" — before it could log a line.
+    #
+    # Anything left over from an earlier run is removed first, so `dist/` can
+    # never carry two majors and the installer cannot pick up the stale one.
+    rm -f "$out"/libcrypto-*.dll
+
+    crypto_dll=$(crypto_dll_name "$exe")
+    if [ -n "$crypto_dll" ]; then
+        if ! copy_crypto_dll "$crypto_dll"; then
+            echo "package: $exe imports $crypto_dll, but no OpenSSL tree here has" >&2
+            echo "package: it (looked under ${openssl_dir:-<no OPENSSL_DIR detected>}/bin and /lib)." >&2
+            echo "package: point OPENSSL_DIR at the tree this build linked against," >&2
+            echo "package: or rebuild through scripts/dev.sh so both come from one tree." >&2
+            exit 1
+        fi
+    else
+        echo "package: the exe imports no libcrypto; nothing to copy beside it" >&2
     fi
 
     build_installer "$crypto_dll"
 
     echo "packaged into $out" >&2
     ls -1 "$out" >&2
+}
+
+# The libcrypto DLL an exe imports, read out of its own import table. Those names
+# sit in the file as plain ASCII, so this needs no PE dump tool, and it cannot
+# drift from what the linker recorded. Empty when the build has no SQLCipher (or
+# the file is not a Windows exe).
+crypto_dll_name() {
+    grep -a -o -m 1 -E 'libcrypto-[0-9]+-[a-z0-9_]+\.dll' "$1" 2>/dev/null || true
+}
+
+# Copy `$name` from the OpenSSL tree beside the build into `$out`. Only that
+# tree's copy is trusted: a DLL found in System32 or on PATH may be a different
+# major or a differently configured build, and the machine that installs the
+# artifact has neither.
+copy_crypto_dll() {
+    name=$1
+    for dir in "${openssl_dir:-/nonexistent}/bin" "${openssl_dir:-/nonexistent}/lib"; do
+        if [ -f "$dir/$name" ]; then
+            cp "$dir/$name" "$out/"
+            echo "package: $name from $dir" >&2
+            return 0
+        fi
+    done
+    return 1
 }
 
 # Inno Setup's command-line compiler. `choco install innosetup` does not put it
@@ -154,7 +196,8 @@ build_installer() {
     crypto_dll=$1
 
     if [ -z "$crypto_dll" ]; then
-        echo "package: no libcrypto DLL copied; skipping the installer" >&2
+        echo "package: the exe needs no DLL beside it, and restbook.iss expects" >&2
+        echo "package: one; skipping the installer, dist/ is still runnable" >&2
         return 0
     fi
 
