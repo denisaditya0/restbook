@@ -17,7 +17,7 @@ installed; treat them as instructions, not as verified recipes.
 | SQLCipher crypto | `libsqlite3-sys` build script | OpenSSL on Windows/Linux, CommonCrypto on macOS. |
 | Window system | GPUI | X11/Wayland on Linux, Cocoa on macOS. Untested here. |
 | Branding | `crates/app/src/branding.rs` + `scripts/package.sh` | One identity, three OS surfaces — see [Branding per OS](#branding-per-os). |
-| Packaging | `scripts/package.sh` | Windows, macOS and Linux; no installer on any of them yet. |
+| Packaging | `scripts/package.sh` + `crates/app/packaging/` | One artifact per OS: an Inno Setup installer on Windows, a `.dmg` on macOS, a `.deb` (plus a portable tarball) on Linux. |
 
 ## Toolchain
 
@@ -203,28 +203,41 @@ start and renamed to `*.jsonl.imported`.
 branding, which is a different shape in each case because each OS reads branding
 from a different place:
 
-- **Windows** — a bare exe plus the DLLs it imports. The icon and the version
+- **Windows** — a bare exe plus the DLLs it imports, and, when Inno Setup's
+  `ISCC.exe` is on the machine, one installer compiled from
+  `packaging/restbook.iss` that carries both. The icon and the version
   block are compiled *into* the binary by `crates/app/build.rs`, so there is
   nothing to copy beside it except `libcrypto-3-x64.dll` (the import table
   references it, and the loader searches the exe's directory first). **Omit the
   icon unless the build used the MSVC toolchain** — see [The one trap](#the-one-trap-the-gnu-linker-drops-resources).
+  The installer is per-user (`PrivilegesRequired=lowest`, so no UAC prompt), puts
+  a Start-menu entry and an uninstaller in place, and stamps the shortcut with
+  `AppUserModelID` = `branding::APP_ID`; without that string a pinned taskbar
+  button and the running window resolve to different identities.
 - **macOS** — a `.app` bundle: the binary in `Contents/MacOS`, and
   `Info.plist` plus `Contents/Resources/restbook.icns` rendered from
   `packaging/Info.plist`. No crypto library is needed when the build used
   CommonCrypto; if `OPENSSL_DIR` was set, Homebrew's dylib has to be copied in
   and its install name rewritten with `install_name_tool`. `package.sh` codesigns
   ad-hoc, which is enough to run locally but needs right-click → Open on a
-  downloaded copy.
+  downloaded copy. On a Mac it also wraps the bundle in a `.dmg` with an
+  `Applications` symlink beside it, which is the drag-to-install idiom; a plain
+  image of the bundle alone reads as an archive of a folder.
 - **Linux** — a tarball laid out as an install prefix: the binary under `bin/`,
   and under `share/` a `.desktop` entry and the hicolor icon set. Both are named
   for `branding::APP_ID`, which is also the window's `app_id`; that agreement is
   what gives the app its icon in a dock and groups its window in a taskbar. Build
   with `--no-default-features` unless the target has OpenSSL, since SQLCipher
-  links `crypto` dynamically there too.
+  links `crypto` dynamically there too. Where `dpkg-deb` exists, the same tree is
+  also packaged as a `.deb` — its `Architecture:` field spells the arch dpkg's
+  way (`amd64`), while the file name keeps the release spelling (`x86_64`) like
+  every other artifact.
 
-None of the three produces an installer yet: Windows wants Inno Setup, and
-macOS wants notarization. The artifact matrix, naming, and update manifest that
-these steps feed are in [`09-release-and-updates.md`](09-release-and-updates.md).
+Only Windows has a true installer (one wizard, Start-menu entry, uninstaller).
+macOS ships a drag-to-`/Applications` `.dmg`, and Linux ships both a `.deb` for
+`apt` and a tarball to unpack by hand. Nothing is signed or notarized. The
+artifact matrix, naming, and update manifest that these steps feed are in
+[`09-release-and-updates.md`](09-release-and-updates.md).
 
 No platform sets a window icon at compile time: on macOS the Dock icon is bundle
 metadata, and on Linux the icon is installed next to the desktop entry
@@ -297,8 +310,10 @@ the intended shape — only the OS's own labels and images differ.
   Windows x86_64, macOS arm64 and Linux x86_64 on tags, so the other two get
   built (and packaged) for the first time there; the ARM64 rows in
   [`09-release-and-updates.md`](09-release-and-updates.md) are still unwired.
-- `package.sh` produces an artifact per OS but no installer on any of them, and
-  only the Windows path has been run here.
+- `package.sh` builds an installer on Windows (`.exe`), a drag-to-install image
+  on macOS (`.dmg`) and a package on Linux (`.deb`), but only the Windows path
+  has been run here; the other two are syntax-checked, not executed. Nothing is
+  signed on any platform.
 - The Windows icon and version block need the MSVC toolchain; the pins in this
   repository name GNU, where the linker drops them (see the note above).
 - No key override for headless CI.

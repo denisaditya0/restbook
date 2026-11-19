@@ -269,17 +269,27 @@ has a test guarding its command list against drift.
 
 ### 6. Package or release
 
-`scripts/package.sh` is the only artifact step today (Windows):
+`scripts/package.sh` is the only artifact step; it dispatches on the host OS:
 
 ```sh
 sh scripts/package.sh            # debug
 sh scripts/package.sh --release
 ```
 
-`dist/` receives `restbook-app.exe` and `libcrypto-3-x64.dll`. Version bumps
-touch both workspaces plus both lockfiles; tags are the bare version
-(`0.2.0`, `0.2.0-beta.1`). There is no installer, CI, or download-and-replace
-updater yet — the contract is in `09-release-and-updates.md`.
+What lands in `dist/` depends on where it runs:
+
+- **Windows** — `restbook-app.exe` and `libcrypto-3-x64.dll`, plus the
+  `restbook-<version>-windows-x86_64.exe` installer compiled from
+  `crates/app/packaging/restbook.iss` when Inno Setup is installed.
+- **macOS** — `restbook.app`, plus `restbook-<version>-macos-<arch>.dmg` with an
+  `Applications` symlink beside the bundle.
+- **Linux** — `restbook-<version>-linux/` (prefix tree),
+  `restbook-<version>-linux-<arch>.tar.gz`, and
+  `restbook-<version>-linux-<arch>.deb` when `dpkg-deb` exists.
+
+Version bumps touch both workspaces plus both lockfiles; tags are the bare
+version (`0.2.0`, `0.2.0-beta.1`). There is no download-and-replace updater yet —
+the contract is in `09-release-and-updates.md`.
 
 ## Test strategy at a glance
 
@@ -315,5 +325,7 @@ in the same data directory. The same directory holds `history.db`,
 - Only Windows has been built and run; other OSes are instructions, not verified
   recipes.
 - The updater is read-only phase 1, and the manifest URL is runtime-only.
-- `package.sh` covers Windows and produces no installer.
+- `package.sh` covers all three platforms but only the Windows path has been
+  run here; the macOS and Linux packaging (`.dmg`, `.deb`) has only been
+  syntax-checked, not executed.
 - `devcli` persists plaintext by design; only the app is encrypted.

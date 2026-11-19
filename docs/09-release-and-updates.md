@@ -8,7 +8,8 @@ still has to be built. Scope and non-goals stay in
 **Status:** `.github/workflows/release.yml` builds and publishes a release for
 the three targets below that fit the free-tier budget; the rest of the matrix
 is still a specification. `scripts/package.sh` produces one artifact per OS
-with its branding applied, but no installer. The update check in
+with its branding applied — a Windows installer, a macOS `.dmg`, a Linux `.deb`
+plus a portable tarball. The update check in
 `crates/app/src/updater.rs` is phase 1 — it fetches a manifest, compares
 versions, and reports. Nothing is downloaded or replaced. The manifest URL is
 compiled in from the build's release channel, so a packaged app checks on its
@@ -161,23 +162,31 @@ minutes (macOS is 10×, Windows 2×, Linux 1×).
 
 | Job | Runner | Target | Artifact |
 |---|---|---|---|
-| Windows x86_64 ✅ | `windows-2025` | `x86_64-pc-windows-msvc` | `restbook-<v>-windows-x86_64.zip` |
+| Windows x86_64 ✅ | `windows-2025` | `x86_64-pc-windows-msvc` | `restbook-<v>-windows-x86_64.exe` |
 | Windows ARM64 | `windows-11-arm` | `aarch64-pc-windows-msvc` | `restbook-<v>-windows-aarch64.exe` |
 | macOS ARM64 ✅ | `macos-26` | `aarch64-apple-darwin` | `restbook-<v>-macos-aarch64.dmg` |
 | macOS x86_64 | `macos-26-intel` | `x86_64-apple-darwin` | `restbook-<v>-macos-x86_64.dmg` |
-| Linux x86_64 ✅ | `ubuntu-22.04` | `x86_64-unknown-linux-gnu` | `restbook-<v>-linux-x86_64.tar.gz` |
-| Linux ARM64 | `ubuntu-24.04-arm` | `aarch64-unknown-linux-gnu` | `restbook-<v>-linux-aarch64.tar.gz` |
+| Linux x86_64 ✅ | `ubuntu-22.04` | `x86_64-unknown-linux-gnu` | `restbook-<v>-linux-x86_64.deb` |
+| Linux ARM64 | `ubuntu-24.04-arm` | `aarch64-unknown-linux-gnu` | `restbook-<v>-linux-aarch64.deb` |
 
-Two interim deviations from the table above, both from R3 not being done yet:
+Linux also ships `restbook-<v>-linux-<arch>-portable.tar.gz`, the same prefix
+tree without a package manager in front of it. It is not in the manifest, which
+holds one URL per platform key, so it is renamed `-portable` to keep its key
+(`linux-x86_64-portable`) from overwriting the `.deb`'s (`linux-x86_64`).
 
-- **Windows ships a zip, not an `.exe`.** The bare binary imports
-  `libcrypto-3-x64.dll` at load time, so the DLL has to travel with it; the
-  matrix's single `.exe` presumes the Inno Setup package that does not exist
-  yet.
+One interim deviation from the table above:
+
 - **The Linux artifact is built `--no-default-features`.** `scripts/package.sh`
   does that on Linux, which means plaintext JSONL rather than SQLCipher there.
   Change it when a Linux build with the encrypted store is worth the extra
   minutes (and the `libssl-dev` dependency).
+
+The Windows `.exe` is Inno Setup's output, built by `scripts/package.sh` from
+`crates/app/packaging/restbook.iss`. It carries the exe and the `libcrypto` DLL
+it imports at load time, so the release asset is one file rather than an archive
+of two. The macOS `.dmg` and the Linux `.deb` come from the same script, over the
+same bundle / prefix tree the bare artifacts use, so the layout a user installs
+cannot drift from the one the tarball carries.
 
 Runner labels move with GitHub's images — the labels above are the ones a
 working pipeline used, not a commitment. What matters is the indirection: one
@@ -257,7 +266,7 @@ them is on disk; each one is independent of the UI/engine milestone tables.
 |---|---|---|
 | R1 | Baked-in manifest URL | **Done.** `updater::manifest_url()` derives the channel URL from the compiled version (`RELEASE_REPO`, overridable with `RESTBOOK_UPDATE_REPO`) and bakes it in, so a packaged build checks without any environment; `RESTBOOK_UPDATE_URL` still overrides it at build or run time |
 | R2 | CI matrix | **3 of 6 done**: `.github/workflows/release.yml` builds Windows x86_64, macOS arm64 and Linux x86_64 on native runners, verifies tag/version/ancestry, runs the test suites, then publishes a draft→release with a derived channel manifest. The ARM64 and macOS Intel rows remain |
-| R3 | Installers | `scripts/package.sh` produces a bare exe / `.app` / tarball. Inno Setup for Windows and a `.dmg` for macOS are specified, not built |
+| R3 | Installers | **Done on all three platforms, at different depths.** Windows: `scripts/package.sh` compiles `crates/app/packaging/restbook.iss` with Inno Setup when `ISCC.exe` is installed (the release workflow does), producing a per-user `.exe` with a Start-menu entry and an uninstaller. macOS: a `.dmg` with an `Applications` symlink (drag to install; no uninstaller beyond dragging the `.app` out). Linux: a `.deb` for `apt`, plus the portable tarball. Only the Windows package installs itself with a wizard |
 | R4 | Signing and notarization | Nothing signed. `sha256`/`signature` are already parsed from the manifest and unused, so the contract does not change when this lands |
 | R5 | Download and install | The updater fetches, compares, and reports. Nothing is downloaded or replaced, so a user who is told about a newer version still installs by hand |
 
@@ -269,12 +278,16 @@ version block; only the MSVC build in the R2 matrix has them.
 
 ## Not done yet
 
-- No installer or notarization: `scripts/package.sh` produces an artifact per OS
-  (a bare exe, a `.app`, an install-prefix tarball) but nothing that installs
-  itself. The per-OS branding those artifacts need is already in place — see
-  [Branding per OS](05-cross-platform.md#branding-per-os).
-- No code signing: an unsigned macOS build needs right-click → Open the first
-  time, and Windows SmartScreen warns until a certificate exists.
+- No notarized or signed install: Windows SmartScreen warns, and an unsigned
+  macOS build needs right-click → Open the first time. macOS also has no
+  uninstaller — the `.app` is dragged to the Trash, and the history in
+  `~/Library/Application Support/restbook` stays behind (as it does on the other
+  platforms).
+- The `.deb` has no repository behind it (`apt install ./*.deb`, not
+  `apt install restbook`), and the Linux build still omits SQLCipher, so its
+  history is plaintext.
+- No AppImage, `.rpm`, or Flatpak: Debian-based distros are the only ones with a
+  packaged install today.
 - No download/install phase — the app cannot apply an update yet.
 - No delta updates, no mirrors, no self-hosted fallback.
 - Only three of six targets are built; the workflow does not yet produce the

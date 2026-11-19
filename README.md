@@ -74,16 +74,25 @@ repository root they take a package too:
 sh scripts/dev.sh test -p restbook-store --features sqlcipher
 ```
 
-To hand someone a runnable copy:
+To hand someone an installable copy:
 
 ```sh
 sh scripts/package.sh            # or --release
 ```
 
-`dist/` then holds `restbook-app.exe` and `libcrypto-3-x64.dll`, the one file the
-exe does not get from Windows. The `dev`/`package` scripts are build-time
-helpers: the built app never needs them, and its history lives in the data
-directory, not in `dist/`.
+What `dist/` holds depends on the machine you run it on:
+
+- **Windows** — `restbook-app.exe` and `libcrypto-3-x64.dll`, the one file the exe
+  does not get from Windows. If [Inno Setup](https://jrsoftware.org/isinfo.php)
+  is installed, `restbook-<version>-windows-x86_64.exe` as well: one installer
+  carrying both, with a Start-menu entry and an uninstaller.
+- **macOS** — `restbook.app`, and `restbook-<version>-macos-<arch>.dmg` around it
+  with an `Applications` symlink, so the image installs by dragging.
+- **Linux** — a prefix tree plus `restbook-<version>-linux-<arch>.tar.gz`, and
+  `restbook-<version>-linux-<arch>.deb` where `dpkg-deb` exists.
+
+The `dev`/`package` scripts are build-time helpers: the built app never needs
+them, and its history lives in the data directory, not in `dist/`.
 
 The window has three panes: history on the left, the request editor above the
 response viewer on the right.

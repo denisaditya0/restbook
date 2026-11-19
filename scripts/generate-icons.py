@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Rasterize ``crates/app/icons/restbook.svg`` into the PNG set and the .ico.
+"""Rasterize ``crates/app/icons/restbook.svg`` into the PNG set, the .ico and
+the .icns.
 
 This is the fallback for machines that have no SVG rasterizer (no librsvg, no
 cairo, no ImageMagick, no ffmpeg), so ``scripts/icons.sh`` cannot run. It parses
@@ -15,8 +16,9 @@ in this file reads the same as the geometry in the SVG.
 
     python scripts/generate-icons.py
 
-Only writes ``crates/app/icons/restbook-<n>.png`` and
-``crates/app/icons/restbook.ico``. The SVG is the source and is never touched.
+Only writes ``crates/app/icons/restbook-<n>.png``,
+``crates/app/icons/restbook.ico`` and ``crates/app/icons/restbook.icns``. The
+SVG is the source and is never touched.
 """
 
 from __future__ import annotations
@@ -35,6 +37,9 @@ OUT = ROOT / "crates" / "app" / "icons"
 # The PNG sizes ``scripts/icons.sh`` produces, plus the supersampling factor.
 SIZES = [16, 24, 32, 48, 64, 128, 256, 512]
 ICO_SIZES = [16, 24, 32, 48, 64, 128, 256]
+# macOS is the one platform that reads a container with retina entries, so its
+# source is rendered at twice the largest PNG in the set (512@2x).
+ICNS_SIZE = 1024
 SUPERSAMPLE = 4
 
 # The viewBox the SVG coordinates below are expressed in.
@@ -254,6 +259,18 @@ def write_ico(pngs: dict[int, Path], dest: Path, sizes: list[int]) -> None:
     dest.write_bytes(header + directory + b"".join(data for _, data in entries))
 
 
+def write_icns(spec: dict, dest: Path) -> None:
+    """Write the ``.icns`` from a 1024px render.
+
+    Pillow encodes every representation it can derive from one image, so the
+    source is rendered at twice the largest PNG in the set: that is what gives
+    the file a real 512@2x entry instead of an upscaled 512. macOS reads this
+    file for the Dock, the bundle icon and the app switcher; unlike Windows, it
+    reads nothing out of the executable.
+    """
+    render(spec, ICNS_SIZE).save(dest, format="ICNS")
+
+
 def main() -> int:
     spec = parse_svg(SVG.read_text(encoding="utf-8"))
     print(
@@ -275,6 +292,11 @@ def main() -> int:
     write_ico({s: OUT / f"restbook-{s}.png" for s in ICO_SIZES}, ico, ICO_SIZES)
     written.append(ico)
     print(f"generate-icons: wrote {ico.name} ({ico.stat().st_size} bytes)", file=sys.stderr)
+
+    icns = OUT / "restbook.icns"
+    write_icns(spec, icns)
+    written.append(icns)
+    print(f"generate-icons: wrote {icns.name} ({icns.stat().st_size} bytes)", file=sys.stderr)
 
     print(f"generate-icons: done; {len(written)} files in {OUT}", file=sys.stderr)
     return 0

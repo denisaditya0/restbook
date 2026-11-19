@@ -4,9 +4,14 @@
 # this workflow ships the three targets that cover the most users without two
 # extra billed runners (macOS is 10x the minutes, Windows 2x, Linux 1x):
 #
-#   windows-2025   x86_64-pc-windows-msvc   restbook-<v>-windows-x86_64.zip
+#   windows-2025   x86_64-pc-windows-msvc   restbook-<v>-windows-x86_64.exe
 #   macos-26       aarch64-apple-darwin     restbook-<v>-macos-aarch64.dmg
-#   ubuntu-22.04   x86_64-unknown-linux-gnu restbook-<v>-linux-x86_64.tar.gz
+#   ubuntu-22.04   x86_64-unknown-linux-gnu restbook-<v>-linux-x86_64.deb
+#                                          restbook-<v>-linux-x86_64-portable.tar.gz
+#
+# The manifest maps one URL per platform, so only one asset per platform can
+# carry that platform's key; Linux's portable tarball is renamed `-portable`
+# to stay reachable without colliding with the `.deb`'s `linux-x86_64` key.
 #
 # Adding a target is one matrix entry plus, if its packaging differs, one step.
 # The `windows-11-arm` and `ubuntu-24.04-arm` entries from the docs are left out
@@ -177,8 +182,8 @@ jobs:
           # `crates/app/build.rs` survive (GNU `ld` drops `.rsrc`).
           - os: windows-2025
             platform: windows-x86_64
-          # macOS on Apple silicon: the `.app` bundle is produced by
-          # `scripts/package.sh`, the `.dmg` by the step below.
+          # macOS on Apple silicon: `scripts/package.sh` produces the `.app`
+          # bundle and the drag-to-Applications `.dmg` around it.
           - os: macos-26
             platform: macos-aarch64
           # The oldest image the app supports: glibc is versioned at link
@@ -283,6 +288,16 @@ jobs:
           Write-Host "OPENSSL_INCLUDE_DIR=$inc"
 
       # One packaging script for every OS; it already knows each one's shape.
+      - name: Install Inno Setup (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # `package.sh` compiles `crates/app/packaging/restbook.iss` with ISCC,
+          # which turns the exe and the libcrypto DLL into one installer. The
+          # package has no PATH shim, so the script looks in the Program Files
+          # locations itself.
+          choco install innosetup --no-progress -y
+
       - name: Package
         shell: bash
         run: bash scripts/package.sh --release
@@ -293,18 +308,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out
-          # A bare exe is not enough: it imports libcrypto at load time, so the
-          # DLL travels with it. The name follows the OpenSSL major version, so
-          # it is found rather than assumed. R3 replaces this zip with an Inno
-          # Setup installer.
-          dll=$(find dist -maxdepth 1 -name 'libcrypto-*.dll' -print -quit)
-          test -n "$dll" || { echo "::error::no libcrypto DLL in dist" >&2; exit 1; }
-          test -f dist/restbook-app.exe
-          # `cd dist` so the archive holds the two files at its root instead of
-          # a `dist/` directory.
-          ( cd dist && 7z a -tzip "../out/restbook-${VERSION}-${PLATFORM}.zip" \
-              restbook-app.exe "$(basename "$dll")" )
-          7z l "out/restbook-${VERSION}-${PLATFORM}.zip"
+          # One file: the installer carries restbook-app.exe and the libcrypto
+          # DLL it imports, plus the Start-menu entry and the taskbar identity.
+          # Its name already matches the release's spelling.
+          installer="dist/restbook-${VERSION}-${PLATFORM}.exe"
+          if [ ! -f "$installer" ]; then
+            echo "::error::$installer was not built; see the Package step's ISCC output" >&2
+            exit 1
+          fi
+          cp "$installer" out/
+          ls -l out
 
       - name: Collect macOS artifact
         if: runner.os == 'macOS'
@@ -312,10 +325,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out
-          app=$(find dist -maxdepth 1 -name '*.app' -print -quit)
-          test -n "$app"
-          hdiutil create -quiet -volname restbook -srcfolder "$app" \
-            -ov -format UDZO "out/restbook-${VERSION}-${PLATFORM}.dmg"
+          # `package.sh` builds the disk image and its drag-to-Applications
+          # layout, so the copy here is all that is left to do.
+          dmg="dist/restbook-${VERSION}-${PLATFORM}.dmg"
+          if [ ! -f "$dmg" ]; then
+            echo "::error::$dmg was not built; see the Package step's output" >&2
+            exit 1
+          fi
+          cp "$dmg" out/
 
       - name: Collect Linux artifact
         if: runner.os == 'Linux'
@@ -323,11 +340,23 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out
-          # `package.sh` already names it `restbook-<v>-linux-<arch>.tar.gz`;
+          # Two assets ship, but the manifest holds one URL per platform key.
+          # The `.deb` is the installable one, so it gets the `linux-x86_64`
+          # key; the portable tarball is renamed `-portable` so its key
+          # (`linux-x86_64-portable`) does not overwrite it. That keeps the
+          # tarball downloadable for people not on a Debian-based distro.
+          deb="dist/restbook-${VERSION}-${PLATFORM}.deb"
+          if [ ! -f "$deb" ]; then
+            echo "::error::$deb was not built; see the Package step's output" >&2
+            exit 1
+          fi
+          cp "$deb" out/
+
+          # `package.sh` names the tarball `restbook-<v>-linux-<arch>.tar.gz`;
           # the copy pins the release's spelling regardless of `uname -m`.
           tarball=$(find dist -maxdepth 1 -name '*.tar.gz' -print -quit)
           test -n "$tarball"
-          cp "$tarball" "out/restbook-${VERSION}-${PLATFORM}.tar.gz"
+          cp "$tarball" "out/restbook-${VERSION}-${PLATFORM}-portable.tar.gz"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -467,7 +496,11 @@ jobs:
           for file in *; do
             [ -f "$file" ] || continue
             rest=${file#"restbook-${VERSION}-"}
-            key=${rest%.zip}; key=${key%.dmg}; key=${key%.tar.gz}
+            # One key per platform, so `.deb` must be stripped to give Linux the
+            # `linux-x86_64` key; `.tar.gz` is stripped as a unit, and the
+            # portable tarball keeps its suffix, yielding `linux-x86_64-portable`.
+            key=${rest%.zip}; key=${key%.dmg}; key=${key%.deb}
+            key=${key%.tar.gz}; key=${key%.exe}
             sha=$(sha256sum "$file" | cut -d' ' -f1)
             url="https://github.com/${REPO}/releases/download/${TAG}/${file}"
             assets=$(jq --arg k "$key" --arg u "$url" --arg s "$sha" \
