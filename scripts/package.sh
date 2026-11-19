@@ -167,7 +167,12 @@ build_installer() {
     # none: `0.2.0-beta.1` becomes `0.2.0.0`.
     numeric_version=$(printf '%s' "$version" | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1.0/')
 
-    "$iscc" /Q \
+    # Git-Bash/MSYS rewrites an argument that starts with `/` into a Windows
+    # path, which would turn `/Q` and every `/D...` define into a "filename"
+    # for ISCC ("may not specify more than one script filename"). The paths it
+    # is given are already converted with `winpath`, so suppressing that
+    # rewrite for this one call is safe.
+    MSYS2_ARG_CONV_EXCL='*' MSYS_NO_PATHCONV=1 "$iscc" /Q \
         "/DVersion=$version" \
         "/DVersionNumeric=$numeric_version" \
         "/DSourceDir=$(winpath "$out")" \
