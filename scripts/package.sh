@@ -161,17 +161,42 @@ copy_crypto_dll() {
     return 1
 }
 
-# Inno Setup's command-line compiler. `choco install innosetup` does not put it
-# on PATH, and MSYS does not know the `Program Files` spelling, so the known
-# install locations are tried directly.
+# Inno Setup's command-line compiler. `ISCC_PATH` wins when the build machine
+# installed it somewhere of its own — the release workflow unpacks the official
+# installer into a temporary directory — then the usual `Program Files`
+# locations are tried directly, because choco's package does not put it on PATH
+# and MSYS does not know the `Program Files` spelling. The glob catches a
+# version-suffixed directory, which is how a `choco install innosetup` that put
+# its shim on PATH can resolve to nothing and fail with a bare "The system
+# cannot find the file specified."
 find_iscc() {
-    for iscc in \
-        /c/Program\ Files\ \(x86\)/Inno\ Setup\ 6/ISCC.exe \
-        /c/Program\ Files/Inno\ Setup\ 6/ISCC.exe \
-        /c/Program\ Files\ \(x86\)/Inno\ Setup\ 7/ISCC.exe \
-        /c/Program\ Files/Inno\ Setup\ 7/ISCC.exe; do
-        if [ -f "$iscc" ]; then
-            echo "$iscc"
+    if [ -n "${ISCC_PATH:-}" ]; then
+        candidate=$ISCC_PATH
+        # CI exports the path the way Windows spells it; `cygpath` makes it one
+        # MSYS can stat.
+        if command -v cygpath >/dev/null 2>&1; then
+            candidate=$(cygpath -u "$candidate" 2>/dev/null || printf '%s' "$candidate")
+        fi
+        if [ -f "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    fi
+    for candidate in \
+        "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" \
+        "/c/Program Files/Inno Setup 6/ISCC.exe" \
+        "/c/Program Files (x86)/Inno Setup 7/ISCC.exe" \
+        "/c/Program Files/Inno Setup 7/ISCC.exe"; do
+        if [ -f "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    for candidate in \
+        "/c/Program Files (x86)"/*Inno*/ISCC.exe \
+        "/c/Program Files"/*Inno*/ISCC.exe; do
+        if [ -f "$candidate" ]; then
+            printf '%s\n' "$candidate"
             return 0
         fi
     done

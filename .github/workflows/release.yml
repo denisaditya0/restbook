@@ -293,10 +293,38 @@ jobs:
         shell: pwsh
         run: |
           # `package.sh` compiles `crates/app/packaging/restbook.iss` with ISCC,
-          # which turns the exe and the libcrypto DLL into one installer. The
-          # package has no PATH shim, so the script looks in the Program Files
-          # locations itself.
-          choco install innosetup --no-progress -y
+          # which turns the exe and the libcrypto DLL into one installer.
+          #
+          # The official installer is pinned and checksummed instead of coming
+          # from `choco`: the package's install directory moves between versions,
+          # and when its PATH shim resolves to nothing the only thing a failed
+          # run reports is "The system cannot find the file specified." — no
+          # compiler output, no path. `/PORTABLE=1` unpacks the compiler under
+          # `RUNNER_TEMP` with no admin rights, and `ISCC_PATH` is what
+          # `package.sh` looks for first.
+          $url = 'https://github.com/jrsoftware/issrc/releases/download/is-7_0_2/innosetup-7.0.2-x64.exe'
+          $expected = '5ad54ca3def786f8f4212552e54cc6d8d61329e2d24a1cfee0571d42c2684ff1'
+          $installer = Join-Path $env:RUNNER_TEMP 'innosetup.exe'
+          $directory = Join-Path $env:RUNNER_TEMP 'innosetup'
+
+          Invoke-WebRequest -Uri $url -OutFile $installer
+          $actual = (Get-FileHash -Algorithm SHA256 -Path $installer).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) {
+            throw "Unexpected Inno Setup checksum: $actual"
+          }
+
+          $arguments = "/SP- /CURRENTUSER /DIR=`"$directory`" /NORESTART /PORTABLE=1 /SUPPRESSMSGBOXES /VERYSILENT"
+          $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Could not install Inno Setup: exit code $($process.ExitCode)"
+          }
+
+          $iscc = Join-Path $directory 'ISCC.exe'
+          if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) {
+            throw "ISCC.exe was not installed at $iscc"
+          }
+          "ISCC_PATH=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "ISCC_PATH=$iscc"
 
       - name: Package
         shell: bash
