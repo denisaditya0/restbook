@@ -226,6 +226,16 @@ jobs:
       # `lib\VC\x64\MD` — the `/MD` CRT, which is what rustc links against. A
       # bare `OPENSSL_DIR` therefore resolves to `lib\` and the link dies with
       # `LNK1181: cannot open input file 'libcrypto.lib'`.
+      #
+      # `OPENSSL_INCLUDE_DIR` is not decoration either. `libsqlite3-sys` only
+      # honours the override when *both* variables are set:
+      #
+      #   let (lib_dir, inc_dir) = match (lib_dir, inc_dir) {
+      #       (Some(lib), Some(inc)) => (vec![lib], inc),   // taken only together
+      #       (lib, inc) => /* falls back to $OPENSSL_DIR/lib */
+      #   };
+      #
+      # Setting the lib dir alone silently reverts to `lib\`.
       - name: Install OpenSSL (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -261,10 +271,16 @@ jobs:
 
           $dir = $root.FullName -replace '\\', '/'
           $lib = $lib -replace '\\', '/'
+          $inc = "$($root.FullName)\include" -replace '\\', '/'
+          if (-not (Test-Path "$inc/openssl/ssl.h")) {
+            throw "OpenSSL headers not found under $inc"
+          }
           "OPENSSL_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append
           "OPENSSL_LIB_DIR=$lib" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "OPENSSL_INCLUDE_DIR=$inc" | Out-File -FilePath $env:GITHUB_ENV -Append
           Write-Host "OPENSSL_DIR=$dir"
           Write-Host "OPENSSL_LIB_DIR=$lib"
+          Write-Host "OPENSSL_INCLUDE_DIR=$inc"
 
       # One packaging script for every OS; it already knows each one's shape.
       - name: Package
