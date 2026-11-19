@@ -337,10 +337,17 @@ mod tests {
 
     #[test]
     fn a_root_without_a_name_falls_back_to_the_app_name() {
-        // A drive root and an empty path both have no final component, and a
-        // titlebar showing an empty chip would look broken.
-        assert_eq!(workspace_name(&PathBuf::from("C:/")), "restbook");
+        // A filesystem root and an empty path both have no final component, and
+        // a titlebar showing an empty chip would look broken. `/` is a root on
+        // every platform, so it is the portable half of this test.
+        assert_eq!(workspace_name(&PathBuf::from("/")), "restbook");
         assert_eq!(workspace_name(&PathBuf::from("")), "restbook");
+
+        // A drive root is a Windows idea: on Unix `C:/` is one component whose
+        // name is `C:`, which is a perfectly good workspace name.
+        if cfg!(windows) {
+            assert_eq!(workspace_name(&PathBuf::from("C:/")), "restbook");
+        }
     }
 
     #[test]
