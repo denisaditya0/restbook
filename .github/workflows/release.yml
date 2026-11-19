@@ -489,6 +489,20 @@ jobs:
 
           notes=$(gh release view "$TAG" --json body --jq .body)
 
+          # Put a per-platform install section above the generated notes. The
+          # block is delimited so a re-run replaces it instead of stacking a
+          # second copy, and `<version>` is filled in with this release's tag.
+          # Because `notes` becomes the manifest body, the in-app updater shows
+          # the same instructions.
+          header_file="$GITHUB_WORKSPACE/docs/release-install.md"
+          if [ -f "$header_file" ]; then
+            header=$(sed "s/<version>/$VERSION/g" "$header_file")
+            generated=$(printf '%s\n' "$notes" \
+              | sed '/<!-- restbook-install -->/,/<!-- \/restbook-install -->/d')
+            notes=$(printf '%s\n\n%s' "$header" "$generated")
+            gh release edit "$TAG" --notes "$notes"
+          fi
+
           # The manifest is derived, never hand-written: the URL follows the
           # repository and tag, and the checksum is computed from the bytes
           # about to be uploaded.
