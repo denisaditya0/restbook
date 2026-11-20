@@ -2666,6 +2666,19 @@ impl Workspace {
         }
     }
 
+    /// Whether `name` already has a dock toggle in the status bar's corners.
+    ///
+    /// The View menu lists only the panes this returns `false` for; a pane with
+    /// a corner control does not need a second route one menu deep. The two
+    /// toggles are `toggle_sidebar` (Collections) and `toggle_tools` (History
+    /// and Environment), each sitting under the dock it opens.
+    fn has_corner_toggle(name: PanelName) -> bool {
+        matches!(
+            name,
+            PanelName::Collections | PanelName::History | PanelName::Environment
+        )
+    }
+
     /// Whether `name` is the pane a dock is currently showing: the dock is
     /// open, it holds the pane, and the pane's group has it in front. The
     /// centre has no open flag, so it always counts as open. This is what the
@@ -3118,13 +3131,18 @@ impl Render for Workspace {
                                 save_as.update(cx, |workspace, cx| workspace.save_active_as(cx));
                             }),
                     );
-                    // The View section: one checked entry per pane. Clicking a
-                    // pane reveals it and then focuses it, which is the same
-                    // pair the palette's focus commands run, so the menu and
-                    // the palette cannot drift. Reset Layout sits at the end
-                    // because it is the way back from a pane that was closed.
+                    // The View section: the panes with no other pointer route.
+                    // Collections and the tools dock each have a toggle in the
+                    // status bar's corners, so repeating them here would be a
+                    // second way to do one thing; Request and Response have no
+                    // dedicated control, and Reset Layout below is the way back
+                    // from either. Clicking a pane reveals it and then focuses
+                    // it, the same pair the palette's focus commands run.
                     menu = menu.separator();
                     for &(name, visible) in &panel_visibility {
+                        if Self::has_corner_toggle(name) {
+                            continue;
+                        }
                         let target = workspace.clone();
                         menu =
                             menu.item(PopupMenuItem::new(name.label()).checked(visible).on_click(
@@ -3582,6 +3600,24 @@ mod tests {
         // also be dropped from a saved layout. Pin the count to the variants
         // this build knows about.
         assert_eq!(all.len(), 5);
+    }
+
+    /// The titlebar's View section lists a pane only when that pane has no
+    /// status-bar toggle, so the two routes never both exist for one pane.
+    ///
+    /// Collections sits under the left toggle and History plus Environment
+    /// under the right one; Request and Response have no corner control and are
+    /// the only entries the menu draws.
+    #[test]
+    fn the_view_menu_lists_only_panes_with_no_corner_toggle() {
+        use super::{PanelName, Workspace};
+
+        let listed: Vec<PanelName> = PanelName::all()
+            .into_iter()
+            .filter(|name| !Workspace::has_corner_toggle(*name))
+            .collect();
+
+        assert_eq!(listed, vec![PanelName::Request, PanelName::Response]);
     }
 
     /// The status bar's two dock toggles are the only route back to a closed
