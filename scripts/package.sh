@@ -5,6 +5,13 @@
 #
 #   scripts/package.sh            # debug build, this OS's artifact
 #   scripts/package.sh --release  # optimized
+#   scripts/package.sh --release --vendored
+#                                 # optimized, OpenSSL linked statically (Windows)
+#
+# `--vendored` compiles OpenSSL with the app (`sqlcipher-vendored`) instead of
+# linking the system one, which turns the Windows artifact into a single exe
+# with no `libcrypto` beside it. It needs a full `perl` on the build machine, so
+# it is not the default; the release workflow passes it.
 #
 # Windows, macOS and Linux each take a different shape, because each OS reads
 # branding from a different place:
@@ -13,8 +20,9 @@
 #            `ISCC.exe` is installed — one installer that carries both. The icon
 #            and version block are compiled *into* the binary by
 #            `crates/app/build.rs`, so there is nothing to copy beside it except
-#            the crypto library. (This needs the MSVC toolchain: see the note in
-#            `build.rs` about GNU `ld` dropping the resource section.)
+#            the crypto library, and with `--vendored` not even that. (This needs
+#            the MSVC toolchain: see the note in `build.rs` about GNU `ld`
+#            dropping the resource section.)
 #   macOS    a `.app` bundle, and — only where `hdiutil` exists, i.e. macOS —
 #            a `.dmg` built around that bundle with an `Applications` symlink
 #            beside it, so the image installs by dragging instead of copying a
@@ -44,9 +52,28 @@ out="$root/dist"
 
 profile=debug
 flag=
-if [ "${1:-}" = "--release" ]; then
-    profile=release
-    flag=--release
+vendored=
+for argument in "$@"; do
+    case "$argument" in
+    --release)
+        profile=release
+        flag=--release
+        ;;
+    --vendored)
+        vendored=1
+        ;;
+    *)
+        echo "package: unknown argument: $argument" >&2
+        exit 1
+        ;;
+    esac
+done
+
+# Empty expands to nothing, so the build command below reads the same either
+# way; `--features` on its own would be a cargo error.
+features=
+if [ -n "$vendored" ]; then
+    features="--features sqlcipher-vendored"
 fi
 
 # One place the version is read for every artifact name. The app crate holds its
@@ -96,7 +123,7 @@ relarch=$(release_arch)
 # `packaging/restbook.iss` turns that directory into one `.exe` that has all
 # three.
 package_windows() {
-    ( cd "$root/crates/app" && sh "$root/scripts/dev.sh" build $flag )
+    ( cd "$root/crates/app" && sh "$root/scripts/dev.sh" build $flag $features )
 
     openssl_dir=$(sh "$root/scripts/dev.sh" --print-openssl-dir 2>/dev/null || true)
 
@@ -107,7 +134,8 @@ package_windows() {
     # `libsqlite3-sys` links libcrypto with the `dylib` kind, so the built exe
     # imports it at load time. Windows' loader searches the exe's directory
     # first, which is why the DLL is copied next to it instead of relying on
-    # PATH.
+    # PATH. A `--vendored` build imports none — OpenSSL is inside the exe — and
+    # the check below is what tells the two apart.
     #
     # The name comes from the exe, not from this script: OpenSSL numbers it by
     # major version, and a hardcoded `-3-` is how an installer once shipped a
@@ -128,7 +156,7 @@ package_windows() {
             exit 1
         fi
     else
-        echo "package: the exe imports no libcrypto; nothing to copy beside it" >&2
+        echo "package: the exe imports no libcrypto; the artifact is self-contained" >&2
     fi
 
     build_installer "$crypto_dll"
@@ -224,12 +252,6 @@ winpath() {
 build_installer() {
     dll=$1
 
-    if [ -z "$dll" ]; then
-        echo "package: the exe needs no DLL beside it, and restbook.iss expects" >&2
-        echo "package: one; skipping the installer, dist/ is still runnable" >&2
-        return 0
-    fi
-
     if ! iscc=$(find_iscc); then
         echo "package: Inno Setup (ISCC.exe) not found; dist/ is runnable, not installable" >&2
         return 0
@@ -239,20 +261,30 @@ build_installer() {
     # none: `0.2.0-beta.1` becomes `0.2.0.0`.
     numeric_version=$(printf '%s' "$version" | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1.0/')
 
+    # Built as a list because the DLL is optional; `set --` inside a function
+    # only replaces this call's own arguments, which is what is wanted here.
+    #
     # Git-Bash/MSYS rewrites an argument that starts with `/` into a Windows
     # path, which would turn `/Q` and every `/D...` define into a "filename"
     # for ISCC ("may not specify more than one script filename"). The paths it
     # is given are already converted with `winpath`, so suppressing that
     # rewrite for this one call is safe.
-    MSYS2_ARG_CONV_EXCL='*' MSYS_NO_PATHCONV=1 "$iscc" /Q \
+    set -- \
         "/DVersion=$version" \
         "/DVersionNumeric=$numeric_version" \
         "/DSourceDir=$(winpath "$out")" \
         "/DOutputDir=$(winpath "$out")" \
         "/DIconFile=$(winpath "$root/crates/app/icons/$name.ico")" \
         "/DArchitecture=$relarch" \
-        "/DAppId=$app_id" \
-        "/DCryptoDll=$dll" \
+        "/DAppId=$app_id"
+
+    # No define for a static build: `restbook.iss` drops its `[Files]` entry for
+    # the DLL unless this is passed, so the installer carries the exe alone.
+    if [ -n "$dll" ]; then
+        set -- "$@" "/DCryptoDll=$dll"
+    fi
+
+    MSYS2_ARG_CONV_EXCL='*' MSYS_NO_PATHCONV=1 "$iscc" /Q "$@" \
         "$(winpath "$root/crates/app/packaging/$name.iss")"
 }
 

@@ -82,8 +82,8 @@ sh scripts/package.sh            # or --release
 
 What `dist/` holds depends on the machine you run it on:
 
-- **Windows** — `restbook-app.exe` and the `libcrypto-<major>-x64.dll` it imports,
-  the one file the exe does not get from Windows. If
+- **Windows** — `restbook-app.exe` and, unless the build asked for a static
+  OpenSSL (`--vendored`), the `libcrypto-<major>-x64.dll` it imports. If
   [Inno Setup](https://jrsoftware.org/isinfo.php) is installed,
   `restbook-<version>-windows-x86_64.exe` as well: one installer carrying both,
   with a Start-menu entry and an uninstaller.
@@ -370,6 +370,12 @@ the exe, which is where the Windows loader looks first. (Everything else in the
 import table, `icuuc.dll` included, ships with Windows 10+.) A DLL that does not
 match makes the process die in the loader, before `main` can log anything:
 Windows reports it as *the application was unable to start correctly*.
+
+The release build avoids that question entirely: `package.sh --release
+--vendored` compiles OpenSSL into the exe (`sqlcipher-vendored`), which then has
+no `libcrypto` import at all. It needs a complete `perl` on the build machine,
+which is why local builds keep the dynamic shape; the trade-off is written up in
+[`05-cross-platform.md`](docs/05-cross-platform.md#how-sqlcipher-gets-its-crypto).
 
 Verified on this machine: the roundtrip test creates the keyring entry, opens an
 encrypted database, writes a history entry, and searches it back. The database

@@ -38,6 +38,9 @@ the app links libcrypto dynamically and the loader needs the matching DLL at run
 time. `sh scripts/package.sh [--release]` builds `dist/` with the exe and that
 DLL beside it, taking the DLL's name from the exe's import table so the two
 cannot disagree; every other entry in the import table is a Windows DLL.
+`--vendored` (`sqlcipher-vendored`) compiles OpenSSL into the exe instead, which
+is what the release build does; the GNU toolchain here cannot do it, see
+[`05-cross-platform.md`](05-cross-platform.md#how-sqlcipher-gets-its-crypto).
 
 On Windows a non-debug build is a **GUI** binary (`windows_subsystem = "windows"`
 in `main.rs`), so launching the exe opens no console window beside it. A debug

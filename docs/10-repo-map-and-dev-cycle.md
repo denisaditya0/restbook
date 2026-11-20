@@ -278,9 +278,11 @@ sh scripts/package.sh --release
 
 What lands in `dist/` depends on where it runs:
 
-- **Windows** — `restbook-app.exe` and the `libcrypto-<major>-x64.dll` the exe
-  imports (read from its import table, so it follows OpenSSL's major version),
-  plus the `restbook-<version>-windows-x86_64.exe` installer compiled from
+- **Windows** — `restbook-app.exe` and, when the build linked OpenSSL
+  dynamically, the `libcrypto-<major>-x64.dll` it imports (read from its import
+  table, so it follows OpenSSL's major version). The release build passes
+  `--vendored`, so it links OpenSSL statically and `dist/` holds the exe alone.
+  Plus the `restbook-<version>-windows-x86_64.exe` installer compiled from
   `crates/app/packaging/restbook.iss` when Inno Setup is installed. A build that
   imports a DLL no OpenSSL tree here provides is an error, not a silent
   `dist/`: the exe would fail in the loader.

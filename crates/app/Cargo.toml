@@ -1,6 +1,6 @@
 [package]
 name = "restbook-app"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 publish = false
 # The resource compiler needs the icon before the crate compiles, and it is the
@@ -36,6 +36,11 @@ opt-level = 3
 # `--no-default-features` and falls back to plaintext JSONL.
 default = ["sqlcipher"]
 sqlcipher = ["restbook-store/sqlcipher"]
+# The same encrypted store with OpenSSL compiled in and linked statically, so
+# the artifact is one file with no `libcrypto` beside it. `package.sh
+# --vendored` turns it on for the release build; it needs a full `perl` on the
+# build machine, which is why it is not the default.
+sqlcipher-vendored = ["sqlcipher", "restbook-store/sqlcipher-vendored"]
 
 [dependencies]
 # `env_logger` is the sink `main` installs; `log` is the facade the app logs

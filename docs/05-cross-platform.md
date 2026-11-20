@@ -203,14 +203,15 @@ start and renamed to `*.jsonl.imported`.
 branding, which is a different shape in each case because each OS reads branding
 from a different place:
 
-- **Windows** — a bare exe plus the DLLs it imports, and, when Inno Setup's
-  `ISCC.exe` is on the machine, one installer compiled from
-  `packaging/restbook.iss` that carries both. The icon and the version
-  block are compiled *into* the binary by `crates/app/build.rs`, so there is
-  nothing to copy beside it except the `libcrypto` DLL its import table names
-  (the loader searches the exe's directory first). The name is read out of the
-  exe rather than assumed, because OpenSSL numbers it by major version and a
-  wrong one kills the process in the loader. **Omit the
+- **Windows** — one exe, plus an installer compiled from
+  `packaging/restbook.iss` when Inno Setup's `ISCC.exe` is available. The icon
+  and the version block are compiled *into* the binary by
+  `crates/app/build.rs`, and the release build links OpenSSL statically
+  (`--vendored`, see below), so nothing has to travel beside the exe. A local
+  build without `--vendored` still links `libcrypto` dynamically; `package.sh`
+  then reads the DLL's name out of the exe's import table — never assuming a
+  major version — and copies that file next to it, because a mismatch kills the
+  process in the loader before it can log a line. **Omit the
   icon unless the build used the MSVC toolchain** — see [The one trap](#the-one-trap-the-gnu-linker-drops-resources).
   The installer is per-user (`PrivilegesRequired=lowest`, so no UAC prompt), puts
   a Start-menu entry and an uninstaller in place, and stamps the shortcut with
@@ -241,33 +242,38 @@ macOS ships a drag-to-`/Applications` `.dmg`, and Linux ships both a `.deb` for
 artifact matrix, naming, and update manifest that these steps feed are in
 [`09-release-and-updates.md`](09-release-and-updates.md).
 
-### Why the crypto library stays dynamic
+### How SQLCipher gets its crypto
 
-`rusqlite`'s `bundled-sqlcipher` compiles SQLCipher but links `libcrypto`
-dynamically, so every artifact carries one more file and the loader needs it at
-startup. `bundled-sqlcipher-vendored-openssl` removes both: it builds OpenSSL
-with `openssl-src` and links it statically, and the binary then has no
-`libcrypto` import at all — in a Windows build, the entire "shipped a DLL the exe
-did not import" failure disappears.
+`rusqlite`'s `bundled-sqlcipher` compiles SQLCipher and links `libcrypto`
+dynamically: that is the local-development shape, and it is why `scripts/dev.sh`
+exists at all (it puts `OPENSSL_DIR` and the matching `bin` in place). The
+trade-off is one more file in the package, and a loader that fails before `main`
+if the file is missing or of the wrong major.
 
-It is not used here, because that build needs a complete `perl`, and the Windows
-toolchain this project builds with cannot supply one:
+The `sqlcipher-vendored` feature removes both: it turns on
+`bundled-sqlcipher-vendored-openssl`, which builds OpenSSL with `openssl-src`
+and links it statically, so the binary has no `libcrypto` import at all. That is
+what the release build uses — `package.sh --release --vendored` on Windows.
 
-- `openssl-src` drives OpenSSL's own `Configure`, which wants
-  `Locale::Maketext::Simple` and `ExtUtils::MakeMaker` (via `Params::Check`).
-  MSYS's perl under MinGW is stripped of them.
-- OpenSSL refuses a *native Windows* perl for a `mingw64` target outright —
-  "This perl implementation doesn't produce Unix like paths". So Strawberry
-  Perl, which has the modules, does not help the GNU toolchain.
+The cost is a build-time dependency on a complete `perl`, because `openssl-src`
+drives OpenSSL's own `Configure`:
+
+- **MSVC + Strawberry Perl** (OpenSSL target `VC-WIN64A`) works, and is what a
+  `windows-2025` CI runner has. `nmake` is located through the `cc` crate, so no
+  developer prompt is needed.
+- **MinGW + MSYS perl does not**: MSYS's perl is stripped of core modules
+  (`Locale::Maketext::Simple`, `ExtUtils::MakeMaker`), and OpenSSL refuses a
+  native Windows perl for a `mingw64` target outright — "This perl implementation
+  doesn't produce Unix like paths".
 - `OPENSSL_STATIC=1` is not an escape either: for `bundled-sqlcipher`,
   `libsqlite3-sys` emits `cargo:rustc-link-lib=dylib=crypto` unconditionally, so
   the link kind is fixed by the dependency, not by `openssl-sys`'s environment.
 
-The configuration that *does* work for a static build is MSVC plus Strawberry
-Perl (OpenSSL target `VC-WIN64A`), which is what a `windows-2025` CI runner
-offers. Until that is adopted, the artifact is two files and
-`scripts/package.sh` reads the DLL's name out of the exe's import table so the
-two cannot disagree.
+So the split is by toolchain, not by wish: local GNU development links the
+system OpenSSL and `package.sh` ships the DLL it names; the MSVC release build
+links statically and ships the exe alone. `restbook.iss` drops its `[Files]`
+entry for the DLL unless the packaging script passes `/DCryptoDll`, and its
+`[InstallDelete]` removes a `libcrypto-*.dll` left by an older, dynamic install.
 
 No platform sets a window icon at compile time: on macOS the Dock icon is bundle
 metadata, and on Linux the icon is installed next to the desktop entry

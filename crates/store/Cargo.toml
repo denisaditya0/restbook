@@ -8,8 +8,15 @@ rust-version.workspace = true
 [features]
 default = []
 # Encrypted history. Enabling this builds SQLCipher from source (needs a C
-# toolchain and a few minutes on first build).
+# toolchain and a few minutes on first build) and links libcrypto
+# dynamically, so `OPENSSL_DIR` has to point at an OpenSSL tree.
 sqlcipher = ["dep:base64", "dep:chrono", "dep:keyring", "dep:rand", "dep:rusqlite"]
+# The same store, but OpenSSL is compiled with the crate and linked
+# statically: no `OPENSSL_DIR`, no `libcrypto` beside the executable, nothing
+# for a loader to fail to find. Needs a complete `perl` on the build machine
+# (`openssl-src` drives OpenSSL's own Configure), so it is opt-in — the
+# release build turns it on, local development does not.
+sqlcipher-vendored = ["sqlcipher", "rusqlite/bundled-sqlcipher-vendored-openssl"]
 
 [dependencies]
 restbook-core.workspace = true
@@ -23,12 +30,10 @@ log = "0.4"
 base64 = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
 rand = { version = "0.8", optional = true }
-# `bundled-sqlcipher` compiles SQLCipher and links libcrypto dynamically: open
-# SSL comes from `OPENSSL_DIR` (see `scripts/dev.sh`) and the matching DLL ships
-# beside the exe. `bundled-sqlcipher-vendored-openssl` would remove that
-# dependency, but it compiles OpenSSL with `openssl-src`, which needs a full Perl
-# — something a `mingw64` build does not have here (MSYS's is stripped and
-# OpenSSL rejects Strawberry Perl for that target). See
+# `bundled-sqlcipher` compiles SQLCipher and links libcrypto dynamically: the
+# OpenSSL tree comes from `OPENSSL_DIR` (see `scripts/dev.sh`) and the matching
+# DLL ships beside the exe. The `sqlcipher-vendored` feature switches that to a
+# static build instead — see the feature list above and
 # `docs/05-cross-platform.md`.
 rusqlite = { version = "0.42", features = ["bundled-sqlcipher"], optional = true }
 

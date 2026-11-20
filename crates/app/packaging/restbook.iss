@@ -42,9 +42,9 @@
 #ifndef AppId
   #define AppId "com.restbook.restbook"
 #endif
-#ifndef CryptoDll
-  #error Compile with ISCC /DCryptoDll=<libcrypto dll>; see scripts/package.sh
-#endif
+; `CryptoDll` has no default on purpose: a build that links OpenSSL statically (see
+; `sqlcipher-vendored`) has no DLL to ship, and the packaging script then passes
+; no define at all. The `[Files]` entry below disappears with it.
 
 [Setup]
 ; The setup's own identity, unrelated to the app id below. It has to stay
@@ -95,8 +95,11 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 Source: "restbook-app.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; The DLL's name follows the OpenSSL major version, so it is passed in rather
-; than spelled out here.
+; than spelled out here — and it is absent when the build linked OpenSSL
+; statically, where the exe needs nothing beside it.
+#ifdef CryptoDll
 Source: "{#CryptoDll}"; DestDir: "{app}"; Flags: ignoreversion
+#endif
 
 ; An upgrade replaces the files it knows about and leaves everything else, so a
 ; DLL an earlier version shipped and this one does not stays in `{app}` forever

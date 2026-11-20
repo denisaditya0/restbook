@@ -182,9 +182,10 @@ One interim deviation from the table above:
   minutes (and the `libssl-dev` dependency).
 
 The Windows `.exe` is Inno Setup's output, built by `scripts/package.sh` from
-`crates/app/packaging/restbook.iss`. It carries the exe and the `libcrypto` DLL
-it imports at load time, so the release asset is one file rather than an archive
-of two. The macOS `.dmg` and the Linux `.deb` come from the same script, over the
+`crates/app/packaging/restbook.iss`. It is built with `--vendored`, so OpenSSL
+is linked into the exe and the installer carries that single file — a DLL only
+joins it when a build links OpenSSL dynamically, which local builds still do.
+The macOS `.dmg` and the Linux `.deb` come from the same script, over the
 same bundle / prefix tree the bare artifacts use, so the layout a user installs
 cannot drift from the one the tarball carries.
 
