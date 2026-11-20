@@ -133,6 +133,7 @@ runner. Build commands are `cargo` plus the `scripts/dev.*` wrappers.
 ├── .github/workflows/
 │   ├── ci.yml               pull requests: fmt, clippy, tests, encrypted store
 │   └── release.yml          tag → build 3 native targets → draft release + manifest
+├── .github/pull_request_template.md   the shape a pull request is reviewed in
 ├── .agents/skills/          GPUI Kit coding/design guides for agents
 ├── .refs/                   ignored reference checkouts
 ├── .restbook/               ignored dev history (devcli)
@@ -269,7 +270,12 @@ stays the post-merge one. What runs where:
 | When | Workflow | Checks |
 |---|---|---|
 | Every pull request, and pushes to `master` | `ci.yml` | fmt in both workspaces, clippy (`-D warnings`), both test suites, the SQLCipher store, and no version bump |
-| A tag is pushed | `release.yml` | tag = version = engine version, tag on the default branch, tests again, then three native builds → draft release |
+| A tag is pushed | `release.yml` | tag = version = engine version, tag on the default branch, and every `ci.yml` job green for that commit (`verify` reads the check runs through the API rather than rebuilding the suite) |
+
+`.github/pull_request_template.md` carries the shape a pull request is expected
+to have: the problem, the fix, the evidence, the checks. The template is the
+contract, not decoration — the evidence section is where the `--preview`
+captures go, attached rather than committed.
 
 So a change that reaches a beta is checked three times: on the pull request, on
 the release tag, and by however much of the manual path above applies. The two
