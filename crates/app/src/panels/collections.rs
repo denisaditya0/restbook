@@ -25,7 +25,6 @@ use crate::document::Document;
 use crate::icons::{self, IconName};
 use crate::notice::Notice;
 use crate::theme::{Metrics, Palette};
-use crate::variables::Variables;
 
 // `Open` carries a whole `RequestDef`, which is much larger than `OpenDraft`'s
 // `i64`. The variant is constructed and matched in exactly two places, so the
@@ -221,9 +220,6 @@ pub(crate) struct CollectionsPanel {
     store: Arc<dyn Store>,
     /// The request being edited, observed so a save reads the live one.
     document: Entity<Document>,
-    /// Environments, observed so the header's chip follows a pick made in the
-    /// Environment pane.
-    variables: Entity<Variables>,
     collections: Vec<Collection>,
     /// The drafts the workspace persists, newest first. Read back from the store
     /// so the Unsaved list follows what is actually on disk.
@@ -252,11 +248,6 @@ pub(crate) struct CollectionsPanel {
     filter_cache: Option<(String, u64, Vec<Collection>)>,
     /// Bumped on every mutation of `collections`; keys `filter_cache`.
     revision: u64,
-    /// Overrides the environment chip's width cap in render tests, so the same
-    /// button can be laid out uncapped to learn the placeholder's own width.
-    /// `None` in every build that is not a test.
-    #[cfg(test)]
-    chip_cap: Option<f32>,
     focus_handle: FocusHandle,
 }
 
@@ -362,7 +353,6 @@ impl CollectionsPanel {
     pub(crate) fn new(
         store: Arc<dyn Store>,
         document: Entity<Document>,
-        variables: Entity<Variables>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -384,14 +374,14 @@ impl CollectionsPanel {
         // state, not this pane.
         cx.observe(&document, |_, _, cx| cx.notify()).detach();
         cx.observe(&query, |_, _, cx| cx.notify()).detach();
-        cx.observe(&variables, |_, _, cx| cx.notify()).detach();
+        // The pane no longer observes `Variables`: the environment chip moved
+        // to the titlebar, so an environment change repaints no row here.
 
         Self {
             palette: Palette::new(cx),
             metrics: Metrics::current(cx),
             store,
             document,
-            variables,
             collections,
             drafts,
             query,
@@ -404,8 +394,6 @@ impl CollectionsPanel {
             composing: false,
             filter_cache: None,
             revision: 0,
-            #[cfg(test)]
-            chip_cap: None,
             focus_handle: cx.focus_handle(),
         }
     }
@@ -739,7 +727,6 @@ impl CollectionsPanel {
                             .text_color(palette.subtle)
                             .child(self.collections.len().to_string()),
                     )
-                    .child(self.render_environment(cx))
                     .child(self.render_actions(cx)),
             )
             .child(self.render_search(cx))
@@ -810,78 +797,6 @@ impl CollectionsPanel {
             .min_w_0()
             .dropdown_caret(true)
             .tooltip("Switch collection")
-            .dropdown_menu(menu)
-            .into_any_element()
-    }
-
-    /// The active environment chip. It reads the same `Variables` entity as the
-    /// Environment pane, so a pick here is the scope the next send resolves
-    /// against, not a second selection to keep in sync.
-    fn render_environment(&self, cx: &mut Context<Self>) -> AnyElement {
-        let active = self.variables.read(cx).active().map(str::to_owned);
-        let label = active
-            .clone()
-            .unwrap_or_else(|| "No environment".to_owned());
-        let environments: Vec<String> = self
-            .variables
-            .read(cx)
-            .environments()
-            .iter()
-            .map(|each| each.name.clone())
-            .collect();
-
-        let variables = self.variables.clone();
-        let selected = active;
-        let menu = move |mut menu: PopupMenu, _: &mut Window, _: &mut Context<PopupMenu>| {
-            menu = menu.item(
-                PopupMenuItem::new("No environment")
-                    .icon(IconName::Globe)
-                    .checked(selected.is_none())
-                    .on_click({
-                        let variables = variables.clone();
-                        move |_, _, cx| {
-                            variables.update(cx, |vars, cx| vars.set_active(None, cx));
-                        }
-                    }),
-            );
-            if environments.is_empty() {
-                menu = menu.item(PopupMenuItem::new("No environments yet.").disabled(true));
-            }
-            for name in &environments {
-                let name = name.clone();
-                let checked = selected.as_deref() == Some(name.as_str());
-                let select = name.clone();
-                let variables = variables.clone();
-                menu = menu.item(
-                    PopupMenuItem::new(name)
-                        .icon(IconName::Globe)
-                        .checked(checked)
-                        .on_click(move |_, _, cx| {
-                            variables
-                                .update(cx, |vars, cx| vars.set_active(Some(select.clone()), cx));
-                        }),
-                );
-            }
-            menu
-        };
-
-        // A long environment name would push the header's buttons off the
-        // edge, so the chip truncates instead. The cap has to clear the
-        // placeholder's own width: a narrower one ellipsises "No environment"
-        // to "No enviro…" before any environment is picked.
-        #[cfg(test)]
-        let chip_cap = self.chip_cap.unwrap_or(self.metrics.gutter * 16.0);
-        #[cfg(not(test))]
-        let chip_cap = self.metrics.gutter * 16.0;
-
-        Button::new("collections-environment")
-            .icon(IconName::Globe)
-            .label(label)
-            .compact()
-            .max_w(px(chip_cap))
-            .dropdown_caret(true)
-            .debug_selector(|| "collections-environment-chip".to_owned())
-            .tooltip("Active environment")
             .dropdown_menu(menu)
             .into_any_element()
     }
@@ -2412,101 +2327,5 @@ mod tests {
             }),
             Some(RowTarget::Item("req-1".to_owned())),
         );
-    }
-}
-
-/// The header's environment chip, laid out by the real renderer.
-///
-/// The chip is content-sized, so its `max_w` alone decides where the label
-/// ellipsises. That is invisible to a unit test and to the style declarations:
-/// only layout knows the natural width the cap has to clear.
-#[cfg(test)]
-mod render_tests {
-    use std::sync::Arc;
-
-    use gpui_kit::{AppContext as _, Entity, TestAppContext, VisualTestContext};
-    use restbook_core::Store;
-    use restbook_store::MemoryStore;
-
-    use super::{CollectionsPanel, Variables};
-    use crate::document::Document;
-    use crate::preview::tree;
-
-    /// The selector the chip records for the element-tree dump.
-    const CHIP: &str = "collections-environment-chip";
-
-    /// Open a window whose root is the pane, on an empty store, and draw one
-    /// frame. No environment is active, which is the state that shows the
-    /// placeholder. `chip_cap` overrides the chip's width cap, so the test can
-    /// lay the same button out uncapped and learn the placeholder's own width.
-    fn open(
-        cx: &mut TestAppContext,
-        chip_cap: Option<f32>,
-    ) -> (Entity<CollectionsPanel>, &mut VisualTestContext) {
-        let (view, cx) = cx.add_window_view(|window, cx| {
-            let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
-            let document = cx.new(|_| Document::new());
-            let variables = cx.new(|cx| Variables::new(store.clone(), cx));
-            let mut panel = CollectionsPanel::new(store, document, variables, window, cx);
-            panel.chip_cap = chip_cap;
-            panel
-        });
-        cx.update(|window, cx| window.draw(cx).clear(cx));
-        (view, cx)
-    }
-
-    /// The chip's painted width, read back from the recorded bounds.
-    fn chip_width(cx: &mut VisualTestContext) -> f32 {
-        let text = tree::bounds_tree(cx, "collections-chip", &[CHIP]);
-        let line = text
-            .lines()
-            // The first line is the `# title`, which contains the selector too.
-            .filter(|line| line.contains(CHIP))
-            .find(|line| line.contains('@'))
-            .unwrap_or_else(|| panic!("the chip should be in the tree:\n{text}"));
-        // A recorded row reads `selector @x,y WxH`: the box is after the
-        // space, and its width is the part before the `x`.
-        let size = line
-            .split('@')
-            .nth(1)
-            .and_then(|rest| rest.split_whitespace().nth(1))
-            .unwrap_or_else(|| panic!("a recorded box in {line:?}"));
-        size.split('x')
-            .next()
-            .expect("a recorded width")
-            .parse()
-            .expect("a numeric width")
-    }
-
-    /// The chip must show its placeholder whole before any environment is
-    /// picked.
-    ///
-    /// The chip is content-sized, so `max_w` alone decides where its label
-    /// ellipsises. With no environment active the label is exactly
-    /// `No environment`, and a cap below that string's width is what painted
-    /// `No enviro…`. The width measured here is the natural one: the same
-    /// button laid out without a cap, which is the placeholder's own width.
-    #[test]
-    fn the_environment_chip_fits_its_placeholder() {
-        let mut cx = TestAppContext::single();
-        cx.update(gpui_kit::init);
-
-        let capped = {
-            let (_view, vcx) = open(&mut cx, None);
-            chip_width(vcx)
-        };
-        let natural = {
-            let (_view, vcx) = open(&mut cx, Some(f32::INFINITY));
-            chip_width(vcx)
-        };
-
-        assert!(
-            capped >= natural - 0.5,
-            "the chip truncates its placeholder: {capped}px at the cap but \
-             `No environment` needs {natural}px, which is the `No enviro…` \
-             defect"
-        );
-
-        cx.quit();
     }
 }

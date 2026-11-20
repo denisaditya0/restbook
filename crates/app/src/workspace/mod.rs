@@ -631,15 +631,8 @@ impl Workspace {
             }),
             environment: cx
                 .new(|cx| EnvironmentPanel::new(variables.clone(), document.clone(), window, cx)),
-            collections: cx.new(|cx| {
-                CollectionsPanel::new(
-                    store.clone(),
-                    document.clone(),
-                    variables.clone(),
-                    window,
-                    cx,
-                )
-            }),
+            collections: cx
+                .new(|cx| CollectionsPanel::new(store.clone(), document.clone(), window, cx)),
         };
 
         let mut workspace = Self {
@@ -3019,11 +3012,30 @@ impl Render for Workspace {
         let dock = self.dock.clone();
         let breadcrumb = self.breadcrumb(cx);
         let status = self.status(cx);
-        let environment = self
-            .variables
-            .read(cx)
-            .active()
-            .map(|name| SharedString::from(name.to_owned()));
+        // The chip is window-wide chrome, not pane content, so the canvas is
+        // what places it. The pick mutates the shared `Variables` entity, which
+        // is the same one the Environment pane reads.
+        let environment_chip = {
+            let variables = self.variables.clone();
+            let environments = self
+                .variables
+                .read(cx)
+                .environments()
+                .iter()
+                .map(|each| each.name.clone())
+                .collect();
+            // Clears the placeholder's own measured width; a narrower cap is
+            // what ellipsised `No environment` to `No enviro…`.
+            let cap = metrics.gutter * 16.0;
+            chrome::environment_chip(
+                self.variables.read(cx).active(),
+                environments,
+                move |name, _, cx| {
+                    variables.update(cx, |vars, cx| vars.set_active(name, cx));
+                },
+                cap,
+            )
+        };
 
         // The trailing slot holds the app's own controls. The kit appends the
         // real window controls (minimize/maximize/close) after everything the
@@ -3039,6 +3051,7 @@ impl Render for Workspace {
             .flex_none()
             .items_center()
             .gap(px(metrics.space_2xs))
+            .child(environment_chip)
             .child({
                 // The window menu. Settings lives here as well as in the command
                 // palette: a mouse user has no other route to it, and an
@@ -3292,7 +3305,6 @@ impl Render for Workspace {
                 &chrome::WorkspaceChip {
                     root: self.workspace_root.clone(),
                 },
-                environment,
                 &status,
                 left_toggle,
                 right_toggle,
@@ -3596,7 +3608,6 @@ mod tests {
         use crate::panels::collections::CollectionsPanel;
         use crate::panels::history::HistoryPanel;
         use crate::theme::{Metrics, Palette};
-        use crate::variables::Variables;
 
         use super::super::chrome;
         use super::super::settings;
@@ -3649,7 +3660,6 @@ mod tests {
                         &palette,
                         &metrics,
                         &chrome::WorkspaceChip { root: None },
-                        None,
                         &chrome::Status::default(),
                         left_toggle,
                         right_toggle,
@@ -3664,9 +3674,7 @@ mod tests {
                 cx.new(|_| settings::Settings::new(std::env::temp_dir().join("status-test.json")));
             let history = cx.new(|cx| HistoryPanel::new(store.clone(), settings, window, cx));
             let document = cx.new(|_| super::super::Document::new());
-            let variables = cx.new(|cx| Variables::new(store.clone(), cx));
-            let collections =
-                cx.new(|cx| CollectionsPanel::new(store, document, variables, window, cx));
+            let collections = cx.new(|cx| CollectionsPanel::new(store, document, window, cx));
             dock.update(cx, |dock, cx| {
                 let layout = DockLayout::tabs().panel_view(super::super::panel_handle(history), cx);
                 dock.set_dock(DockPlacement::Right, layout, window, cx);

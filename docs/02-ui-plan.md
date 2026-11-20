@@ -119,6 +119,12 @@ surface. `workspace/chrome.rs` holds both; they are functions returning an
 element, not panes, because a status bar the user could drag into a tab strip
 would be a worse product than one that is always at the bottom.
 
+The active environment is chrome, not pane content. Its chip sits in the
+titlebar's trailing slot because the choice applies to every tab: the next send
+resolves `{{vars}}` against it whatever request is in front. That is also where
+Postman and Bruno put it. The Collections pane therefore holds no
+environment control, and the status bar does not repeat it.
+
 Not done, in rough order of visual payoff:
 
 - Request tabs inside the titlebar, as the reference does. That is a change to

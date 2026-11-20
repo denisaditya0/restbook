@@ -52,11 +52,11 @@ this default. Rearranging the center is a deliberate non-goal for now.
 | Element | Shows | Source |
 |---|---|---|
 | Titlebar chip | workspace name, initial in a rounded square | `chrome::titlebar` |
+| Titlebar environment chip | active environment; opens the environment menu | `chrome::environment_chip` |
 | Titlebar breadcrumb | tab label › URL (URL is its own tooltip, truncated at 240px) | `Workspace::breadcrumb` |
 | Titlebar trailing | window-menu dropdown (palette, settings, clipboard, View panes, reset layout, log copy), window controls | `Workspace::render` |
 | Status bar, far left | dock toggle: `PanelLeft` → the sidebar dock | `chrome::status_bar` (`left_toggle`) |
 | Status bar left | storage chip (`local database` or the workspace path) | `chrome::status_bar` |
-| Status bar middle | active environment (`Braces` icon + name) | `chrome::status_bar` |
 | Status bar right | last sent URL, or the engine error message | `chrome::status_bar`, `Workspace::status` |
 | Status bar, far right | dock toggle: `PanelRight` → the History + Environment dock | `chrome::status_bar` (`right_toggle`) |
 
@@ -156,7 +156,6 @@ This is the "intent as event" rule in action.
 | Trigger | Effect | POV |
 |---|---|---|
 | Collection switcher → a collection | select it | Left dock |
-| Environment chip → an environment | set the active environment | Left dock |
 | `+` menu → New Request / New Folder / New Collection | create (New Request needs a selection) | Left dock |
 | Sort → Manual / Name A-Z / Name Z-A | re-sort the tree | Left dock |
 | Row tools: up / down / rename / delete | move, rename (label only), or delete (opens the alert dialog) | Left dock → Overlay |
