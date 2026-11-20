@@ -71,6 +71,9 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: read
+      # Reading the commit's check runs is how the release learns whether CI
+      # passed; it does not run the suite itself.
+      checks: read
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
       version: ${{ steps.meta.outputs.version }}
@@ -134,68 +137,50 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
 
-  # The same gate `ci.yml` puts on a pull request, repeated here because a tag
-  # can point at a commit that never went through it: a hotfix pushed straight
-  # to master, or a tag moved after the fact. Formatting and lints come first —
-  # they fail in seconds and name the file.
-  #
-  # SQLCipher is off here for the same reason it is off in the Linux artifact: it
-  # costs minutes of C per job.
-  test:
-    name: Checks
-    needs: verify
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            . -> target
-            crates/app -> target
-          # Distinct from the `ci.yml` jobs: a cache entry is immutable, so a
-          # shared key means whichever job saves first wins and the others
-          # rebuild the world.
-          key: release-checks
-
-      - name: Install Linux build dependencies
+      # The verdict on this commit comes from `ci.yml`, not from a second copy of
+      # its checks running here. Rebuilding the suite cost 21 minutes per release
+      # and a fourth multi-gigabyte cache entry, for exactly the answers CI had
+      # already produced for this SHA.
+      #
+      # A missing result is a failure, not a pass: it means this commit never went
+      # through CI, which is the case a release must refuse. Tag after CI is green
+      # (the tag push does not wait for it).
+      - name: CI is green for this commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config cmake libssl-dev \
-            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev \
-            libxcb1-dev libxcb-randr0-dev libxcb-xfixes0-dev libxcb-shape0-dev \
-            libxcb-xinput-dev libxcb-render0-dev libxcb-sync-dev \
-            libxcb-present-dev libxcb-damage0-dev libxcb-composite0-dev \
-            libfontconfig1-dev libfreetype6-dev libzstd-dev
+          set -euo pipefail
 
-      - name: Formatting (engine)
-        run: cargo fmt --check
+          sha=$(git rev-parse "${TAG}^{commit}")
+          echo "checking ci.yml results for $sha" >&2
 
-      - name: Formatting (app)
-        working-directory: crates/app
-        run: cargo fmt --check
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/commits/${sha}/check-runs?per_page=100&filter=latest" \
+            --jq '.check_runs[] | "\(.name) \(.status) \(.conclusion)"' > results.txt
+          sed 's/^/  /' results.txt >&2
 
-      - name: Engine clippy
-        run: cargo clippy --all-targets --message-format short -- -D warnings
-
-      - name: App clippy
-        working-directory: crates/app
-        run: cargo clippy --all-targets --no-default-features --message-format short -- -D warnings
-
-      - name: Engine tests
-        run: cargo test --workspace
-
-      - name: App tests
-        working-directory: crates/app
-        run: cargo test --no-default-features
+          failed=0
+          for job in Lint Clippy Test "Encrypted store"; do
+            result=$(awk -v job="$job" '$1 == job { print }' results.txt | head -n 1)
+            case "$result" in
+              "$job completed success") ;;
+              "")
+                echo "::error::$job never ran for $sha; push it and wait for CI before tagging" >&2
+                failed=1
+                ;;
+              *)
+                echo "::error::$job is not green for $sha: $result" >&2
+                failed=1
+                ;;
+            esac
+          done
+          exit "$failed"
 
   build:
     name: Build ${{ matrix.platform }}
-    needs: [verify, test]
+    needs: verify
     strategy:
       fail-fast: false
       matrix:

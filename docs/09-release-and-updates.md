@@ -271,12 +271,11 @@ What `.github/workflows/release.yml` does, in order:
    merged; `ci.yml` rejects one inside a pull request.
 2. **Verify** on a Linux runner: tag/version equality for both workspaces, and
    ancestry on the default branch.
-3. **Check** on the cheap runner, before Windows and macOS minutes are spent:
-   formatting and clippy for both workspaces, then `cargo test --workspace` and
-   the app crate with `--no-default-features`. These are the same commands
-   `ci.yml` runs, repeated on purpose — a tag can point at a commit that never
-   went through a pull request (a hotfix pushed straight to `master`, or a tag
-   moved after the fact), and a red tree must not publish.
+3. **Refuse a commit CI has not passed.** The verdict comes from `ci.yml`'s
+   check runs for the tag's SHA, read through the API: a missing result or any
+   job that is not `completed / success` fails the release. Re-running the suite
+   here instead cost 21 minutes per release for answers CI had already produced,
+   and it meant tagging *after* CI is green rather than racing it.
 4. **Build the three artifacts** in parallel on native runners, each uploading
    an Actions artifact. No job touches the release yet, so a failed matrix
    leaves nothing on GitHub.
