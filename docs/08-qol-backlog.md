@@ -7,11 +7,11 @@ this click land", and this file owns "what still feels unfinished".
 Every item names the code that makes it true, so an item that gets fixed can be
 checked off without re-deriving it. Items are ordered by user pain, not by size.
 
-**Status:** two items are open: **6.3** (the `restbook-ui` crate split) and
-**6.5** (`workspace/mod.rs` is one impl block holding five jobs). Both stay
-deferred. Open work, including those, is tracked in
-[`01-milestones.md`](01-milestones.md). The per-item text below is the record of
-what was wrong and what fixed it.
+**Status:** three items are open: **6.3** (the `restbook-ui` crate split),
+**6.5** (`workspace/mod.rs` is one impl block holding five jobs), and **6.6**
+(two type scales that disagree). All stay deferred. Open work, including those,
+is tracked in [`01-milestones.md`](01-milestones.md). The per-item text below is
+the record of what was wrong and what fixed it.
 
 Priority:
 
@@ -479,6 +479,47 @@ so it wants a pull request with nothing else in flight. No user-visible change,
 so no capture; the suite passing before and after is the evidence.
 
 Refs: `crates/app/src/workspace/mod.rs`, `crates/app/src/workspace/tabs.rs`.
+### 6.6 Two type scales: rem helpers and `Metrics` px disagree — **P2**
+
+**Still open.** The panes render their text two ways, and the two do not give
+the same sizes for the same role.
+
+| Spelling | Resolves to | Uses |
+|---|---|---|
+| `.text_sm()` / `.text_xs()` | 14px / 12px (0.875 and 0.75 rem) | 19 files, ~55 sites |
+| `.text_size(px(metrics.font_body))` and friends | 13 / 12 / 11 / 10.5 px | 5 files, 17 sites |
+
+So `.text_xs()` and `font_small` happen to match at 12px, but `.text_sm()` is
+14px where `font_body` is 13px, and `font_xs` (11px) has no rem equivalent at
+all. A label styled one way next to a label styled the other is a visible
+1–2px mismatch with no rule behind it, which is what makes the panes read as
+"unwell" rather than as a deliberate density.
+
+The split is not arbitrary: `09-gpui-kit-audit.md` §1.2/§1.3 deleted the raw
+`px()` literals in favour of `Metrics`, and the design guide says application
+layout should use rem helpers and not `px()` at all. Both changes were right on
+their own; neither reconciled them with the other.
+
+**Fix:** pick one scale and delete the other.
+
+1. **Rem helpers, `Metrics` keeps spacing only.** Drop `font_body`, `font_small`,
+   `font_xs`, and `font_badge` from `Metrics` and use `text_sm`/`text_xs`/`text_2xs`.
+   Matches the design guide and the zoom axis. `font_badge` has no rem slot, so
+   it either becomes `text_2xs` or stays as the one audited exception.
+2. **`Metrics` everywhere.** Replace the 55 rem sites with `metrics.*` tokens.
+   Keeps 13px as the body size, which is denser and is what the panes were
+   tuned against, but contradicts the guide and needs an audit row.
+
+(1) is the smaller diff and the one the guide asks for; (2) is the one that
+preserves today's look. Decide by taking a capture of each pane before choosing,
+since the difference is 1–2px and reads as density, not as a scale.
+
+**Do not** fix this one file at a time: half-converted files are worse than
+either end state, and the mismatch is only visible when two roles sit side by
+side.
+
+Refs: `crates/app/src/theme.rs` (`Metrics`), `09-gpui-kit-audit.md` §1.2–1.3,
+`gpui-kit-design-guides` ("Zoom, base font, and `rem`").
 
 ## 7. What Zed has that we deliberately do not
 
