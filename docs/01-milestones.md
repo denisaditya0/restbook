@@ -20,7 +20,7 @@ test, or `0.2.1` stops being the only place bindings change shape.
 |---|---|---|---|
 | `0.1.2` | ship what master holds | Settings › Updates downloads, verifies and opens the update; one release channel. `docs/10`'s R5 row still claims the updater does nothing, so correct it in the release commit | The published installer upgrades a 0.1.1 install in place, and `latest.json` points at the new tag |
 | `0.1.3` | small fixes | Menu trimmed to its commands (the View rows duplicate the edge toggles); Settings › Storage gets a folder picker instead of the *"add a restbook.json marker to a folder"* instruction; `Tab` accepts in the completion lists (U35); Updates says `GitHub releases` instead of printing the URL; the environment chip stops truncating to `No enviro…`; the response copy controls move from the header strip into the panel body; **the workspace toast moves to the kit's notification layer**, which is what puts it above dialogs | One before/after capture per visible item; no toast can render under an open dialog; no setting row remains an instruction |
-| `0.1.4` | response pane | Find in the body (U56): a query field with match count and next/previous over the pretty rows *and* the raw block; stop parsing every `set-cookie` header on each frame just to size a badge (`panels/response.rs:1013` → store the count with the record); stop cloning the row set every frame (`panels/response.rs:951`) | `--preview response` captures; a test that the cookie count is computed once per response, not per frame |
+| `0.1.4` | response pane | Find in the body (U56): a query field with match count and next/previous over the pretty rows *and* the raw block; stop parsing every `set-cookie` header on each frame just to size a badge (`panels/response.rs:1013` → store the count with the record); stop cloning the row set every frame (`panels/response.rs:951`). **Also the deferred structure work**: split `workspace/mod.rs` into tabs, delete/undo, and persistence modules (`08-qol-backlog.md` 6.5) — a behaviour-neutral move, so it lands last in the lane and as its own pull request, because it touches the file every other fix touches | `--preview response` captures; a test that the cookie count is computed once per response, not per frame; the full suite passing unchanged across the module split |
 | `0.1.5` | request editing | Raw editors for a `Form` body and for the params list, over a text↔`Kv` round-trip in `core` (repeated keys and percent-encoding survive); edit or delete a single cookie (U58) | Round-trip tests in `core`; captures of both raw views; a cookie deleted individually survives a reopen |
 | `0.1.6` | history and files | History filters (method, status, date range) and per-row delete, over `Store::search_history` gaining filter parameters (`B21`); import from a file into a *new* collection; export the selected collection | `B21` tests; one import fixture per format with its `skipped` rows reported; an export compared against `core::import::export` byte for byte |
 | `0.1.7` | keyboard and scale | A `?` shortcuts sheet built from the binding table; a test that every `Command` has both a binding and a palette entry; a generated 3,000-request workspace test asserting the tree stays responsive; a recent-workspaces list and switcher | The audit test and the scale test pass, with the scale run's timing recorded in the test's comment |
@@ -594,9 +594,10 @@ lists unresolved names and keeps Send inert while any exist.
 
 ## Quality of life
 
-> **Status:** every item in this file is implemented except **6.3** (the
-> `restbook-ui` crate split), which stays deferred. The per-item text is kept as
-> the record of what was wrong and what fixed it, not as an open request.
+> **Status:** every item in that file is implemented except **6.3** (the
+> `restbook-ui` crate split) and **6.5** (`workspace/mod.rs` is one impl block
+> holding five jobs), which both stay deferred. The per-item text is kept as the
+> record of what was wrong and what fixed it, not as an open request.
 
 The rest of [`08-qol-backlog.md`](08-qol-backlog.md) is that record, kept because
 each entry names the code that makes it true.

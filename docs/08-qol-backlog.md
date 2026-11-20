@@ -7,10 +7,11 @@ this click land", and this file owns "what still feels unfinished".
 Every item names the code that makes it true, so an item that gets fixed can be
 checked off without re-deriving it. Items are ordered by user pain, not by size.
 
-**Status:** every item in this file is closed except **6.3** (the
-`restbook-ui` crate split), which stays deferred. Open work, including that one,
-is tracked in [`01-milestones.md`](01-milestones.md). The per-item text below is
-the record of what was wrong and what fixed it.
+**Status:** two items are open: **6.3** (the `restbook-ui` crate split) and
+**6.5** (`workspace/mod.rs` is one impl block holding five jobs). Both stay
+deferred. Open work, including those, is tracked in
+[`01-milestones.md`](01-milestones.md). The per-item text below is the record of
+what was wrong and what fixed it.
 
 Priority:
 
@@ -442,6 +443,42 @@ one.
 **Fix:** one short section in `05-ui-guide.md`.
 
 Refs: `docs/05-ui-guide.md` ("Run and verify"), `scripts/dev.sh`.
+
+### 6.5 `workspace/mod.rs` is one impl block holding five jobs — **P3**
+
+**Still open.** The largest file in the repository, and the one every pane
+change touches.
+
+At the time of writing it is 3,891 lines, of which about 570 are tests: roughly
+3,300 lines of code in a single `impl Workspace`. That block owns the dock
+layout, tab state, save and delete dialogs, undo, notices, the status line, and
+persistence. `panels/response.rs` is next at 2,444 and `panels/collections.rs`
+at 2,331, but those are panes whose surface is genuinely large; the canvas is
+not supposed to be.
+
+The cost is not line count by itself. It is that a new feature lands in this
+file by default, so two unrelated changes conflict, and reviewing a change
+directed at tabs means reading save, undo, and layout too. `chrome.rs` holds two
+bars and the flash in 623 lines, which is the size this codebase works well at.
+
+**Fix:** three coherent modules out of the canvas, in this order, each a
+behaviour-neutral move:
+
+1. **Tabs** — `Tab`, `TabId`, `Tabs`, `select_tab`, `close_tab`, `move_tab`,
+   `snapshot_active`, `adopt_active`, `push_tabs` (~600 lines).
+2. **Delete and undo** — `PendingDelete`, `Deleted`, `snapshot_delete`,
+   `restore`, `deletion_landed` (~300 lines).
+3. **Persistence** — `install_layout`, `save_layout`, `flush_draft`,
+   `persist_draft`, completing the move into `workspace/persistence.rs`.
+
+`workspace/tabs.rs` already exists and holds `TabId` and `TabState`, so (1) is
+an extension of a decision already made rather than a new one.
+
+**Do not** fold this into a lane: it touches the file every other fix touches,
+so it wants a pull request with nothing else in flight. No user-visible change,
+so no capture; the suite passing before and after is the evidence.
+
+Refs: `crates/app/src/workspace/mod.rs`, `crates/app/src/workspace/tabs.rs`.
 
 ## 7. What Zed has that we deliberately do not
 
