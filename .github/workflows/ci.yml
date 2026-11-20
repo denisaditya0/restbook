@@ -119,6 +119,12 @@ jobs:
   # Type checking and the lints, over both workspaces. Clippy is denied
   # warnings, matching the "nothing lands with a warning" rule the dev cycle
   # states; `--all-targets` so test and bench code is linted too.
+  #
+  # `key` is per job on purpose. The cache key is the lockfile hash plus this
+  # value, and a cache entry is immutable: two jobs sharing a key save the same
+  # entry, so whichever finishes first wins and the other restores a snapshot
+  # its build does not match — then recompiles GPUI from scratch every run. That
+  # was a 6-minute `App clippy` and an 8-minute `App tests`.
   clippy:
     name: Clippy
     runs-on: ubuntu-22.04
@@ -132,6 +138,7 @@ jobs:
           workspaces: |
             . -> target
             crates/app -> target
+          key: clippy
 
       - name: Install Linux build dependencies
         run: |
@@ -152,7 +159,8 @@ jobs:
         run: cargo clippy --all-targets --no-default-features --message-format short -- -D warnings
 
   # The test suites, engine first: it is the cheaper half, and a broken engine
-  # makes the app's failures hard to read.
+  # makes the app's failures hard to read. `key: test` keeps this job's cache
+  # separate from `clippy`'s — see the note above the clippy job.
   test:
     name: Test
     runs-on: ubuntu-22.04
@@ -166,6 +174,7 @@ jobs:
           workspaces: |
             . -> target
             crates/app -> target
+          key: test
 
       - name: Install Linux build dependencies
         run: |

@@ -156,6 +156,10 @@ jobs:
           workspaces: |
             . -> target
             crates/app -> target
+          # Distinct from the `ci.yml` jobs: a cache entry is immutable, so a
+          # shared key means whichever job saves first wins and the others
+          # rebuild the world.
+          key: release-checks
 
       - name: Install Linux build dependencies
         run: |
