@@ -246,16 +246,41 @@ jobs:
 
       # The Windows build links OpenSSL statically (`--vendored`), so there is no
       # OpenSSL tree to install and no DLL to ship beside the exe: `openssl-src`
-      # compiles its own copy with the app. What it does need is a complete Perl,
-      # because it drives OpenSSL's own `Configure`. Checking here fails fast
-      # with a readable reason; the build script's own error is a panic inside
-      # `openssl-src`.
-      - name: Check Perl (Windows)
+      # compiles its own copy with the app. What it does need is OpenSSL's own
+      # `Configure`, which means a **native Windows** Perl with an intact core:
+      # Git Bash puts Cygwin's perl first on PATH (`x86_64-cygwin-thread-multi`),
+      # it is missing `ExtUtils::MakeMaker`, and OpenSSL rejects that flavour for
+      # an MSVC target anyway. `openssl-src` reads `OPENSSL_SRC_PERL` before PATH,
+      # so pointing it at Strawberry Perl is the whole fix — and doing it here
+      # fails in seconds instead of after a five-minute C compile.
+      - name: Install Perl (Windows)
         if: runner.os == 'Windows'
-        shell: bash
+        shell: pwsh
         run: |
-          perl --version | sed -n '2p'
-          perl -MExtUtils::MakeMaker -e 'print "perl modules: ok\n"'
+          $candidates = @(
+            'C:\Strawberry\perl\bin\perl.exe',
+            "$env:ProgramFiles\Strawberry\perl\bin\perl.exe",
+            'C:\Perl64\bin\perl.exe'
+          ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+
+          $perl = $candidates | Select-Object -First 1
+          if (-not $perl) {
+            choco install strawberryperl --no-progress -y
+            $perl = 'C:\Strawberry\perl\bin\perl.exe'
+          }
+          if (-not (Test-Path -LiteralPath $perl -PathType Leaf)) {
+            throw "Strawberry Perl was not found at $perl"
+          }
+
+          & $perl --version | Select-Object -Skip 1 -First 1
+          & $perl -MExtUtils::MakeMaker -e 'print "perl modules: ok"'
+          if ($LASTEXITCODE -ne 0) {
+            throw "$perl cannot load ExtUtils::MakeMaker"
+          }
+
+          "OPENSSL_SRC_PERL=$perl" | Out-File -FilePath $env:GITHUB_ENV -Append
+          (Split-Path -Parent $perl) | Out-File -FilePath $env:GITHUB_PATH -Append
+          Write-Host "OPENSSL_SRC_PERL=$perl"
 
       # One packaging script for every OS; it already knows each one's shape.
       - name: Install Inno Setup (Windows)
