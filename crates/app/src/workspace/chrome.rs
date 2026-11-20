@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{h_flex, TitleBar};
 use gpui_kit::*;
@@ -155,6 +156,69 @@ fn press_through(child: AnyElement) -> AnyElement {
         .flex_none()
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(child)
+        .into_any_element()
+}
+
+/// The active-environment chip, for the window's titlebar.
+///
+/// It lives in the titlebar rather than in a pane because the choice is
+/// window-wide: the next send resolves `{{vars}}` against it whatever tab is
+/// open. Keeping it out of the Collections pane is what lets that pane be about
+/// collections only, and it matches where Postman and Bruno put the same
+/// control. Not a [`TitlePart`]: that slot is read-only text, and this one
+/// opens a menu.
+///
+/// `cap` bounds the width, because a long environment name in a titlebar
+/// pushes the window controls out of reach. It must clear the placeholder's own
+/// width: a narrower cap ellipsises `No environment` before any environment is
+/// picked. The caller wraps the result in [`press_through`], since a button in
+/// the titlebar otherwise only sees the mouse-down.
+pub(crate) fn environment_chip(
+    active: Option<&str>,
+    environments: Vec<String>,
+    on_select: impl Fn(Option<String>, &mut Window, &mut App) + Clone + 'static,
+    cap: f32,
+) -> AnyElement {
+    let label: SharedString = active.unwrap_or("No environment").to_owned().into();
+    let selected = active.map(str::to_owned);
+
+    Button::new("titlebar-environment")
+        .icon(IconName::Globe)
+        .label(label)
+        .compact()
+        .flex_none()
+        .max_w(px(cap))
+        .dropdown_caret(true)
+        .debug_selector(|| "titlebar-environment-chip".to_owned())
+        .tooltip("Active environment")
+        .dropdown_menu(move |mut menu, _, _| {
+            menu = menu.item(
+                PopupMenuItem::new("No environment")
+                    .icon(IconName::Globe)
+                    .checked(selected.is_none())
+                    .on_click({
+                        let on_select = on_select.clone();
+                        move |_, window, cx| on_select(None, window, cx)
+                    }),
+            );
+            if environments.is_empty() {
+                menu = menu.item(PopupMenuItem::new("No environments yet.").disabled(true));
+            }
+            for name in &environments {
+                let chosen = name.clone();
+                let checked = selected.as_deref() == Some(name.as_str());
+                menu = menu.item(
+                    PopupMenuItem::new(name.clone())
+                        .icon(IconName::Globe)
+                        .checked(checked)
+                        .on_click({
+                            let on_select = on_select.clone();
+                            move |_, window, cx| on_select(Some(chosen.clone()), window, cx)
+                        }),
+                );
+            }
+            menu
+        })
         .into_any_element()
 }
 
@@ -321,8 +385,13 @@ pub(crate) fn flash(palette: &Palette, metrics: &Metrics, flash: &Flash) -> AnyE
 
 /// The window-wide status line.
 ///
-/// Left to right: the storage chip, the environment, then `left_toggle` at the
-/// far left; the last exchange, then `right_toggle` at the far right.
+/// Left to right: the storage chip, then `left_toggle` at the far left; the
+/// last exchange's URL or error, then `right_toggle` at the far right.
+///
+/// The active environment is **not** here: it has a chip in the titlebar, and
+/// repeating it in both bars was a second place to read the same fact. The
+/// status bar says where the data lives and what the last send did, which are
+/// the two things nothing else on screen reports.
 ///
 /// The two dock toggles live here rather than in the titlebar because this bar
 /// is the window's bottom edge: the sidebar control sits in the bottom-left
@@ -333,7 +402,6 @@ pub(crate) fn status_bar(
     palette: &Palette,
     metrics: &Metrics,
     workspace: &WorkspaceChip,
-    environment: Option<SharedString>,
     status: &Status,
     left_toggle: AnyElement,
     right_toggle: AnyElement,
@@ -364,15 +432,6 @@ pub(crate) fn status_bar(
                 .child(message.clone()),
         );
     }
-
-    let environment = environment.map(|name| {
-        h_flex()
-            .id("status-environment")
-            .items_center()
-            .gap(px(metrics.space_1p5))
-            .child(icons::quiet(IconName::Braces, icons::SMALL, palette))
-            .child(div().text_xs().text_color(palette.muted).child(name))
-    });
 
     // Where the data actually lives. A workspace means collections and
     // environments are files in that directory and can be committed; otherwise
@@ -430,7 +489,6 @@ pub(crate) fn status_bar(
                 // hugs the edge it names even when the status text is absent.
                 .child(left_toggle)
                 .child(storage_chip)
-                .children(environment)
                 .child(div().flex_1())
                 .child(right)
                 .child(right_toggle),
@@ -479,5 +537,87 @@ mod tests {
         let flash = super::Flash::from_notice(&Notice::Failed("disk on fire".into()));
         assert!(matches!(flash.kind, FlashKind::Error));
         assert_eq!(flash.message.as_ref(), "disk on fire");
+    }
+}
+
+/// The environment chip as laid out by the real renderer.
+///
+/// It moved out of the Collections pane and into the titlebar, so what needs
+/// pinning is the painted width: the chip is content-sized, and a cap narrower
+/// than its own placeholder ellipsises `No environment` to `No enviro…` before
+/// any environment is picked.
+#[cfg(test)]
+mod render_tests {
+    use gpui_kit::{ParentElement as _, TestAppContext};
+
+    use super::environment_chip;
+    use crate::preview::tree;
+
+    const CHIP: &str = "titlebar-environment-chip";
+
+    /// A window root that draws nothing but the chip, at a fixed cap.
+    struct ChipOnly(f32);
+
+    impl gpui_kit::Render for ChipOnly {
+        fn render(
+            &mut self,
+            _: &mut gpui_kit::Window,
+            _: &mut gpui_kit::Context<Self>,
+        ) -> impl gpui_kit::IntoElement {
+            gpui_kit::component::h_flex().child(environment_chip(
+                None,
+                vec!["prod".to_owned()],
+                |_, _, _| {},
+                self.0,
+            ))
+        }
+    }
+
+    /// Draw the chip alone, capped at `cap`, and read back its painted width.
+    fn width_for(cap: f32) -> f32 {
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+        let (_view, vcx) = cx.add_window_view(|_window, _cx| ChipOnly(cap));
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let text = tree::bounds_tree(vcx, "environment-chip", &[CHIP]);
+        let line = text
+            .lines()
+            // The first line is the `# title`, which carries the selector too.
+            .filter(|line| line.contains(CHIP))
+            .find(|line| line.contains('@'))
+            .unwrap_or_else(|| panic!("the chip should be in the tree:\n{text}"));
+        let size = line
+            .split('@')
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().nth(1))
+            .unwrap_or_else(|| panic!("a recorded box in {line:?}"));
+        let width: f32 = size
+            .split('x')
+            .next()
+            .expect("a recorded width")
+            .parse()
+            .expect("a numeric width");
+        cx.quit();
+        width
+    }
+
+    /// The chip the titlebar asks for must show the placeholder whole.
+    ///
+    /// The width measured with no cap is the placeholder's own width; the
+    /// capped one is what the window actually paints. If the cap bites below
+    /// the natural width, the label ellipsises, which is the regression.
+    #[test]
+    fn the_titlebar_chip_fits_its_placeholder() {
+        let metrics = crate::theme::Metrics::default();
+        let natural = width_for(f32::INFINITY);
+        let capped = width_for(metrics.gutter * 16.0);
+
+        assert!(
+            capped >= natural - 0.5,
+            "the chip truncates its placeholder: {capped}px at the cap but \
+             `No environment` needs {natural}px, which is the `No enviro…` \
+             defect"
+        );
     }
 }

@@ -502,13 +502,7 @@ fn build_pane(
             )
         })),
         Pane::Collections => PaneView::Collections(cx.new(|cx| {
-            CollectionsPanel::new(
-                fixture.store.clone(),
-                fixture.document.clone(),
-                fixture.variables.clone(),
-                window,
-                cx,
-            )
+            CollectionsPanel::new(fixture.store.clone(), fixture.document.clone(), window, cx)
         })),
     })
 }
