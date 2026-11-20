@@ -22,7 +22,7 @@ not fit one of these, that is a design smell, not a missing bucket.
 | **Overlay** | a window-level dialog, sheet, palette, or toast | `window.open_dialog` / `open_sheet_at`, `chrome::flash` |
 
 The layering rule that makes this predictable is in
-[`01-ui-plan.md`](01-ui-plan.md): *the canvas decides placement, panes decide
+[`02-ui-plan.md`](02-ui-plan.md): *the canvas decides placement, panes decide
 content.* A pane never names a dock region; it emits an event and the workspace
 chooses. So "where does this appear" always has one answer: look at
 `Workspace::run_command` and the panel subscriptions in `Workspace::listen`.
@@ -38,7 +38,7 @@ Set once in `Workspace::install_layout` (`workspace/mod.rs`) on first run:
 
 History and Environment are **constructed but not docked** by default. They are
 revealed on demand, which is the deliberate simplification noted in
-`04-ui-guide.md`: the sidebar is what you work *from*, not a log of what you
+`05-ui-guide.md`: the sidebar is what you work *from*, not a log of what you
 sent. A saved `layout.json` restores the user's own arrangement by name.
 
 The center split is fixed to **Request over Response**: there is no command to
@@ -223,7 +223,7 @@ tooltip, so this table is the only place the strokes are written down.
 `Error` when the dock stayed shut; `toggle_sidebar` does not yet re-read and so
 always claims success — an inconsistency worth closing if that path ever fails.
 
-Settings is a **dialog, not a pane** on purpose (`04-ui-guide.md`): it is
+Settings is a **dialog, not a pane** on purpose (`05-ui-guide.md`): it is
 app-level, there is exactly one, and it has no per-request state to dock.
 
 ## How a send flows

@@ -34,7 +34,7 @@ rand = { version = "0.8", optional = true }
 # OpenSSL tree comes from `OPENSSL_DIR` (see `scripts/dev.sh`) and the matching
 # DLL ships beside the exe. The `sqlcipher-vendored` feature switches that to a
 # static build instead — see the feature list above and
-# `docs/05-cross-platform.md`.
+# `docs/06-cross-platform.md`.
 rusqlite = { version = "0.42", features = ["bundled-sqlcipher"], optional = true }
 
 # The OS credential store. keyring 3 has no default backend, and without one it

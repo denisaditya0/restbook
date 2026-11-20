@@ -190,7 +190,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    //! The command table is documented in `docs/06-flows.md`, which is the map a
+    //! The command table is documented in `docs/07-flows.md`, which is the map a
     //! reader consults for "where does clicking this land?". A new command that
     //! skips the doc would quietly make it wrong, so the doc is asserted to name
     //! every label, the same way `actions::bindings()` is guarded by
@@ -200,14 +200,14 @@ mod tests {
     /// The flows doc, resolved from the crate root so the test does not care
     /// what directory `cargo test` runs in.
     fn flows_doc() -> String {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/06-flows.md");
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/07-flows.md");
         std::fs::read_to_string(path)
             .unwrap_or_else(|error| panic!("cannot read {path}: {error}"))
             .to_lowercase()
     }
 
     /// Every command's label appears in the flows doc. If this fails, add the
-    /// command to the table in `docs/06-flows.md` before adding it here.
+    /// command to the table in `docs/07-flows.md` before adding it here.
     #[test]
     fn every_command_is_in_the_flows_doc() {
         let doc = flows_doc();
@@ -215,7 +215,7 @@ mod tests {
             let label = command.1.to_lowercase();
             assert!(
                 doc.contains(&label),
-                "docs/06-flows.md is missing the command {label:?}",
+                "docs/07-flows.md is missing the command {label:?}",
             );
         }
     }

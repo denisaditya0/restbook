@@ -118,7 +118,7 @@ response viewer on the right.
 - A second request can be cancelled while it is in flight.
 - **Ctrl+Shift+V** (Cmd+Shift+V on macOS) imports a cURL command from the
   clipboard, and **Ctrl+Shift+C** copies the current request back out as one.
-  See [Keyboard shortcuts](docs/11-keyboard-shortcuts.md) for the full table.
+  See [Keyboard shortcuts](docs/12-keyboard-shortcuts.md) for the full table.
 - Successful responses are recorded and appear in the sidebar. Clicking a row
   restores the **whole request** — params, headers, body, and auth — so it can be
   re-sent as recorded, and shows the stored response. See
@@ -234,7 +234,7 @@ Two consequences worth stating plainly:
 `crates/store/src/sqlcipher.rs` has a roundtrip test that creates the keyring
 entry, applies the key, writes a history entry, and searches it back. The
 credential-manager detail lives in `docs/00-scope.md` and
-`docs/03-backend-guide.md`.
+`docs/04-backend-guide.md`.
 
 ### Sharing a workspace
 
@@ -302,17 +302,18 @@ of a shared request as tracked content.
 ## Plans
 
 - `docs/00-scope.md` — scope, non-goals, inspiration ledger
-- `docs/01-ui-plan.md` — GPUI composition, pane contract, UI milestones
-- `docs/02-backend-plan.md` — engine pipeline, crate boundaries, backend milestones
-- `docs/03-backend-guide.md` — how to change the engine (recipes, commands, pitfalls)
-- `docs/04-ui-guide.md` — how to change the GPUI shell (panes, tabs, actions, styling)
-- `docs/05-cross-platform.md` — building and running on macOS, Linux, Windows
-- `docs/06-flows.md` — where each click, command, and save lands
-- `docs/07-qol-backlog.md` — what still feels unfinished, with code refs
-- `docs/08-gpui-kit-audit.md` — where the UI drifts from the GPUI Kit guides
-- `docs/09-release-and-updates.md` — versioning, channels, artifact matrix, release flow, update manifest
-- `docs/10-repo-map-and-dev-cycle.md` — repository map, crate ownership, and the development loop
-- `docs/11-keyboard-shortcuts.md` — every binding, platform spelling, and what to check when one does not fire
+- `docs/01-milestones.md` — milestone tables, release lanes, reference parity
+- `docs/02-ui-plan.md` — GPUI composition, pane contract, visual grammar
+- `docs/03-backend-plan.md` — engine pipeline, crate boundaries
+- `docs/04-backend-guide.md` — how to change the engine (recipes, commands, pitfalls)
+- `docs/05-ui-guide.md` — how to change the GPUI shell (panes, tabs, actions, styling)
+- `docs/06-cross-platform.md` — building and running on macOS, Linux, Windows
+- `docs/07-flows.md` — where each click, command, and save lands
+- `docs/08-qol-backlog.md` — what still feels unfinished, with code refs
+- `docs/09-gpui-kit-audit.md` — where the UI drifts from the GPUI Kit guides
+- `docs/10-release-and-updates.md` — versioning, channels, artifact matrix, release flow, update manifest
+- `docs/11-repo-map-and-dev-cycle.md` — repository map, crate ownership, and the development loop
+- `docs/12-keyboard-shortcuts.md` — every binding, platform spelling, and what to check when one does not fire
 
 ## Windows setup (this machine)
 
@@ -375,7 +376,7 @@ The release build avoids that question entirely: `package.sh --release
 --vendored` compiles OpenSSL into the exe (`sqlcipher-vendored`), which then has
 no `libcrypto` import at all. It needs a complete `perl` on the build machine,
 which is why local builds keep the dynamic shape; the trade-off is written up in
-[`05-cross-platform.md`](docs/05-cross-platform.md#how-sqlcipher-gets-its-crypto).
+[`06-cross-platform.md`](docs/06-cross-platform.md#how-sqlcipher-gets-its-crypto).
 
 Verified on this machine: the roundtrip test creates the keyring entry, opens an
 encrypted database, writes a history entry, and searches it back. The database

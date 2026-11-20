@@ -87,7 +87,7 @@ the UI, that is worth asking about first.
 
 There is no `.github/workflows/` directory yet. The intended shape is two
 workflows, and both are specified in
-[`09-release-and-updates.md`](09-release-and-updates.md):
+[`10-release-and-updates.md`](10-release-and-updates.md):
 
 - **pull request** — `windows-2025`, `ubuntu-22.04`, `macos-26`: engine tests,
   clippy and `fmt --check`, plus a `cargo check` of the app crate (default
@@ -240,7 +240,7 @@ Only Windows has a true installer (one wizard, Start-menu entry, uninstaller).
 macOS ships a drag-to-`/Applications` `.dmg`, and Linux ships both a `.deb` for
 `apt` and a tarball to unpack by hand. Nothing is signed or notarized. The
 artifact matrix, naming, and update manifest that these steps feed are in
-[`09-release-and-updates.md`](09-release-and-updates.md).
+[`10-release-and-updates.md`](10-release-and-updates.md).
 
 ### How SQLCipher gets its crypto
 
@@ -308,7 +308,7 @@ GNU `ld` keeps one and **silently discards the rest**, so a build with the
 name — links with a manifest and no icon or version block. `build.rs` detects
 this and warns rather than leaving an unexplained generic icon. Build with
 `--target x86_64-pc-windows-msvc` to get the icon, which is what the artifact
-matrix in [`09-release-and-updates.md`](09-release-and-updates.md) already uses.
+matrix in [`10-release-and-updates.md`](10-release-and-updates.md) already uses.
 
 ### Beyond the icon
 
@@ -345,7 +345,7 @@ the intended shape — only the OS's own labels and images differ.
 - Only Windows has been run here. `.github/workflows/release.yml` builds
   Windows x86_64, macOS arm64 and Linux x86_64 on tags, so the other two get
   built (and packaged) for the first time there; the ARM64 rows in
-  [`09-release-and-updates.md`](09-release-and-updates.md) are still unwired.
+  [`10-release-and-updates.md`](10-release-and-updates.md) are still unwired.
 - `package.sh` builds an installer on Windows (`.exe`), a drag-to-install image
   on macOS (`.dmg`) and a package on Linux (`.deb`), but only the Windows path
   has been run here; the other two are syntax-checked, not executed. Nothing is

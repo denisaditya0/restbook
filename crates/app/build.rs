@@ -19,7 +19,7 @@
 //! contribution. The GNU `ld` does not: it keeps one `.rsrc` and **silently
 //! drops the rest**, so a GNU build links with a manifest and nothing else — no
 //! icon, no version block. The release matrix builds `windows-msvc`
-//! (`09-release-and-updates.md`), where this works, but a local GNU build is the
+//! (`10-release-and-updates.md`), where this works, but a local GNU build is the
 //! documented one on this machine, so the script says so instead of leaving a
 //! generic-icon binary with no explanation.
 

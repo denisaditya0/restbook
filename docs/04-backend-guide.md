@@ -2,10 +2,10 @@
 
 The engine: model, preparation, transport, storage. This guide is for changing
 these crates. The desktop shell has its own guide in
-[`04-ui-guide.md`](04-ui-guide.md); plans and scope stay in
-[`02-backend-plan.md`](02-backend-plan.md) and [`00-scope.md`](00-scope.md), and
+[`05-ui-guide.md`](05-ui-guide.md); plans and scope stay in
+[`03-backend-plan.md`](03-backend-plan.md) and [`00-scope.md`](00-scope.md), and
 the per-OS build differences (crypto backend, keyring, toolchain pin) are in
-[`05-cross-platform.md`](05-cross-platform.md).
+[`06-cross-platform.md`](06-cross-platform.md).
 
 ## The two rules
 
@@ -30,7 +30,7 @@ cargo clippy --all-targets --message-format short
 
 On macOS and Linux the `sqlcipher` build uses CommonCrypto and the system
 OpenSSL respectively, so no environment variable is involved; see
-[`05-cross-platform.md`](05-cross-platform.md).
+[`06-cross-platform.md`](06-cross-platform.md).
 
 Anything that compiles SQLCipher goes through a `dev` script instead (it is
 just cargo with `OPENSSL_DIR` detected). Use `scripts/dev.ps1` or

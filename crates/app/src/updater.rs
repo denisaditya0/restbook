@@ -38,7 +38,7 @@ const RELEASE_REPO: &str = match option_env!("RESTBOOK_UPDATE_REPO") {
     None => "denisaditya0/restbook",
 };
 
-/// The manifest asset name. `docs/09-release-and-updates.md` owns the
+/// The manifest asset name. `docs/10-release-and-updates.md` owns the
 /// convention; the release workflow writes this file.
 const MANIFEST: &str = "latest.json";
 

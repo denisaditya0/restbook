@@ -7,15 +7,17 @@ authoritative for their own subject.
 Related documents:
 
 - [`00-scope.md`](00-scope.md) — scope, non-goals, inspiration ledger
-- [`01-ui-plan.md`](01-ui-plan.md) / [`02-backend-plan.md`](02-backend-plan.md) —
-  kept-current milestone tables
-- [`03-backend-guide.md`](03-backend-guide.md) / [`04-ui-guide.md`](04-ui-guide.md) —
+- [`01-milestones.md`](01-milestones.md) — the milestone tables, release lanes,
+  and reference parity; the place a ticket is cut from
+- [`02-ui-plan.md`](02-ui-plan.md) / [`03-backend-plan.md`](03-backend-plan.md) —
+  the pane contract, visual grammar, engine pipeline and crate boundaries
+- [`04-backend-guide.md`](04-backend-guide.md) / [`05-ui-guide.md`](05-ui-guide.md) —
   how to change the engine and the shell
-- [`05-cross-platform.md`](05-cross-platform.md) — other OSes
-- [`06-flows.md`](06-flows.md) — click → effect → POV
-- [`07-qol-backlog.md`](07-qol-backlog.md) — known rough edges
-- [`08-gpui-kit-audit.md`](08-gpui-kit-audit.md) — UI drift from the kit rules
-- [`09-release-and-updates.md`](09-release-and-updates.md) — artifacts and updater
+- [`06-cross-platform.md`](06-cross-platform.md) — other OSes
+- [`07-flows.md`](07-flows.md) — click → effect → POV
+- [`08-qol-backlog.md`](08-qol-backlog.md) — known rough edges
+- [`09-gpui-kit-audit.md`](09-gpui-kit-audit.md) — UI drift from the kit rules
+- [`10-release-and-updates.md`](10-release-and-updates.md) — artifacts and updater
 
 **Status:** Windows (GNU toolchain) is the only OS this has been built and run
 on. `.github/workflows/ci.yml` checks every pull request on a Linux runner, and
@@ -171,7 +173,7 @@ Two rules matter more than the rest:
 - Layout, interaction, rendering → `crates/app`.
 - Both → design the contract in `core` first, then consume it in the app.
 
-Read the relevant plan (`01`/`02`) and guide (`03`/`04`) before editing. The
+Read the relevant plan (`02`/`03`) and guide (`04`/`05`) before editing. The
 `docs/00-scope.md` non-goals are load-bearing: no JS scripting, runner, cloud,
 or plugin system.
 
@@ -233,7 +235,7 @@ verified.** For response-body edge cases, start the fixture server:
 python scripts/sample-server.py       # http://127.0.0.1:8787
 ```
 
-`04-ui-guide.md` lists what each fixture path exercises.
+`05-ui-guide.md` lists what each fixture path exercises.
 
 ### 4. Manual smoke path
 
@@ -293,17 +295,18 @@ Documentation is part of the change, not a follow-up. Pick the owner:
 
 | If you changed | Update |
 |---|---|
-| scope, a non-goal, a milestone state | `00-scope.md`, `01-ui-plan.md` or `02-backend-plan.md` |
-| an engine recipe, pitfall, or API shape | `03-backend-guide.md` |
-| a pane, action, tab, styling rule | `04-ui-guide.md` |
-| a platform assumption or prerequisite | `05-cross-platform.md`, README |
-| where a click lands, a command, a POV | `06-flows.md` |
-| an unresolved rough edge | `07-qol-backlog.md` (and remove it when fixed) |
-| a deliberate GPUI Kit deviation | `08-gpui-kit-audit.md` |
-| versions, channels, packaging, the manifest | `09-release-and-updates.md` |
+| scope, a non-goal | `00-scope.md` |
+| a milestone state, a lane, or a reference-parity row | `01-milestones.md` |
+| an engine recipe, pitfall, or API shape | `04-backend-guide.md` |
+| a pane, action, tab, styling rule | `05-ui-guide.md` |
+| a platform assumption or prerequisite | `06-cross-platform.md`, README |
+| where a click lands, a command, a POV | `07-flows.md` |
+| an unresolved rough edge | `08-qol-backlog.md` (and remove it when fixed) |
+| a deliberate GPUI Kit deviation | `09-gpui-kit-audit.md` |
+| versions, channels, packaging, the manifest | `10-release-and-updates.md` |
 | repository shape or the process itself | this file |
 
-Tests are behavior sentences (`rejects_header_injection`), and `06-flows.md`
+Tests are behavior sentences (`rejects_header_injection`), and `07-flows.md`
 has a test guarding its command list against drift.
 
 ### 7. Package or release
@@ -334,7 +337,7 @@ What lands in `dist/` depends on where it runs:
 Version bumps touch both workspaces plus both lockfiles; tags are the bare
 version (`0.2.0`), with no prerelease suffix. The updater checks the release
 channel, downloads this platform's asset, verifies its `sha256` and opens it —
-the contract is in `09-release-and-updates.md`.
+the contract is in `10-release-and-updates.md`.
 
 ## Test strategy at a glance
 

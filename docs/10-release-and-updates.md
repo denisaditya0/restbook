@@ -3,7 +3,7 @@
 How a build becomes a downloadable artifact, what the app checks for, and what
 still has to be built. Scope and non-goals stay in
 [`00-scope.md`](00-scope.md); per-OS prerequisites are in
-[`05-cross-platform.md`](05-cross-platform.md).
+[`06-cross-platform.md`](06-cross-platform.md).
 
 **Status:** `.github/workflows/release.yml` builds and publishes a release for
 the three targets below that fit the free-tier budget; the rest of the matrix

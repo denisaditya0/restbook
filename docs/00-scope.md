@@ -40,14 +40,14 @@ interaction and layout only — none of its AGPL code is used (see the ledger).
 
 ## Milestones
 
-The detailed, kept-current tables live with each side of the split:
+The detailed, kept-current tables live in one place:
 
-- UI (GPUI): [`01-ui-plan.md`](01-ui-plan.md) — U1..U55 done, X1..X6 and
-  U56..U60 planned (the `X` items change current behaviour)
-- Engine (model, transport, storage): [`02-backend-plan.md`](02-backend-plan.md) —
-  B1..B18 done, B19..B24 planned
-- Release and updates: [`09-release-and-updates.md`](09-release-and-updates.md) —
-  R1 done, R2..R5 planned
+- [`01-milestones.md`](01-milestones.md) — the `U` (UI), `B` (engine) and `R`
+  (release) tables with the release lane each item belongs to, the open decisions,
+  and the reference-parity list. This is where a ticket is cut from.
+- [`02-ui-plan.md`](02-ui-plan.md) owns the rules behind a `U` item (the pane
+  contract, visual grammar), [`03-backend-plan.md`](03-backend-plan.md) owns the
+  pipeline and crate boundaries behind a `B` item.
 
 The scaffold milestones below are the origin of both, kept for history.
 
@@ -60,7 +60,7 @@ The scaffold milestones below are the origin of both, kept for history.
 | M5 | Import/export, curl paste, code generation | import/export done (B13); curl paste in the UI |
 
 The engine's kept-current milestones are B1..B18, with B19..B24 planned, in
-[`02-backend-plan.md`](02-backend-plan.md).
+[`03-backend-plan.md`](03-backend-plan.md).
 
 ## Inspiration ledger
 

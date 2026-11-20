@@ -3,7 +3,7 @@
 # Until this file existed, the only workflow was `release.yml`, which runs on a
 # tag. That meant the first mechanical check of a change happened *after* it was
 # on the default branch, when the release tag was pushed — the review gate was
-# entirely human. This runs the checks `docs/10-repo-map-and-dev-cycle.md` lists
+# entirely human. This runs the checks `docs/11-repo-map-and-dev-cycle.md` lists
 # under "Then the shell" on the pull request instead.
 #
 # Scope notes:
@@ -14,7 +14,7 @@
 #   on Linux: SQLCipher costs minutes of C and no job here opens a window.
 # - A version bump is rejected here. The tag is the release identity and
 #   `release.yml` derives the channel from it, so the version may only move in
-#   the commit a tag is cut from (`docs/09-release-and-updates.md`).
+#   the commit a tag is cut from (`docs/10-release-and-updates.md`).
 # - Nothing here can see whether a UI change looks right. A pane change still
 #   needs `--preview` before/after captures from someone with a display; the
 #   developer preview (`crates/app/src/preview.rs`) is the tool for that.

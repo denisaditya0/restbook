@@ -2,12 +2,12 @@
 
 The desktop shell in `crates/app`. It is a **separate Cargo workspace** so the
 engine never depends on GPUI. The engine has its own guide in
-[`03-backend-guide.md`](03-backend-guide.md); composition rationale and the UI
-milestone list stay in [`01-ui-plan.md`](01-ui-plan.md). Building this crate on
+[`04-backend-guide.md`](04-backend-guide.md); composition rationale and the UI
+milestone list stay in [`02-ui-plan.md`](02-ui-plan.md). Building this crate on
 macOS or Linux differs in ways this guide does not cover — see
-[`05-cross-platform.md`](05-cross-platform.md) for the toolchain pin, keyring
+[`06-cross-platform.md`](06-cross-platform.md) for the toolchain pin, keyring
 backends and packaging. Where the code departs from the GPUI Kit rules this
-guide assumes, [`08-gpui-kit-audit.md`](08-gpui-kit-audit.md) records it with
+guide assumes, [`09-gpui-kit-audit.md`](09-gpui-kit-audit.md) records it with
 code refs.
 
 ## Run and verify
@@ -40,7 +40,7 @@ DLL beside it, taking the DLL's name from the exe's import table so the two
 cannot disagree; every other entry in the import table is a Windows DLL.
 `--vendored` (`sqlcipher-vendored`) compiles OpenSSL into the exe instead, which
 is what the release build does; the GNU toolchain here cannot do it, see
-[`05-cross-platform.md`](05-cross-platform.md#how-sqlcipher-gets-its-crypto).
+[`06-cross-platform.md`](06-cross-platform.md#how-sqlcipher-gets-its-crypto).
 
 On Windows a non-debug build is a **GUI** binary (`windows_subsystem = "windows"`
 in `main.rs`), so launching the exe opens no console window beside it. A debug
@@ -90,7 +90,7 @@ rest of the grid still draws. Adding a pane means an arm in `preview.rs`'s
 `Pane` and `build_pane`.
 
 For a diff instead of a look, the render tests can dump a pane's recorded
-bounds as text (6.2 in [`07-qol-backlog.md`](07-qol-backlog.md)):
+bounds as text (6.2 in [`08-qol-backlog.md`](08-qol-backlog.md)):
 
 ```sh
 cargo test -p restbook-app --no-default-features a_pane_has_a_deterministic_element_tree
@@ -252,7 +252,7 @@ scrolled past. The app's own file does not depend on it.
 ## Testing
 
 Same convention as the engine crates
-([`03-backend-guide.md`](03-backend-guide.md#testing)): tests sit at the bottom
+([`04-backend-guide.md`](04-backend-guide.md#testing)): tests sit at the bottom
 of the file they test, inside a module that only exists under `cargo test`.
 
 ```rust
@@ -707,7 +707,7 @@ change the status line, edit `Workspace::status` and add a field to
 are `gpui_kit::component::TitleBar`'s — do not hand-roll them, and keep
 `main.rs` on `TitleBar::window_options()`.
 
-The titlebar is not a tab strip, by decision (see `docs/01-ui-plan.md`, U13/U14):
+The titlebar is not a tab strip, by decision (see `docs/02-ui-plan.md`, U13/U14):
 the open-request strip lives in the request pane.
 
 ### Report the result of an action (the flash)
@@ -750,8 +750,8 @@ The rules, restated as a checklist for a new action:
   `Success` with a plain "shown" message when it did, and `Error` with a
   distinct message when it did not. `Workspace::toggle_tools` is the pattern
   (`reveal_panel`, then `is_dock_open(Right)`, then the branch at the flash);
-  `toggle_sidebar` should adopt the same live read. See `docs/06-flows.md`,
-  [Dock-toggle confirmations](06-flows.md#dock-toggle-confirmations).
+  `toggle_sidebar` should adopt the same live read. See `docs/07-flows.md`,
+  [Dock-toggle confirmations](07-flows.md#dock-toggle-confirmations).
 
 ### Ask before an action (a dialog)
 
@@ -1046,7 +1046,7 @@ default arrangement changes; the user gets the new default and a fresh file.
 ## Next: completion, generators, and keys
 
 What is not done, with the seam each patch would use. This doubles as the
-`U34`-`U38` list in [`01-ui-plan.md`](01-ui-plan.md).
+`U34`-`U38` list in [`02-ui-plan.md`](02-ui-plan.md).
 
 | Improvement | Where | Why it is worth it |
 |---|---|---|

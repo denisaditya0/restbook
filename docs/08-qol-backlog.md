@@ -1,15 +1,16 @@
 # restbook — QoL backlog
 
 What the app is missing once the core flows work. This is a working list, not a
-plan of record: `01-ui-plan.md` owns milestones, `06-flows.md` owns "where does
+plan of record: `02-ui-plan.md` owns milestones, `07-flows.md` owns "where does
 this click land", and this file owns "what still feels unfinished".
 
 Every item names the code that makes it true, so an item that gets fixed can be
 checked off without re-deriving it. Items are ordered by user pain, not by size.
 
-> **Status:** every item in this file is implemented except **6.3** (the
-> `restbook-ui` crate split), which stays deferred. The per-item text is kept as
-> the record of what was wrong and what fixed it, not as an open request.
+**Status:** every item in this file is closed except **6.3** (the
+`restbook-ui` crate split), which stays deferred. Open work, including that one,
+is tracked in [`01-milestones.md`](01-milestones.md). The per-item text below is
+the record of what was wrong and what fixed it.
 
 Priority:
 
@@ -44,16 +45,16 @@ Priority:
 | 3.2 Reset Layout command | `Command::ResetLayout`, `Workspace::reset_layout` |
 | 3.3 Panel focus/close in the palette | `Command::FocusPanel` / `Command::ClosePanel` |
 | 3.4 Panel dropdown menus | each pane's `Panel::dropdown_menu` |
-| 3.5 Center layout decision recorded | `06-flows.md` "Default window layout" |
+| 3.5 Center layout decision recorded | `07-flows.md` "Default window layout" |
 | 4.1 Undo for a delete | `Workspace::undo_delete`, `FlashAction` |
 | 4.2 Delete dialogs name the item | `Workspace::open_delete_dialog` |
 | 4.3 Batch close confirmation copy | `close_tabs_copy`, `PendingDelete::Tabs` |
 | 5.1 Palette matches shortcuts | `CommandItem::keywords` |
 | 5.2 Settings keybinding | `OpenSettings`, `secondary-,` |
-| 5.3 Close-window policy documented | `docs/11-keyboard-shortcuts.md` |
+| 5.3 Close-window policy documented | `docs/12-keyboard-shortcuts.md` |
 | 6.1 Interactive preview | `src/preview.rs`, `--preview <pane>\|all` |
 | 6.2 Deterministic element tree | `preview::tree` / `write_tree` |
-| 6.4 Documented fast loop | `04-ui-guide.md` "The fast loop" |
+| 6.4 Documented fast loop | `05-ui-guide.md` "The fast loop" |
 | New tab opens a blank request | `Workspace::new_tab`, `Tab::blank` |
 | Tab strip scrolls horizontally and selects the active tab into view | `RequestPanel::render_tab_strip`, `RequestPanel::set_tabs` |
 
@@ -70,7 +71,7 @@ park when the tab would lose content, and have `render` raise the dialog via
 `window.defer`. The perform half stays the current body.
 
 Refs: `crates/app/src/workspace/mod.rs` (`close_tab`, `pending_delete`,
-`open_delete_dialog`), `01-ui-plan.md` U47.
+`open_delete_dialog`), `02-ui-plan.md` U47.
 
 ### 1.2 The close button disappears on the tabs that most need it — **P1**
 
@@ -83,7 +84,7 @@ the only way to close a dirty tab is a keybinding, and it destroys the draft
 separate status glyph. The dot is the warning; it should not remove the
 affordance.
 
-Refs: `crates/app/src/panels/request.rs` (`render_tab_strip`), `01-ui-plan.md`
+Refs: `crates/app/src/panels/request.rs` (`render_tab_strip`), `02-ui-plan.md`
 U14.
 
 ### 1.3 Draft persistence only covers the active tab — **P1**
@@ -111,7 +112,7 @@ tab this becomes a click storm.
 summary dialog ("3 tabs have unsaved changes") with **Discard all / Cancel**,
 not one dialog per tab.
 
-Refs: `RequestPanel::Event`, `Workspace::close_tab`; `06-flows.md` request-panel
+Refs: `RequestPanel::Event`, `Workspace::close_tab`; `07-flows.md` request-panel
 table.
 
 ### 1.5 No right-click menu on request tabs — **P1**
@@ -126,7 +127,7 @@ emitting `Event::TabAction`. The id is already per-tab, so element state does no
 collide.
 
 Refs: `crates/app/src/panels/request.rs` (`render_tab_strip`),
-`01-ui-plan.md` U52, `gpui_kit::component::menu::ContextMenuExt`.
+`02-ui-plan.md` U52, `gpui_kit::component::menu::ContextMenuExt`.
 
 ### 1.6 No Reopen Closed Tab — **P2**
 
@@ -323,7 +324,7 @@ keyboard path and no discoverable affordance.
 and a "move panel" command. If no, say so in the UI guide so it stops being
 reported as a bug.
 
-Refs: `Workspace::stack_layout`, `01-ui-plan.md` U2a.
+Refs: `Workspace::stack_layout`, `02-ui-plan.md` U2a.
 
 ## 4. Dialogs and destructive actions
 
@@ -386,7 +387,7 @@ Refs: `actions::bindings()`, `Workspace::open_settings`.
 ### 5.3 No close-window / close-all-windows shortcut owned by the app — **P3**
 
 `secondary-w` closes a request tab, not the window; the platform owns the
-window. Fine, but worth stating in `06-flows.md` so it is not mistaken for a
+window. Fine, but worth stating in `07-flows.md` so it is not mistaken for a
 missing binding.
 
 Refs: `actions::bindings()`.
@@ -414,7 +415,7 @@ element tree or a deterministic screenshot for a visual diff.
 used by the horizontal-scroll tests) and writes a simple text tree; a real
 screenshot diff can wait.
 
-Refs: `panels/response.rs` (`render_tests`), `01-ui-plan.md` U45.
+Refs: `panels/response.rs` (`render_tests`), `02-ui-plan.md` U45.
 
 ### 6.3 App crate holds everything, so preview needs the full dependency graph — **P3**
 
@@ -438,9 +439,9 @@ The guide says how to run and test, but not that `cargo check` (about 7 s after
 deps) is the inner loop and `cargo run --no-default-features` is the fast visual
 one.
 
-**Fix:** one short section in `04-ui-guide.md`.
+**Fix:** one short section in `05-ui-guide.md`.
 
-Refs: `docs/04-ui-guide.md` ("Run and verify"), `scripts/dev.sh`.
+Refs: `docs/05-ui-guide.md` ("Run and verify"), `scripts/dev.sh`.
 
 ## 7. What Zed has that we deliberately do not
 
@@ -453,4 +454,4 @@ This is here so the absences above do not turn into a refactor.
 | One `Document` per item | This is **not** deliberate over the long term; U11's single-document snapshot is the known limit (a response landing after a switch belongs to the old tab). Promote to per-tab state when tab-level scroll/pending response starts being requested. |
 | Full pane toolbars | `Panel::dropdown_menu` (3.4) covers the app-level actions without a new toolbar per pane. |
 
-Refs: `01-ui-plan.md` "Where GPUI is not like Zed" and U11 ordering note.
+Refs: `02-ui-plan.md` "Where GPUI is not like Zed" and U11 ordering note.

@@ -1,103 +1,45 @@
-# restbook — UI plan (GPUI)
+# restbook — milestones
 
-How the desktop shell is composed, and what comes next. The engine has its own
-plan in [`02-backend-plan.md`](02-backend-plan.md); scope and non-goals stay in
-[`00-scope.md`](00-scope.md). For the practical side — recipes for panes, tabs,
-actions, styling, and the GPUI gotchas — see [`04-ui-guide.md`](04-ui-guide.md).
-For what is deliberately still missing (tab verbs, dirty semantics, panel
-management), see [`07-qol-backlog.md`](07-qol-backlog.md); milestones here stay
-about what ships next, not every gap.
+The single place to cut a ticket from. `02-ui-plan.md` owns the rules a pane has
+to satisfy, `03-backend-plan.md` owns the pipeline and crate boundaries, and
+`08-qol-backlog.md` owns the closed record of what used to feel unfinished; this
+file owns *what ships when*.
 
-## The one rule
+## Status and release lanes
 
-**The canvas decides placement. Panes decide content.**
+One place to see what ships when. A row is usually several pull requests; a
+version bump is still only ever made in the release commit (`docs/10`).
 
-A pane is a GPUI entity that renders one region and knows *nothing* about where
-it is shown — centre of the window, a tab, a popup, or a detached area. Only the
-workspace names a `DockPlacement`.
+The order follows one question: **does the item create, mutate, or restore a
+tab↔collection binding?** Nothing that does may ship before `0.2.0`; everything
+that does not is free to land earlier, which is why most of what used to sit in
+`0.2.x` now has a `0.1.x` slot. An item moving between lanes must keep that
+test, or `0.2.1` stops being the only place bindings change shape.
 
-This is the difference between the two kinds of "split" that are easy to
-conflate:
+| Version | Lane | Contents | Done when |
+|---|---|---|---|
+| `0.1.2` | ship what master holds | Settings › Updates downloads, verifies and opens the update; one release channel. `docs/10`'s R5 row still claims the updater does nothing, so correct it in the release commit | The published installer upgrades a 0.1.1 install in place, and `latest.json` points at the new tag |
+| `0.1.3` | small fixes | Menu trimmed to its commands (the View rows duplicate the edge toggles); Settings › Storage gets a folder picker instead of the *"add a restbook.json marker to a folder"* instruction; `Tab` accepts in the completion lists (U35); Updates says `GitHub releases` instead of printing the URL; the environment chip stops truncating to `No enviro…`; the response copy controls move from the header strip into the panel body; **the workspace toast moves to the kit's notification layer**, which is what puts it above dialogs | One before/after capture per visible item; no toast can render under an open dialog; no setting row remains an instruction |
+| `0.1.4` | response pane | Find in the body (U56): a query field with match count and next/previous over the pretty rows *and* the raw block; stop parsing every `set-cookie` header on each frame just to size a badge (`panels/response.rs:1013` → store the count with the record); stop cloning the row set every frame (`panels/response.rs:951`) | `--preview response` captures; a test that the cookie count is computed once per response, not per frame |
+| `0.1.5` | request editing | Raw editors for a `Form` body and for the params list, over a text↔`Kv` round-trip in `core` (repeated keys and percent-encoding survive); edit or delete a single cookie (U58) | Round-trip tests in `core`; captures of both raw views; a cookie deleted individually survives a reopen |
+| `0.1.6` | history and files | History filters (method, status, date range) and per-row delete, over `Store::search_history` gaining filter parameters (`B21`); import from a file into a *new* collection; export the selected collection | `B21` tests; one import fixture per format with its `skipped` rows reported; an export compared against `core::import::export` byte for byte |
+| `0.1.7` | keyboard and scale | A `?` shortcuts sheet built from the binding table; a test that every `Command` has both a binding and a palette entry; a generated 3,000-request workspace test asserting the tree stays responsive; a recent-workspaces list and switcher | The audit test and the scale test pass, with the scale run's timing recorded in the test's comment |
+| `0.2.0` | **collection and save behaviour** | Saving picks its destination (collections listed, plus *New collection…*) instead of requiring a sidebar selection first, which retires `save_destination()` as a gate and the *"nothing to save into"* flash with it; selection returns to being navigation; a bound tab can be re-bound (move to another collection); create-and-save in one step; the collection filter stops deep-cloning the tree per keystroke (`panels/collections.rs:1694`, `:1753`). **Both storage modes are in scope**: a destination is a collection whether it is a database row or a directory under a `restbook.json` workspace | A request can be saved with nothing selected in the sidebar; a saved request can be moved; a 3,000-request tree filters without a visible stall |
+| `0.2.1` | state that depends on it | Persist the open tabs (`layout.json` schema bump, plus a rule for a tab whose bound node was deleted); import *into an existing* collection, reusing the picker the save dialog gained | A restart restores the same tabs and the same active tab; a deleted node drops or demotes its tab by the documented rule |
+| `0.3.0` | **response value reuse** | A value picked from another response: `{{chain:login.token}}` plus a *From response…* picker that writes it, with the transport sending the source request first when no response exists yet | The engine half is a `B` item; the UI half is the picker and the completion entry |
+| `0.3.1` | encrypted secrets in a shared workspace | Encrypt values inside the committed file, share the workspace key out of band, keep the key in the OS keychain | A clone without the key shows a redacted value; with it, the real one |
+| `0.4.0` | one file per request | `folder.rs` already reserves a directory per collection for exactly this layout; implement it and migrate an existing workspace on open | Both reference clients diff one request, not a whole collection |
+| `0.4.1` | request panel redesign | The editor's layout, aimed at the mainstream clients (a reference capture is required before the first line) | Biggest visual change, and the one most likely to churn while the save behaviour is still moving |
 
-| Split | Question | Cost of being wrong |
-|---|---|---|
-| Module split | Which file does this live in? | Cosmetic. Rename and move on. |
-| Composition split | Who chooses where this appears? | Structural. A pane that calls `open_dialog`, reads a sibling's entity, or hardcodes `Left`, is now un-movable. |
+Two items are deliberately unassigned: **streamed response bodies to disk** (`B19` step 2 + U57) and **drag to reorder** (U60) are wanted but block on engine work and on a gesture decision respectively; **signing** (R4) blocks on certificates, not on code.
 
-The module tree follows the composition split; it is not the point in itself.
+A third belongs to the engine before it can be a lane: **post-response variable extraction**. `vars.rs` resolves Global and Environment scopes, but nothing writes a value *back* from a response, which is what Bruno does declaratively and what any assert-or-chain workflow needs. It is the engine half of `0.3.0` and the largest functional gap this app has against the reference clients.
 
-## Layering
+`00-scope.md` already names Bruno as the reference for *offline, data ownership*: `.bru` plain text, one request per file, Git-native. That model is exactly `FolderStore`'s workspace mode, which the app can read but not yet create from the UI — which is why the workspace picker is in `0.1.3` and the collection lanes treat a destination as a path as readily as a row.
 
-```
-main.rs        window, gpui_kit::init, build Workspace
-  |
-workspace/     THE CANVAS — the only place that names a DockPlacement
-  |  mod.rs        DockArea, Panes, layout install/save, tab snapshots
-  |  chrome.rs     the custom titlebar and the status bar (chrome, not panes)
-  |  send.rs       prepare() -> Transport -> record history
-  |  persistence.rs layout JSON read/write (names + sidebar width)
-  |  storage.rs     where the data directory is, and which store serves history
-  |
-panels/        one self-contained module per pane
-  |  request.rs    impl BasePanel; owns the request tab strip and the editor tabs
-  |  response.rs   impl BasePanel; summary, Body/Headers/Cookies tabs
-  |  history.rs    impl BasePanel; store search + rows
-  |  editor/       the four tab bodies (params, headers, body, auth)
-  |
-document.rs    the one request/response value the panes observe
-theme.rs       `Palette`: one color role per thing a pane draws
-util.rs        shared leaves
-```
+Checked while drawing the lanes up, so nobody re-opens them: history retention and the history search limit are both honoured (`send.rs` reads `history_max_entries` and calls `trim_history`; `panels/history.rs` reads `history_limit`), and quit really does flush drafts and bound edits (`save_on_close`, `flush_on_quit`, `flush_leaving_draft`).
 
-Dependencies point downward only. A pane never names another pane.
-
-## What "a pane" has to satisfy
-
-`impl BasePanel` requires one method:
-
-```rust
-fn panel_name(&self) -> &'static str   // "request", "response", "history"
-```
-
-Everything else — `toolbar_buttons`, `closable`, `zoomable` — has a default.
-A new pane also needs `impl Panel` (the presentation half: `title`, `tab_name`,
-`title_bar`) and `EventEmitter<PanelEvent>`. The three current panes answer
-`title_bar(false)`: each draws its own header, so a single-panel dock renders
-no title strip at all.
-
-A new pane costs a file, the trait impls, a `PanelName` variant, and a
-constructor in `Workspace::new`.
-
-The pane cannot be constructed by `DockArea`. The workspace builds it, holds it
-as a typed `Entity`, and hands the dock `panel_handle(entity)` — the wrapper
-that lets the skin read the presentation trait. A bare `Entity` still docks,
-but the skin falls back to drawing `panel_name` as the title.
-
-## Communication
-
-Three channels, in order of preference:
-
-1. **`Document`** — shared observed state. A pane reads it; the canvas writes it.
-   Request being edited, response being shown. Most things are this.
-2. **Events** — a pane emits an intent it cannot serve (`RequestEvent::Send`,
-   `HistoryEvent::Picked`). The workspace subscribes and performs the effect.
-   Panes stay ignorant of each other.
-3. **`WindowExt`** — `open_dialog`, `open_sheet`, `push_notification`. Called by
-   the canvas, never by a pane. A pane that opens its own dialog has quietly
-   decided it is allowed to be modal, which is a placement decision.
-
-## Widgets are not panes
-
-A widget takes plain data and a callback and renders a row/table/field. It is
-allowed to be reused in Params, Headers, a form body, later an environment
-editor — so it must not know about panes, docks, or `DockPlacement`. The kv
-table is the canonical example and the reason the extractable logic lives in
-small functions that unit-test without an `App`.
-
-Deletion test for any new module: *if I delete this pane, does anything else
-break?* If yes, it was not a pane.
-
-## Milestones
+## UI milestones
 
 `done` means it is on disk and the app builds and runs.
 
@@ -167,7 +109,7 @@ land. Ordered by how much of the current behaviour they invalidate.
 
 | # | Deliverable | What it changes |
 |---|---|---|
-| X1 | Responsive width policy | The app has no per-split minimum: `gpui-base` floors every dock and every centre slot at `PANEL_MIN_SIZE` (100 px) and exposes no `size_range` to the app, so panes were designed to survive that instead. First slice **done**: a window floor (`MIN_WINDOW_WIDTH`/`MIN_WINDOW_HEIGHT` in `main.rs`), the URL row collapsing at 340 px, and scrolling tab strips in both panes. Remaining: state the rule in `06-flows.md`, decide whether a dock may auto-collapse below a threshold, and either accept 100 px as the floor or carry a `gpui-base` patch that exposes a per-split minimum |
+| X1 | Responsive width policy | The app has no per-split minimum: `gpui-base` floors every dock and every centre slot at `PANEL_MIN_SIZE` (100 px) and exposes no `size_range` to the app, so panes were designed to survive that instead. First slice **done**: a window floor (`MIN_WINDOW_WIDTH`/`MIN_WINDOW_HEIGHT` in `main.rs`), the URL row collapsing at 340 px, and scrolling tab strips in both panes. Remaining: state the rule in `07-flows.md`, decide whether a dock may auto-collapse below a threshold, and either accept 100 px as the floor or carry a `gpui-base` patch that exposes a per-split minimum |
 | X2 | One `Document` per tab | Today the workspace keeps one `Document` and snapshots it into the tab being left (U11), so a response that lands after a switch is written into whichever tab is active (audit §7.1). Per-tab documents make a late response land in the tab that sent it, and let a tab keep its own scroll/focus state. Every `Entity<Document>` consumer changes signature, so this is the largest `workspace/` change left |
 | X3 | Save and quit semantics | Quitting persists drafts but silently drops edits to a tab bound to a collection node (backlog 2.2); a bound tab cannot `Save As` (2.3); an empty name in the save dialog is refused with no explanation. The decision is auto-save-on-quit versus prompt, and it changes what a user may safely assume about closing the window |
 | X4 | First run and empty states | U47 chose a blank request over restoring the last draft, and drafts reopen only from the sidebar's Unsaved list. First-run layout, the empty sidebar, the idle response, and history-with-no-hits are still mostly blank. Deciding what a new window opens on changes the default `layout.json` and the first ten minutes |
@@ -177,7 +119,7 @@ land. Ordered by how much of the current behaviour they invalidate.
 ### Not yet
 
 Candidates discussed after U30, roughly by value. The detailed rationale lives
-under [“Next”](04-ui-guide.md#next-completion-generators-and-keys) in the UI
+under [“Next”](05-ui-guide.md#next-completion-generators-and-keys) in the UI
 guide.
 
 | # | Deliverable | Notes |
@@ -203,7 +145,7 @@ guide.
   the editor the whole `RequestDef` — params, headers, body, auth — so a row can
   be re-sent as recorded. The stored response is shown without sending. This is
   the one place where the two plans were order-dependent; see
-  [`02-backend-plan.md`](02-backend-plan.md).
+  [`03-backend-plan.md`](03-backend-plan.md).
 - **Storage location.** History and the layout live in the per-user data
   directory (`%APPDATA%\restbook`, `~/Library/Application Support/restbook`,
   `$XDG_DATA_HOME/restbook`), overridable with `RESTBOOK_DATA_DIR`. SQLCipher is
@@ -435,71 +377,247 @@ guide.
   diverge. `branding::APP_ID` is shared by the installer's `AppUserModelID` and
   the `.desktop` file, so a shortcut and a running window resolve to one icon.
 
-## Visual grammar
+## Engine milestones
 
-The target is the shape of a modern GPUI API client (Zaku): dense 26–38px rows,
-13px text, hairlines rather than boxes, one selected row fill, method-colored
-verbs, and monospace for URLs and bodies. Content sits on `background`; strip
-and header surfaces use `tab_bar`; the editor tab band and other recessed
-strips use `segmented`; list panes use `sidebar`; the titlebar uses `title_bar`
-and the status line `status_bar`, both over `chrome_border` hairlines.
+`done` means it is on disk, builds, and is covered by a test or exercised by
+`devcli`.
 
-Chrome (titlebar, status bar) is drawn by the app, not by the platform, so the
-sidebar and the tab strip run to the top edge and a window of rows reads as one
-surface. `workspace/chrome.rs` holds both; they are functions returning an
-element, not panes, because a status bar the user could drag into a tab strip
-would be a worse product than one that is always at the bottom.
+| # | Deliverable | State |
+|---|---|---|
+| B1 | Workspace, `RequestDef`/`Body`/`Auth`/`ResponseRecord`, `{{var}}` templating | done |
+| B2 | `prepare()`: params, headers, all body kinds, auth, timeout, redirects, TLS, header-injection guard | done |
+| B3 | reqwest transport owning its tokio runtime; cancellation | done |
+| B4 | `Store` trait; `MemoryStore` + `JsonlStore` | done |
+| B5 | `SqlcipherStore` over SQLCipher, key from OS keyring, search by URL | done, feature-gated |
+| B6 | `Store::get_history(id)` returning the full `HistoryEntry` | done |
+| B7 | Restoring a history entry into the editor with body and auth intact | done |
+| B8 | `Store` trait: collections, folders, environments as persisted rows | done |
+| B9 | Variable scope resolution: precedence between global, environment, request, and live state | done (global + environment) |
+| B10 | Non-strict preview mode: render the request with unresolved vars marked, send disabled | done |
+| B11 | Proxy, custom CA, mTLS, redirect metadata in the record | done |
+| B12 | Cookie jar shared with the transport | done |
+| B13 | Import (curl, HAR, Postman v2.1, OpenAPI 3) and export | done |
+| B14 | OAuth 2.0 (PKCE, client credentials) | done (client credentials + code exchange; app wires client credentials) |
+| B15 | Progress reporting: `Progress` sink + `Transport::execute_with_progress` | done |
+| B16 | Offline test seam: `FakeTransport` + transport integration tests | done |
+| B17 | `FolderStore`: a Git-friendly workspace on disk | done |
+| B18 | Streamed response bodies to disk (large downloads, resume) | step 1 done: `ResponseBody::{Memory, File}` enum; transport still memory-only |
 
-Not done, in rough order of visual payoff:
+### Planned (B19..)
 
-- Request tabs inside the titlebar, as the reference does. That is a change to
-  the U13 decision (tabs live in the request pane), so it needs a deliberate
-  call; the breadcrumb the titlebar shows today is the cheaper half of the same
-  idea.
+Engine work only: each item lands in `core`, `transport` or `store` behind an
+existing trait, so it is testable without a window (and usually without a
+socket). A UI half, where one exists, is named.
 
-## Theming
+| # | Deliverable | Seam and notes |
+|---|---|---|
+| B19 | Streamed bodies to disk, step 2 | `Transport::execute_with_progress` already counts bytes; it must spill past a threshold into `ResponseBody::File` instead of `bytes()`, honour a resume offset, and report the path in `ResponseRecord`. UI half: U57 |
+| B20 | OAuth 2.0 authorization-code flow | `core/src/oauth.rs` builds the authorize URL and exchanges a code with PKCE, and `OAuthToken::refresh_token` is parsed but never used. Missing: a loopback redirect listener, the browser hand-off, refresh-on-expiry, and the app wiring (only client credentials are wired today) |
+| B21 | History search and retention | `Store::search_history` is a URL `LIKE` today. FTS5 over URL/name/body, keyset pagination, and a retention pass (age and count) so the encrypted database does not grow without a bound |
+| B22 | Collection and request scopes in `vars.rs` | Scope precedence stops at Global + Environment (B9). Adding the two narrower scopes gives U34 its data, and the inspector's `secret_of` follows the same table |
+| B23 | Streamed uploads | A multipart part or a `Body::Binary` path is read whole into memory at prepare time (`PreparedBody::File`). Streaming from a path keeps a large upload out of RAM; the same threshold setting as B19 applies |
+| B24 | `FolderStore` external-change detection | A Git-friendly workspace can be edited by other tools while the app holds a snapshot. Detecting a changed file (mtime/hash) before a write is the difference between a merge and silent clobbering |
 
-A theme is a data file, not code. `crates/app/src/theme.rs` embeds the built-in
-`themes/default-dark.jsonc` with `include_str!` so the packaged app needs no
-loose files (see `scripts/package.sh`), and overlays a user file at
-`<data dir>/themes/<name>.jsonc` chosen by the `theme` key in `settings.json`.
-Every field is optional, so a file can patch one color or one metric and inherit
-the rest.
+### Network settings (B11 + B12)
 
-The built-in file carries a soft charcoal `colors` block so dark mode does not
-inherit the component theme's near-black; its `"appearance": "dark"` scopes
-those colors to dark mode, and in light mode every role still falls through to
-the live component theme (`cx.theme()`). A user file with no `appearance`
-overlays in both modes. Every color role is optional, so a file only needs the
-ones it wants to *differ* from, and an omitted role keeps the component theme's
-value.
+`core/src/net.rs` holds `NetworkConfig`: `proxy`, `extra_roots` (PEM
+certificates), `client_cert` (a PEM certificate/key pair for mTLS), and
+`default_timeout_ms`. `core` stays reqwest-free by default; `validate()` checks
+the PEM blocks and parses the proxy URL only under the `network-validation`
+feature, which `restbook-transport` enables. A bundle of certificates is read
+permissively, so an empty anchor list is an error rather than a silently liberal
+trust store.
 
-Appearance is a separate axis (`Appearance`: System / Light / Dark) and a
-separate `settings.json` key. `ThemeMode` has no `System` variant, so `System` is
-resolved against the `WindowAppearance` the platform reports for the window, and
-the workspace observes OS appearance changes to re-resolve live; `Light`/`Dark`
-pin it and release the window back to the OS only for `System`.
+`ReqwestTransport::set_config` takes a new configuration and rebuilds its client
+on the next send; `ClientCache` holds the trust and insecure variants behind a
+generation counter, so changing a setting does not rebuild two clients per
+request.
 
-The same file carries `metrics` — font sizes, row and bar heights, padding — so a
-pane asks for a role (`metrics.row_height`) rather than writing `px(26.)`.
-Zoom (U24) is one multiplier over that block (`Metrics::scaled`), which is what
-lets `Ctrl+=` scale the whole window without editing a `px(…)` anywhere.
+Redirects are followed **by hand** (`redirect::Policy::none`) so each hop is
+recorded. `ResponseRecord` gained `final_url` and `redirects: Vec<RedirectHop>`,
+which is what lets the UI show `301 → 302 → 200` instead of only the destination.
+A 303, and a 301/302 in reply to anything but GET/HEAD, drop the body and the
+entity headers on the way through.
 
-## Where GPUI is not like Zed
+Cookies live in one `SharedJar` per transport, a `cookie_store::CookieStore`
+behind reqwest's `CookieStore` trait. reqwest's own `Jar` cannot be read or
+cleared, which is why it is not used: the `Transport` trait exposes `cookies(url)`
+and `clear_cookies()` so the UI can list and forget them.
 
-Zed is built on GPUI and composes its UI from dockable panels, so the primitives
-here (`DockArea`, `BasePanel`, `PanelView`, `WindowExt`) are the same family as
-Zed's — `gpui-kit` is a facade over `gpui-base` / `gpui-component`. Two
-differences to keep in mind:
+### Progress reporting (B15)
 
-- Zed resolves panels through a registry keyed by name; this app deliberately
-  does **not**. Panes are built by the workspace and kept typed, and a saved
-  layout is read for its *names only*. A stale name in `layout.json` is dropped
-  rather than reconstructing something unexpected.
-- Zed's pane traits carry far more (toolbars, menus, dropdowns). Here only
-  `panel_name` is required, so a pane stays a leaf as long as possible.
+`core::transport::Progress` is a cheap, clonable sink: sent/received byte
+counters, an elapsed stamp, and a `headers_received` flag, all atomics behind an
+`Arc` so the transport can bump them from its I/O thread while the UI reads them.
+`Progress::snapshot()` is the read side and never blocks.
 
-The consequences of those choices — no registry, no per-pane toolbar, no
-`Item` abstraction for request tabs — are listed in
-[`07-qol-backlog.md`](07-qol-backlog.md) section 7, so a gap is not mistaken for
-an oversight.
+The trait gained `execute_with_progress(request, cancel, progress)`.
+`ReqwestTransport` overrides it: it streams the response body in chunks (rather
+than `response.bytes()`), marking headers and bumping `received` as data arrives,
+and reports a `Content-Length` denominator — suppressed for a response that
+advertises a content encoding, because that length counts compressed bytes and
+would make the counter overshoot. The whole body is still returned in the
+`ResponseRecord`; this is progress reporting, not streaming-to-disk (see B18).
+
+`execute` still exists and defaults to `execute_with_progress(.., Progress::new())`,
+so a transport that cannot report progress only implements `execute`. `devcli send
+--progress` drives it from a terminal and prints the counters to stderr.
+
+### The offline test seam (B16)
+
+`core::testing::FakeTransport` answers from a scripted `Reply` (`Status`, `Json`,
+`Record`, `Error`) or a handler closure, and records every `PreparedRequest` it
+was asked to send. It is always compiled — no dependencies — so a test can run
+the whole pipeline (plus a `Store`) deterministically with no socket. It is the
+counterpart to zaku's `FakeHttpClient`.
+
+The real `ReqwestTransport` is covered by integration tests that drive a bare
+`TcpListener`: a real send with progress assertions, upload-size reporting, and a
+cancellation test against a server that stalls mid-body. Between the two, the
+`Transport` seam is exercised both offline and over a socket.
+
+### Folder workspaces (B17)
+
+`store::FolderStore` is the Git-friendly shape: one file per collection under a
+workspace root, marked by `restbook.json`, with a generated `.gitignore` that
+keeps the tracked tree free of secrets. Local-only state (the active
+environment, global variables) goes to `restbook.local.json`, and history to a
+`.restbook/` state directory — both gitignored. `devcli export <file> --workspace
+<dir>` writes an import into one. It sits beside `JsonlStore` and `SqlcipherStore`
+behind the same `Store` trait; the app still ships SQLCipher as its default.
+
+### Import and export (B13)
+
+Every format is translated into the same one thing — `import::BulkImport`, a list
+of `Collection`s, a list of `Environment`s, the names that were already present,
+and a `Skip { at, reason }` per item that could not be read. Importers never
+touch the `Store`: the caller saves each collection, and a partial import is
+explained rather than refused.
+
+| Format | Reads | Writes |
+|---|---|---|
+| curl | one command: URL, verb, headers, body, form parts, basic auth | — |
+| Postman v2.1 | folders, headers, raw/urlencoded/formdata/file bodies, basic/bearer/apikey auth | yes, one collection |
+| HAR 1.2 | the newest `limit` entries, minus assets and transport headers, grouped by host | yes |
+| OpenAPI 3 | one request per operation: `{{param}}` paths, required query rows, a JSON skeleton from required properties | — |
+| bundle | this app's own file: every collection and environment | yes |
+
+`ImportFormat::detect` tells the JSON formats apart by shape, since one suffix
+covers three of them. OpenAPI is import-only on purpose: generating a document
+from stored requests would be inventing a description of an API, and a wrong
+schema is worse than none.
+
+`devcli import <file>` parses and reports without saving:
+
+```
+$ devcli import api.yaml --verbose
+OpenApi: Imported 3 requests
+Petstore:
+  /pets/{petId}:
+    GET Read a pet  https://api.pets.test/v1/pets/{{petId}}
+```
+
+One behaviour worth knowing when reading the HAR tests: deduping keys on
+`METHOD url body`, not `METHOD url`. A browser replays a URL with different
+payloads, and collapsing those would silently drop requests.
+
+### OAuth 2.0 (B14)
+
+`core/src/oauth.rs` is pure shape-building, like the rest of the engine:
+`OAuthConfig::authorize()` returns the URL the browser opens plus the `state`
+and PKCE verifier to keep, `client_credentials_request()` and
+`code_exchange_request()` return a `TokenRequest` (a form plus optional HTTP
+basic client auth), and `parse_token_response()` reads the reply, turning an
+`{"error": …}` body into `Error::OAuth` rather than a serde message.
+
+`OAuthConfig` defaults `pkce` to `true`; a hand-written `Default` is what makes
+that true, since a derive would yield `false`. The verifier and state come from
+`Uuid::new_v4()` rather than a new RNG dependency.
+
+`prepare()` never performs I/O. It adds `authorization: Bearer …` only when the
+request's `Auth::OAuth2` already carries an `access_token`; otherwise it fails
+with `Error::OAuth`, and cURL export emits the header only when a token exists.
+The token is `serde(skip)`, so it is never written to a saved request.
+
+The transport implements `OAuthTransport::fetch_token` by POSTing the form to
+the token URL with the same client, proxy, and TLS policy as a normal send, and
+prefers an OAuth error body over the HTTP status. `devcli oauth` drives both
+grants; the app's Auth tab fetches client-credentials tokens, and the
+authorization-code browser flow is the one part still deferred (see the
+Known gaps in [`00-scope.md`](00-scope.md)).
+
+### How a history row restores (B6 + B7)
+
+`search_history` returns `HistoryHit` rows: method, URL, status, timing — enough
+to draw the list, not enough to re-send. The full request is recovered with:
+
+```rust
+fn get_history(&self, id: i64) -> Result<Option<HistoryEntry>>;
+```
+
+`MemoryStore` indexes its vector, `JsonlStore` scans, and `SqlcipherStore` joins
+`requests` and `executions`. The request itself is persisted as a whole
+`RequestDef` in `requests.request_json`; rows written before that column existed
+fall back to method, URL, and body, so the restore degrades instead of failing.
+
+On the UI side, `HistoryEvent::Picked { id: i64 }` carries the row id, and
+`workspace/` asks the store for the entry, hands the `RequestDef` to the editor
+(`RequestPanel::adopt_request`), and puts the stored `ResponseRecord` in the
+document without sending. The history pane does not change beyond the event
+payload — it already owns the store. See [Ordering notes](#ordering-notes) above.
+
+### Why B9 and B10 are one design
+
+Scope precedence has to be visible, not implicit. B9 decides *what a name
+resolves to*; B10 shows the user *which layer won* and what is still unresolved.
+Splitting them produces a resolver with no way to explain itself, which is the
+usual reason people distrust environment features.
+
+Both are on disk now. `crates/core/src/vars.rs` holds `ScopedVars`: five layers
+in fixed precedence, `lookup()` for the winner, `context()` for `prepare()`, and
+`preview()` for the non-strict render. `crates/app/src/variables.rs` pushes
+`Global` and `Environment`; `Collection`, `Request`, and `Live` exist but have
+no producer yet. The workspace builds the context per send, and the request pane
+lists unresolved names and keeps Send inert while any exist.
+
+## Kept and deferred deliberately
+
+- **Plaintext JSONL.** `devcli` writes plaintext by design; only the app path is
+  encrypted. The store crate must not decide which is in use.
+- **No scripting.** No `pm.*`, no JS engine. This is a product boundary, not a
+  scheduling decision.
+- **OAuth's browser listener.** The engine builds the authorize URL, derives the
+  PKCE challenge, exchanges a code, and fetches client-credentials tokens; the
+  app fetches client-credentials tokens and shows the settings. The local
+  redirect listener that completes the authorization-code flow in-app is the
+  one piece still deferred.
+
+## Quality of life
+
+> **Status:** every item in this file is implemented except **6.3** (the
+> `restbook-ui` crate split), which stays deferred. The per-item text is kept as
+> the record of what was wrong and what fixed it, not as an open request.
+
+The rest of [`08-qol-backlog.md`](08-qol-backlog.md) is that record, kept because
+each entry names the code that makes it true.
+
+## Reference parity
+
+Ideas from the clients this app is measured against, with what we would actually
+build. `00-scope.md` forbids vendored sources: Zaku is AGPL and is a reference
+for interaction only, so every row here is "copy the idea, write our own code".
+
+| Idea | From | What we would build | Engine/UI | Lane |
+|---|---|---|---|---|
+| Response value reuse | Yaak (pick a value), Bruno (declarative) | `{{chain:login.token}}` plus a "From response…" picker that writes it; the transport sends the source request first when no response exists | engine: transport + `vars` | 0.3.0 |
+| Encrypted secrets in Git | Yaak | encrypt values inside the committed file, share the workspace key out of band, keep the key in the OS keychain | engine: `FolderStore` + keyring | 0.3.1 |
+| One file per request | Yaak, Bruno | `folder.rs` already reserves a directory per collection "for a request-per-file layout"; implement and migrate | engine: `FolderStore` | 0.4.0 |
+| Review and commit in-app | Yaak, Zaku (`crates/git`) | git status for a workspace plus a commit of the changed request files | engine + UI | 0.4.x |
+| Import dialog | all three | file picker over `ImportFormat::detect`, with `BulkImport.skipped` reported | UI over existing engine | 0.1.6 |
+| Recent workspaces | Zaku (`recent_projects`) | a list and switcher for `restbook.json` folders | UI + small persistence | 0.1.7 |
+| CLI and agent access | Yaak | `send` / `import` / `export` on `crates/devcli` | engine (exists) | 0.3.x |
+| Scale proof | Yaak (3,286-request claim) | a generated 3k-request workspace test that asserts the tree stays responsive | test only | 0.1.7 |
+| Versioned migrations | Zaku (`sql`, `migrator`) | formalize the schema version + migration list before the collection work touches the database | engine | with 0.2.0 |
+| Keyboard completeness | none of them advertise it | a `?` sheet built from the binding table, plus a palette audit test | UI | 0.1.7 |
+| Crash dumps and symbol upload | Zaku | **not doing** — conflicts with "no telemetry" | — | — |
+| Plugin runtime | Yaak, Bruno | **not doing** — out of scope | — | — |

@@ -1,6 +1,6 @@
 # Build the desktop app on native runners and publish a GitHub Release.
 #
-# The six-target matrix in `docs/09-release-and-updates.md` is the full plan;
+# The six-target matrix in `docs/10-release-and-updates.md` is the full plan;
 # this workflow ships the three targets that cover the most users without two
 # extra billed runners (macOS is 10x the minutes, Windows 2x, Linux 1x):
 #
@@ -21,7 +21,7 @@
 # Nothing here is cross-compiled. GPUI needs the target's own X11/Wayland/
 # fontconfig headers on Linux, Apple's SDK on macOS, and the MSVC linker plus
 # the Windows SDK's `fxc.exe` for a release profile on Windows (see
-# `docs/09-release-and-updates.md`, "Artifact matrix").
+# `docs/10-release-and-updates.md`, "Artifact matrix").
 #
 #   push a tag         the only manual step: `git push origin 0.1.0`
 #   workflow_dispatch  re-release an existing tag; `dry_run` builds only
@@ -34,7 +34,7 @@ name: Release
 on:
   push:
     tags:
-      # Bare semver: `0.1.0`. `docs/09` owns the convention, and `verify` rejects
+      # Bare semver: `0.1.0`. `docs/10` owns the convention, and `verify` rejects
       # a tag whose version carries a prerelease suffix — there is one channel.
       - "[0-9]+.[0-9]+.[0-9]+*"
   workflow_dispatch:

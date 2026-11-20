@@ -8,16 +8,16 @@ The rules audited are the two skills installed at
 `.agents/skills/gpui-kit/references/coding-guides.md` and
 `.agents/skills/gpui-kit-design-guides/references/design-guides.md` (source:
 `longbridge/gpui-kit`, installed with `npx skills add longbridge/gpui-kit`).
-[`04-ui-guide.md`](04-ui-guide.md) says how to build here; this file says where
-the build has drifted. Milestones stay in [`01-ui-plan.md`](01-ui-plan.md), open
-polish in [`07-qol-backlog.md`](07-qol-backlog.md).
+[`05-ui-guide.md`](05-ui-guide.md) says how to build here; this file says where
+the build has drifted. Milestones stay in [`02-ui-plan.md`](02-ui-plan.md), open
+polish in [`08-qol-backlog.md`](08-qol-backlog.md).
 
 Audited 2026-11-18 against the working tree: all of `crates/app/src`, with the
 engine crates (`core`, `store`, `transport`) out of scope. Every item below was
 checked against the named lines; the code and the guides both still win over
 this file.
 
-Priority follows `07-qol-backlog.md`: **P1** loses data or breaks a first-ten-
+Priority follows `08-qol-backlog.md`: **P1** loses data or breaks a first-ten-
 minutes expectation, **P2** is noticed every session, **P3** is polish.
 
 ## Status — fix pass complete
@@ -50,7 +50,7 @@ one got, so they read as history, not as a to-do list.
   `Button`s; the tab close is a real `Button` with a tooltip.
 - **§5 Keyboard and actions** — done. Three `on_action` handlers for
   `ZoomIn`/`ZoomOut`/`ResetZoom` on the workspace root, plus the two guards below.
-- **§6 Copy** — done, table-driven; `06-flows.md` was updated alongside so its
+- **§6 Copy** — done, table-driven; `07-flows.md` was updated alongside so its
   command list still matches.
 - **§7 Async and error surfacing** — done, and the first item turned out to be
   two bugs; see §7.1 for what the fix actually had to cover.
