@@ -212,15 +212,63 @@ exist on the Linux and macOS runners.
 
 CI builds the app crate on Linux with `--no-default-features`: SQLCipher costs
 several minutes of C, and no CI job opens a window. macOS keeps the default,
-because CommonCrypto needs no OpenSSL there. The encrypted path is exercised on
-Windows and by the `dbus-run-session` tests.
+because CommonCrypto needs no OpenSSL there. The encrypted path gets its own
+`ci.yml` job instead (`--features sqlcipher`, over a D-Bus session for the
+keyring), so a pull request cannot merge with `SqlcipherStore` uncompiled —
+but the release matrix still builds no artifact with it on Linux.
+
+## Pull requests
+
+The gate before a change reaches `master`, and therefore before it can be tagged
+as a beta. `.github/workflows/ci.yml` runs on every pull request, on pushes to
+`master`, and by hand. It is Linux only: the release matrix already builds the
+three shipped targets natively, while a pull request needs a verdict, not
+packaging.
+
+| Job | Proves |
+|---|---|
+| `lint` | `cargo fmt --all --check` in **both** workspaces, and that the version did not move |
+| `clippy` | `--all-targets -D warnings` over the engine and the app (`--no-default-features`) |
+| `test` | `cargo test --workspace`, then the app crate's tests |
+| `sqlcipher` | `restbook-store --features sqlcipher`, over a D-Bus session for the keyring |
+
+`sqlcipher` is not redundant with `test`: SQLCipher is off everywhere else in
+CI for its build cost, so without this job nothing compiles `SqlcipherStore`
+until a release tag does. That is the encrypted history path — the one where a
+bug corrupts data rather than merely annoying someone.
+
+Two rules the workflow enforces that are easy to miss in a hand review:
+
+- **A version bump is rejected in a pull request.** `release.yml` derives the
+  channel from the version's prerelease suffix and refuses a tag that does not
+  match `crates/app/Cargo.toml`, so moving the version decides the next
+  release's identity. The check only fires when a branch actually moves the
+  version, so a tree whose versions sit ahead of its newest tag stays green.
+  Bump both files in the release commit instead — see [Flow](#flow).
+- **Formatting runs per workspace.** `crates/app` is excluded from the root
+  workspace, so a root `cargo fmt --all` never sees the shell's files.
+
+What CI deliberately cannot check is whether a pane *looks* right: it has no
+display and no human. A change to a pane still needs before/after captures from
+the developer preview, attached to the pull request:
+
+```sh
+cargo run -p restbook-app -- --preview all       # every pane in one window
+cargo run -p restbook-app -- --preview response  # the one that changed
+```
+
+Branch protection is what turns this into a gate rather than advice: `lint`,
+`clippy`, `test` and `sqlcipher` are meant to be required on `master`, with
+direct pushes disallowed.
 
 ## Flow
 
 What `.github/workflows/release.yml` does, in order:
 
 1. **Bump both versions, commit, tag, push the tag.** The tag must equal the app
-   version or the workflow fails rather than shipping a mislabeled build.
+   version or the workflow fails rather than shipping a mislabeled build. The
+   bump is its own commit on `master`, after the pull requests it covers are
+   merged; `ci.yml` rejects one inside a pull request.
 2. **Verify** on a Linux runner: tag/version equality for both workspaces, and
    ancestry on the default branch.
 3. **Test** on the cheap runner (`cargo test --workspace`, plus the app crate

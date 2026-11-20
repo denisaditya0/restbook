@@ -1,0 +1,238 @@
+# Gate every pull request before it can become a release.
+#
+# Until this file existed, the only workflow was `release.yml`, which runs on a
+# tag. That meant the first mechanical check of a change happened *after* it was
+# on the default branch, when the release tag was pushed — the review gate was
+# entirely human. This runs the checks `docs/10-repo-map-and-dev-cycle.md` lists
+# under "Then the shell" on the pull request instead.
+#
+# Scope notes:
+#
+# - Linux only. The release matrix already builds the three shipped targets on
+#   their native runners; a pull request needs a fast verdict, not packaging.
+# - The app crate builds `--no-default-features`, exactly as `release.yml` does
+#   on Linux: SQLCipher costs minutes of C and no job here opens a window.
+# - A version bump is rejected here. The tag is the release identity and
+#   `release.yml` derives the channel from it, so the version may only move in
+#   the commit a tag is cut from (`docs/09-release-and-updates.md`).
+# - Nothing here can see whether a UI change looks right. A pane change still
+#   needs `--preview` before/after captures from someone with a display; the
+#   developer preview (`crates/app/src/preview.rs`) is the tool for that.
+
+name: CI
+
+on:
+  pull_request:
+  # Run the same checks on the default branch, so a merge commit that only
+  # exists after the merge (and any change pushed straight to master) still
+  # gets a verdict.
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# A new push to the same branch supersedes the old run: only the newest commit
+# is worth a verdict.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Both `rust-toolchain.toml` files pin `stable-x86_64-pc-windows-gnu`, which
+  # does not exist on a Linux runner. The environment variable overrides the
+  # toolchain file, so every job runs plain `stable`.
+  RUSTUP_TOOLCHAIN: stable
+  RUST_BACKTRACE: "1"
+
+jobs:
+  # Formatting, lint, and the version rule. No build cache of its own: these are
+  # cheap once `check` has populated the shared one, and they fail fast.
+  lint:
+    name: Lint
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The version rule compares against the target branch, so both sides
+          # of the merge have to be present.
+          fetch-depth: 0
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake libssl-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev \
+            libxcb1-dev libxcb-randr0-dev libxcb-xfixes0-dev libxcb-shape0-dev \
+            libxcb-xinput-dev libxcb-render0-dev libxcb-sync-dev \
+            libxcb-present-dev libxcb-damage0-dev libxcb-composite0-dev \
+            libfontconfig1-dev libfreetype6-dev libzstd-dev
+
+      # The engine workspace and `crates/app` are separate workspaces, so
+      # `cargo fmt --all` at the root never sees the shell's files.
+      - name: Formatting (engine)
+        run: cargo fmt --all --check
+
+      - name: Formatting (app)
+        working-directory: crates/app
+        run: cargo fmt --all --check
+
+      # The version rule. `release.yml` fails a tag whose version does not match
+      # `crates/app/Cargo.toml`, and derives the channel from the prerelease
+      # suffix — so a pull request that moves the version would decide the next
+      # release's identity and channel before anyone cut it. The bump belongs in
+      # the release commit, after review.
+      #
+      # It only fires when a pull request actually moves the version: a
+      # repository whose versions differ from its newest tag (as they do between
+      # cutting a tag and the next bump) stays green, and so does
+      # `release.yml`, which reads the same two files for equality.
+      - name: Versions are not bumped in a pull request
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+
+          read_version() {
+            sed -n 's/^version *= *"\(.*\)"/\1/p' "$1" | head -n 1
+          }
+
+          git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+
+          failed=0
+          for file in Cargo.toml crates/app/Cargo.toml; do
+            base=$(git show "refs/remotes/origin/${BASE_REF}:${file}" | sed -n 's/^version *= *"\(.*\)"/\1/p' | head -n 1)
+            head=$(read_version "$file")
+            echo "$file: base ${base:-<none>} -> head ${head:-<none>}"
+            if [ -n "$base" ] && [ "$base" != "$head" ]; then
+              echo "::error file=$file::version changed from $base to $head; bump it in the release commit, not a pull request"
+              failed=1
+            fi
+          done
+
+          exit "$failed"
+
+  # Type checking and the lints, over both workspaces. Clippy is denied
+  # warnings, matching the "nothing lands with a warning" rule the dev cycle
+  # states; `--all-targets` so test and bench code is linted too.
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            crates/app -> target
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake libssl-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev \
+            libxcb1-dev libxcb-randr0-dev libxcb-xfixes0-dev libxcb-shape0-dev \
+            libxcb-xinput-dev libxcb-render0-dev libxcb-sync-dev \
+            libxcb-present-dev libxcb-damage0-dev libxcb-composite0-dev \
+            libfontconfig1-dev libfreetype6-dev libzstd-dev
+
+      - name: Engine clippy
+        run: cargo clippy --all-targets --message-format short -- -D warnings
+
+      - name: App clippy
+        working-directory: crates/app
+        run: cargo clippy --all-targets --no-default-features --message-format short -- -D warnings
+
+  # The test suites, engine first: it is the cheaper half, and a broken engine
+  # makes the app's failures hard to read.
+  test:
+    name: Test
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            crates/app -> target
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake libssl-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev \
+            libxcb1-dev libxcb-randr0-dev libxcb-xfixes0-dev libxcb-shape0-dev \
+            libxcb-xinput-dev libxcb-render0-dev libxcb-sync-dev \
+            libxcb-present-dev libxcb-damage0-dev libxcb-composite0-dev \
+            libfontconfig1-dev libfreetype6-dev libzstd-dev
+
+      - name: Engine tests
+        run: cargo test --workspace
+
+      # The app's GPUI tests run against the mock platform (`TestAppContext`),
+      # so they need no display. They do need the X11/Wayland headers above to
+      # link, which is why this is not a plain `cargo test`.
+      - name: App tests
+        working-directory: crates/app
+        run: cargo test --no-default-features
+
+  # The encrypted store is feature-gated and touched by no other job: `release.yml`
+  # turns SQLCipher off on Linux for its runtime cost, which also means nothing
+  # there compiles `SqlcipherStore`. This one job compiles and tests it, so a
+  # change to the encrypted path cannot merge untested.
+  #
+  # SQLCipher builds SQLCipher and `libsqlite3-sys` finds OpenSSL, hence the
+  # OpenSSL dev package. On Linux `keyring` is the Secret Service backend, which
+  # talks over D-Bus: the tests' `load_or_create_key` needs the *default* bus,
+  # not just any session bus, so `runner.temp` is handed to the runner as
+  # `DBUS_SESSION_BUS_ADDRESS` (a custom address would never be seen) and cleared
+  # afterwards. `dbus-run-session` would start a separate bus nobody points at.
+  sqlcipher:
+    name: Encrypted store
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          key: sqlcipher
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake libssl-dev dbus
+
+      # An address the runner already exported would take precedence over a
+      # started bus, so the shared variable is used rather than shadowed. It is
+      # cleared in `finally` because a job that leaks its own bus can hang.
+      - name: Store tests (SQLCipher)
+        shell: bash
+        env:
+          OPENSSL_DIR: /usr
+        run: |
+          set -euo pipefail
+
+          bus=unix:path=${RUNNER_TEMP}/restbook-ci-bus
+          echo "DBUS_SESSION_BUS_ADDRESS=$bus" >> "$GITHUB_ENV"
+
+          dbus-daemon --session --fork --address="$bus" --print-pid > "$RUNNER_TEMP/bus.pid"
+          cleanup() { kill "$(cat "$RUNNER_TEMP/bus.pid")" 2>/dev/null || true; }
+          trap cleanup EXIT
+
+          cargo test -p restbook-store --features sqlcipher

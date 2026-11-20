@@ -18,8 +18,9 @@ Related documents:
 - [`09-release-and-updates.md`](09-release-and-updates.md) — artifacts and updater
 
 **Status:** Windows (GNU toolchain) is the only OS this has been built and run
-on. `.github/workflows/release.yml` builds Windows x86_64, macOS arm64 and
-Linux x86_64 on tags; day-to-day verification is still run by hand.
+on. `.github/workflows/ci.yml` checks every pull request on a Linux runner, and
+`.github/workflows/release.yml` builds Windows x86_64, macOS arm64 and Linux
+x86_64 on tags; the manual smoke path is still run by hand.
 
 ## Two workspaces, on purpose
 
@@ -130,6 +131,7 @@ runner. Build commands are `cargo` plus the `scripts/dev.*` wrappers.
 │   └── sample-server.py     local response fixtures for the UI
 ├── docs/                    the numbered documents listed above
 ├── .github/workflows/
+│   ├── ci.yml               pull requests: fmt, clippy, tests, encrypted store
 │   └── release.yml          tag → build 3 native targets → draft release + manifest
 ├── .agents/skills/          GPUI Kit coding/design guides for agents
 ├── .refs/                   ignored reference checkouts
@@ -248,7 +250,39 @@ break if it were wrong:
 Run it a **second** time as well: a changing master key shows up as a failure to
 open the encrypted database on the next launch.
 
-### 5. Update the documents that own the change
+Since no CI job can open a window, a pane change also needs captures. The
+developer preview renders one pane, or all of them, over fixture data without
+touching your store:
+
+```sh
+cargo run -p restbook-app -- --preview all
+```
+
+Attach the before and after of the affected pane to the pull request. That
+comparison is what a reviewer sees instead of a running build.
+
+### 5. Open a pull request, not a push
+
+`.github/workflows/ci.yml` is the pre-merge gate, and `.github/workflows/release.yml`
+stays the post-merge one. What runs where:
+
+| When | Workflow | Checks |
+|---|---|---|
+| Every pull request, and pushes to `master` | `ci.yml` | fmt in both workspaces, clippy (`-D warnings`), both test suites, the SQLCipher store, and no version bump |
+| A tag is pushed | `release.yml` | tag = version = engine version, tag on the default branch, tests again, then three native builds → draft release |
+
+So a change that reaches a beta is checked three times: on the pull request, on
+the release tag, and by however much of the manual path above applies. The two
+that CI cannot cover are the smoke path and the `--preview` captures, and they
+are the reason a pull request still needs a human.
+
+There is no separate beta branch. A beta is a tag whose version carries a
+prerelease suffix (`0.2.0-beta.1`); `release.yml` reads the suffix, publishes a
+GitHub prerelease and replaces `latest-beta.json`, and the stable manifest is
+left alone. Cut it from `master`, after the pull request is merged — the version
+bump belongs to that tag, which is why CI rejects one in a pull request.
+
+### 6. Update the documents that own the change
 
 Documentation is part of the change, not a follow-up. Pick the owner:
 
@@ -267,7 +301,7 @@ Documentation is part of the change, not a follow-up. Pick the owner:
 Tests are behavior sentences (`rejects_header_injection`), and `06-flows.md`
 has a test guarding its command list against drift.
 
-### 6. Package or release
+### 7. Package or release
 
 `scripts/package.sh` is the only artifact step; it dispatches on the host OS:
 
@@ -278,7 +312,7 @@ sh scripts/package.sh --release
 
 What lands in `dist/` depends on where it runs:
 
-- **Windows** — `restbook-app.exe` and, when the build linked OpenSSL
+- **Windows** — `restbook.exe` and, when the build linked OpenSSL
   dynamically, the `libcrypto-<major>-x64.dll` it imports (read from its import
   table, so it follows OpenSSL's major version). The release build passes
   `--vendored`, so it links OpenSSL statically and `dist/` holds the exe alone.
@@ -305,7 +339,7 @@ the contract is in `09-release-and-updates.md`.
 | pipeline without a server | `core::FakeTransport` |
 | stores | unit tests; SQLCipher is feature-gated and touches the keyring |
 | app logic | `#[test]`/GPUI test support where the behavior is observable headlessly |
-| app rendering/interaction | manual run, plus `scripts/sample-server.py` fixtures |
+| app rendering/interaction | `ci.yml` runs the mock-platform tests; layout and looks still need a manual run with `--preview` |
 | flows documentation | a test compares the palette command list with code |
 
 Engine tests must never need a network or a window. The single exception is the
@@ -325,12 +359,15 @@ in the same data directory. The same directory holds `history.db`,
 
 ## Known gaps
 
-- CI covers releases only (three targets, on tags); every other command here
-  is run manually.
-- Only Windows has been built and run; other OSes are instructions, not verified
-  recipes.
-- The updater is read-only phase 1, and the manifest URL is runtime-only.
+- CI covers pull requests on Linux and releases on the three shipped targets;
+  the Windows and macOS shells are compiled only at release time.
+- Only Windows has been built and run locally; other OSes are instructions, not
+  verified recipes.
+- The updater is read-only phase 1; the manifest URL is baked in from the
+  channel (R1), and nothing is downloaded or installed yet.
 - `package.sh` covers all three platforms but only the Windows path has been
   run here; the macOS and Linux packaging (`.dmg`, `.deb`) has only been
   syntax-checked, not executed.
 - `devcli` persists plaintext by design; only the app is encrypted.
+- A UI change is not covered by any automated check. `--preview` captures in the
+  pull request are the only evidence a reviewer gets.
