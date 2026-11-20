@@ -196,7 +196,12 @@ jobs:
   # SQLCipher builds SQLCipher and `libsqlite3-sys` finds OpenSSL, hence the
   # OpenSSL dev package. The tests pin their own key (`sqlcipher.rs`, `open_test`)
   # rather than reading the OS keyring, which on Linux is the Secret Service over
-  # D-Bus — a runner has none. Nothing here installs or starts D-Bus.
+  # D-Bus — a runner has none, so nothing here starts a bus.
+  #
+  # `libdbus-1-dev` is not optional, though: enabling `sqlcipher` enables
+  # `keyring`, whose Linux backend is `dbus-secret-service`, and `libdbus-sys`
+  # `pkg_config::probe`s `dbus-1` while building. Without the headers the job
+  # fails during the build with a bare exit code 101, before a single test runs.
   sqlcipher:
     name: Encrypted store
     runs-on: ubuntu-22.04
@@ -214,7 +219,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config cmake libssl-dev
+            build-essential pkg-config cmake libssl-dev libdbus-1-dev
 
       # The tests pin their own key before opening a database (`sqlcipher.rs`,
       # `open_test`), because the real one lives in the OS keyring and a runner has
