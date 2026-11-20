@@ -370,8 +370,12 @@ fn zoom_field(settings: &Entity<Settings>) -> SettingField<f64> {
 /// the check learns is rendered here rather than in a floating toast, because the
 /// dialog is open and the page is where the user is looking.
 fn version_item(updates: &Entity<Updates>) -> SettingItem {
+    // The URL names a path inside the repository and says nothing a user can
+    // act on, so the row names the channel instead. `RESTBOOK_UPDATE_URL`
+    // overrides it, and the log line on a failed check carries the exact
+    // address for when the address is what is wrong.
     let description = match updater::manifest_url() {
-        Some(url) => format!("Checks {url}"),
+        Some(_) => "Downloads from GitHub releases".to_owned(),
         None => "This build has no update channel, so it cannot check for releases.".to_owned(),
     };
 
