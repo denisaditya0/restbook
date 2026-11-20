@@ -98,6 +98,16 @@ Source: "restbook-app.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; than spelled out here.
 Source: "{#CryptoDll}"; DestDir: "{app}"; Flags: ignoreversion
 
+; An upgrade replaces the files it knows about and leaves everything else, so a
+; DLL an earlier version shipped and this one does not stays in `{app}` forever
+; — which is how an OpenSSL major bump ends up with `libcrypto-3-x64.dll` and
+; `libcrypto-4-x64.dll` side by side, one of them dead. Removing the pattern
+; here is safe because this section runs before `[Files]`, so the DLL the new
+; build imports is written back afterwards. An install that ships none (a
+; static build) simply ends up without one.
+[InstallDelete]
+Type: files; Name: "{app}\libcrypto-*.dll"
+
 [Icons]
 Name: "{group}\restbook"; Filename: "{app}\restbook-app.exe"; AppUserModelID: "{#AppId}"
 Name: "{autodesktop}\restbook"; Filename: "{app}\restbook-app.exe"; Tasks: desktopicon; AppUserModelID: "{#AppId}"
