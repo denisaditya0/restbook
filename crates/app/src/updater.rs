@@ -1,7 +1,10 @@
-//! Update checks: what version is published, and whether it is newer than this
-//! build. Phase 1 is read-only: a check fetches a manifest, parses it, compares
-//! and reports; nothing is downloaded or replaced. The types live here so the
-//! installer phase can reuse them.
+//! Update checks and installs: what version is published, whether it is newer
+//! than this build, and — once the user asks for it — the download that replaces
+//! this one. A check only reads a manifest. The install downloads the asset for
+//! this platform, verifies it against the digest the manifest publishes, and
+//! hands it to the OS: on Windows that is the bundled Inno installer and the app
+//! quits so the exe can be replaced, while macOS and Linux open the package and
+//! leave this build running.
 //!
 //! A packaged app is launched from Explorer or Finder with no useful
 //! environment, so the manifest URL is derived from this build's release
@@ -10,11 +13,14 @@
 //! somewhere else.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{bail, Context as _, Result};
 use semver::Version;
 use serde::Deserialize;
+use sha2::{Digest as _, Sha256};
 
 /// The version compiled into this binary, as shown in Settings and sent in the
 /// `User-Agent` of a check.
@@ -42,6 +48,11 @@ const BETA_MANIFEST: &str = "latest-beta.json";
 /// lives for the session.
 const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long a download may take. Bigger than the manifest's budget by three
+/// orders of magnitude, because a release asset is megabytes rather than a few
+/// hundred bytes, and a slow link is not a failed update.
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
+
 /// A parsed release manifest.
 ///
 /// `assets` is keyed by [`platform_key`]. Future fields can be added to the
@@ -67,12 +78,33 @@ pub(crate) struct Asset {
     pub(crate) url: String,
     // Read by the installer phase. Kept in the format from the start so a
     // manifest published today does not have to be replaced when that lands.
-    #[allow(dead_code)]
     #[serde(default)]
     pub(crate) sha256: Option<String>,
     #[allow(dead_code)]
     #[serde(default)]
     pub(crate) signature: Option<String>,
+}
+
+impl Asset {
+    /// The file name the release published: the last path segment of the URL,
+    /// without a query string. `None` when that segment is empty or names a
+    /// directory, so a malformed manifest cannot choose where the write lands.
+    fn file_name(&self) -> Option<&str> {
+        let segment = self.url.split('/').next_back()?;
+        let segment = segment.split(['?', '#']).next()?;
+        (!segment.is_empty() && segment != "." && segment != ".." && !segment.contains('\\'))
+            .then_some(segment)
+    }
+}
+
+/// What [`download`] leaves behind, and what the caller has to do with it.
+pub(crate) struct Package {
+    pub(crate) path: PathBuf,
+    /// Windows hands the file to its own installer and quits so the exe can be
+    /// replaced. macOS and Linux open the package and stay running: replacing a
+    /// `.app` or a `.deb` from inside an unsigned build is not something this
+    /// app attempts.
+    pub(crate) closes_app: bool,
 }
 
 /// The result of a check, with the network and error paths already flattened
@@ -182,7 +214,7 @@ fn fetch(url: &str) -> Result<Manifest> {
     // GPUI does not install.
     let client = reqwest::blocking::Client::builder()
         .timeout(CHECK_TIMEOUT)
-        .user_agent(format!("restbook/{CURRENT_VERSION}"))
+        .user_agent(user_agent())
         .build()
         .context("building the update client")?;
 
@@ -201,11 +233,91 @@ fn fetch(url: &str) -> Result<Manifest> {
         .context("reading the update manifest")
 }
 
+fn user_agent() -> String {
+    format!("restbook/{CURRENT_VERSION}")
+}
+
+/// Download `asset` into a temp directory and check it against the digest the
+/// manifest publishes. Blocking for the same reason [`fetch`] is.
+pub(crate) fn download(asset: &Asset) -> Result<Package> {
+    let name = asset
+        .file_name()
+        .with_context(|| format!("the manifest's asset URL names no file: {}", asset.url))?;
+
+    let dir = std::env::temp_dir().join("restbook-update");
+    std::fs::create_dir_all(&dir).context("creating the update directory")?;
+    let path = dir.join(name);
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(DOWNLOAD_TIMEOUT)
+        .user_agent(user_agent())
+        .build()
+        .context("building the download client")?;
+
+    let response = client
+        .get(&asset.url)
+        .send()
+        .with_context(|| format!("downloading {}", asset.url))?;
+    let status = response.status();
+    if !status.is_success() {
+        bail!("the download answered {status}");
+    }
+    let bytes = response.bytes().context("reading the download")?;
+
+    // A manifest may omit the digest (docs/09 allows publishing a channel
+    // before signing exists). That is worth a log line, not a refusal.
+    match asset.sha256.as_deref() {
+        Some(expected) => verify(&bytes, expected)
+            .with_context(|| format!("{name} did not match the published digest"))?,
+        None => log::warn!("update asset {name} publishes no sha256; writing it unverified"),
+    }
+
+    std::fs::write(&path, &bytes).with_context(|| format!("writing {}", path.display()))?;
+
+    Ok(Package {
+        path,
+        closes_app: cfg!(target_os = "windows"),
+    })
+}
+
+/// Hand a downloaded package to the operating system.
+pub(crate) fn open(package: &Package) -> Result<()> {
+    let mut command = if cfg!(target_os = "windows") {
+        Command::new(&package.path)
+    } else if cfg!(target_os = "macos") {
+        let mut command = Command::new("open");
+        command.arg(&package.path);
+        command
+    } else {
+        let mut command = Command::new("xdg-open");
+        command.arg(&package.path);
+        command
+    };
+
+    command
+        .spawn()
+        .with_context(|| format!("opening {}", package.path.display()))?;
+    Ok(())
+}
+
+/// Compare a download with the hex digest the manifest publishes.
+fn verify(bytes: &[u8], expected: &str) -> Result<()> {
+    let digest = Sha256::digest(bytes);
+    let actual: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    if actual.eq_ignore_ascii_case(expected.trim()) {
+        Ok(())
+    } else {
+        bail!("expected sha256 {}, downloaded {actual}", expected.trim())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use semver::Version;
 
-    use super::{interpret, manifest_url, manifest_url_for, platform_key, Manifest, Outcome};
+    use super::{
+        interpret, manifest_url, manifest_url_for, platform_key, verify, Asset, Manifest, Outcome,
+    };
 
     fn manifest(json: &str) -> Manifest {
         serde_json::from_str(json).expect("the test manifest parses")
@@ -316,5 +428,50 @@ mod tests {
             platform_key(),
             format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
         );
+    }
+
+    fn asset(url: &str) -> Asset {
+        Asset {
+            url: url.to_owned(),
+            sha256: None,
+            signature: None,
+        }
+    }
+
+    /// The name a download is written under comes from the release's own URL, so
+    /// the file on disk is the file the manifest described.
+    #[test]
+    fn an_asset_url_names_the_file_to_write() {
+        assert_eq!(
+            asset("https://example.com/a/b/restbook-0.2.0-windows-x86_64.exe?token=1").file_name(),
+            Some("restbook-0.2.0-windows-x86_64.exe")
+        );
+    }
+
+    /// A malformed manifest must not be able to pick a directory, or the write
+    /// would land wherever it said.
+    #[test]
+    fn an_asset_url_cannot_choose_a_directory() {
+        for url in [
+            "https://example.com/",
+            "https://example.com/a/..",
+            "https://example.com/a/.",
+            r"https://example.com/..\windows\system32",
+        ] {
+            assert!(
+                asset(url).file_name().is_none(),
+                "{url} was accepted as a file name"
+            );
+        }
+    }
+
+    /// The digest is what stands between a fetched file and running it.
+    #[test]
+    fn a_download_is_refused_when_the_digest_differs() {
+        // sha256("abc")
+        let published = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        assert!(verify(b"abc", published).is_ok());
+        assert!(verify(b"abc", &published.to_uppercase()).is_ok());
+        assert!(verify(b"abd", published).is_err());
     }
 }

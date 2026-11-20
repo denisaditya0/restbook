@@ -13,6 +13,7 @@ pub(crate) mod settings;
 mod settings_view;
 pub(crate) mod storage;
 mod tabs;
+mod updates;
 
 pub(crate) use tabs::{Tab, TabAction, TabEntry, TabId, TabState};
 
@@ -30,6 +31,7 @@ use gpui_kit::component::dock::{
 };
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{h_flex, v_flex, WindowExt as _};
 use gpui_kit::*;
 
@@ -2516,9 +2518,12 @@ impl Workspace {
 
     /// Drop the shared cookie jar. This is the only reset short of restarting
     /// the app, and Settings is its one entry point.
-    pub(crate) fn clear_cookies(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn clear_cookies(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         restbook_core::Transport::clear_cookies(self.transport.as_ref());
-        self.flash(chrome::FlashKind::Success, "Cookies cleared", cx);
+        // A notification, not the workspace toast: the button that calls this
+        // lives in the Settings dialog, and a window-level layer is the only
+        // thing drawn above an open dialog.
+        window.push_notification(Notification::success("Cookies cleared."), cx);
     }
 
     /// Open the command palette, routing every command back here.

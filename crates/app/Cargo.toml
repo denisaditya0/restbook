@@ -84,6 +84,9 @@ reqwest = { version = "0.12", default-features = false, features = [
     "native-tls",
 ] }
 semver = "1"
+# The downloaded update is checked against the digest the manifest publishes,
+# so a truncated or swapped asset is refused before anything runs it.
+sha2 = "0.10"
 # Completion for `{{name}}` speaks the editor's own protocol: the kit's
 # `CompletionProvider` hands back `lsp_types` items read out of a `ropey`
 # document and wrapped in `anyhow`. These versions are pinned to the ones

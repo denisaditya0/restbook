@@ -363,8 +363,10 @@ in the same data directory. The same directory holds `history.db`,
   the Windows and macOS shells are compiled only at release time.
 - Only Windows has been built and run locally; other OSes are instructions, not
   verified recipes.
-- The updater is read-only phase 1; the manifest URL is baked in from the
-  channel (R1), and nothing is downloaded or installed yet.
+- The updater checks and installs from Settings › Updates: it downloads the
+  platform's asset, verifies its `sha256`, and opens it (Windows quits so the
+  installer can replace the exe; macOS and Linux leave the app running). System
+  notifications are not used, and nothing installs without that click.
 - `package.sh` covers all three platforms but only the Windows path has been
   run here; the macOS and Linux packaging (`.dmg`, `.deb`) has only been
   syntax-checked, not executed.

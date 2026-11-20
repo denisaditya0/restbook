@@ -9,11 +9,14 @@ still has to be built. Scope and non-goals stay in
 the three targets below that fit the free-tier budget; the rest of the matrix
 is still a specification. `scripts/package.sh` produces one artifact per OS
 with its branding applied — a Windows installer, a macOS `.dmg`, a Linux `.deb`
-plus a portable tarball. The update check in
-`crates/app/src/updater.rs` is phase 1 — it fetches a manifest, compares
-versions, and reports. Nothing is downloaded or replaced. The manifest URL is
-compiled in from the build's release channel, so a packaged app checks on its
-own (R1).
+plus a portable tarball. `crates/app/src/updater.rs` checks *and* installs:
+Settings › Updates fetches the manifest, compares versions, and then downloads
+the entry for this platform, verifies it against the digest the manifest
+publishes, and hands it to the OS — on Windows that is the same Inno installer
+a user would download, and the app quits so the exe can be replaced; macOS and
+Linux open the package (`open`, `xdg-open`) and stay running. The manifest URL
+is compiled in from the build's release channel, so a packaged app checks on
+its own (R1).
 
 A local release build is **not** possible on the development machine: a release
 profile makes `gpui-pre-windows`' build script compile HLSL with `fxc.exe`, and

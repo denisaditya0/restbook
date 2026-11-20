@@ -14,15 +14,15 @@ use std::path::PathBuf;
 
 use gpui_kit::base::Selectable as _;
 use gpui_kit::component::button::*;
-use gpui_kit::component::notification::Notification;
 use gpui_kit::component::setting::{
     NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage,
     Settings as SettingsPanel,
 };
-use gpui_kit::component::{h_flex, v_flex, WindowExt as _};
+use gpui_kit::component::{h_flex, v_flex, Disableable as _, WindowExt as _};
 use gpui_kit::*;
 
 use super::settings::{AppSettings, NumberField, Settings};
+use super::updates::{self, Updates};
 use super::{storage, Workspace};
 use crate::branding;
 use crate::icons::IconName;
@@ -50,17 +50,23 @@ pub(crate) fn open(
     // directory on each frame would put I/O in the render path.
     let themes = storage::list_themes();
 
+    // The update state lives outside the builder for the same reason: a check
+    // reports back long after the frame that started it, and the builder is a
+    // closure that is rebuilt on every redraw.
+    let updates = cx.new(|_| Updates::new());
+
     window.open_dialog(cx, move |dialog, window, cx| {
         let settings = settings.clone();
         let workspace = workspace.clone();
         let workspace_root = workspace_root.clone();
         let themes = themes.clone();
+        let updates = updates.clone();
 
         let pages = vec![
             general_page(&settings, &workspace, &themes),
             history_page(&settings),
             privacy_page(&workspace),
-            updates_page(&settings),
+            updates_page(&settings, &updates),
             storage_page(&workspace_root),
             about_page(),
         ];
@@ -166,26 +172,24 @@ fn privacy_page(workspace: &WeakEntity<Workspace>) -> SettingPage {
         )
 }
 
-/// Updates: the compiled version, the channel it polls, and the launch switch.
-fn updates_page(settings: &Entity<Settings>) -> SettingPage {
+/// Updates: the compiled version, what the channel says, and the install.
+fn updates_page(settings: &Entity<Settings>, updates: &Entity<Updates>) -> SettingPage {
     SettingPage::new("Updates")
         .icon(IconName::RotateCcw)
-        .description("This build checks a release manifest and reports; it never downloads or installs on its own.")
+        .description("Check the release channel, then install what it offers.")
         .group(
-            SettingGroup::new()
-                .item(version_item())
-                .item(
-                    SettingItem::new(
-                        "Check for updates on launch",
-                        bool_field(
-                            settings,
-                            |settings| settings.check_updates,
-                            |settings, value| settings.check_updates = value,
-                            true,
-                        ),
-                    )
-                    .description("The automatic check only. \u{201c}Check now\u{201d} always runs."),
-                ),
+            SettingGroup::new().item(version_item(updates)).item(
+                SettingItem::new(
+                    "Check for updates on launch",
+                    bool_field(
+                        settings,
+                        |settings| settings.check_updates,
+                        |settings, value| settings.check_updates = value,
+                        true,
+                    ),
+                )
+                .description("The automatic check only. \u{201c}Check now\u{201d} always runs."),
+            ),
         )
 }
 
@@ -362,39 +366,190 @@ fn zoom_field(settings: &Entity<Settings>) -> SettingField<f64> {
     .default_value(100.0)
 }
 
-/// The version row: the compiled version and the explicit check. The check is
-/// phase 1 of the updater — it fetches and compares, and installs nothing.
-fn version_item() -> SettingItem {
+/// The version row: the compiled version, the check, and the install. Everything
+/// the check learns is rendered here rather than in a floating toast, because the
+/// dialog is open and the page is where the user is looking.
+fn version_item(updates: &Entity<Updates>) -> SettingItem {
     let description = match updater::manifest_url() {
         Some(url) => format!("Checks {url}"),
         None => "This build has no update channel, so it cannot check for releases.".to_owned(),
     };
 
+    let updates = updates.clone();
     SettingItem::new(
         "Version",
-        SettingField::render(|_, _, cx| {
-            h_flex()
-                .gap_2()
-                .items_center()
-                .child(
-                    div()
-                        .text_sm()
-                        .font_family(Palette::new(cx).mono_font.clone())
-                        .child(updater::CURRENT_VERSION),
-                )
-                .child(
-                    Button::new("settings-check-updates")
-                        .label("Check now")
-                        .outline()
-                        .compact()
-                        .tooltip("Fetch the release manifest and compare it with this build")
-                        .on_click(|_, window, cx| check_now(window, cx)),
-                )
-                .into_any_element()
-        }),
+        SettingField::render(move |_, _, cx| version_field(&updates, cx)),
     )
     .description(description)
-    .keywords(["version", "update", "release", "check"])
+    .keywords(["version", "update", "release", "check", "install"])
+}
+
+/// The version, one button whose meaning follows the state, and the sentence
+/// that explains it.
+fn version_field(updates: &Entity<Updates>, cx: &mut App) -> AnyElement {
+    let palette = Palette::new(cx);
+    let metrics = Metrics::current(cx);
+    let status = updates.read(cx).status().clone();
+
+    let row = h_flex()
+        .gap_2()
+        .items_center()
+        .child(
+            div()
+                .text_sm()
+                .font_family(palette.mono_font.clone())
+                .child(updater::CURRENT_VERSION),
+        )
+        .child(update_button(updates, &status));
+
+    let mut column = v_flex().gap_1().child(row);
+    if let Some((sentence, tone)) = update_sentence(&status) {
+        column = column.child(
+            div()
+                .text_size(px(metrics.font_xs))
+                .text_color(tone.color(&palette))
+                .child(sentence),
+        );
+    }
+    column.into_any_element()
+}
+
+/// The one button the page offers. It is the next thing to do in the current
+/// state, not a menu: check, or install what the check found.
+fn update_button(updates: &Entity<Updates>, status: &updates::Status) -> Button {
+    match status {
+        updates::Status::Checking => Button::new("settings-check-updates")
+            .label("Checking\u{2026}")
+            .outline()
+            .compact()
+            .loading(true),
+        updates::Status::Downloading { .. } => Button::new("settings-install-update")
+            .label("Downloading\u{2026}")
+            .compact()
+            .loading(true),
+        updates::Status::Available { asset: None, .. } => Button::new("settings-install-update")
+            .label(format!("No build for {}", updater::platform_key()))
+            .outline()
+            .compact()
+            .disabled(true)
+            .tooltip("This release published nothing this machine can install"),
+        updates::Status::Ready {
+            closes_app: true, ..
+        } => Button::new("settings-install-update")
+            .label("Restarting\u{2026}")
+            .outline()
+            .compact()
+            .loading(true),
+        updates::Status::Ready { .. } => Button::new("settings-install-update")
+            .label("Downloaded")
+            .outline()
+            .compact()
+            .disabled(true)
+            .tooltip("The package is open; finish the install there"),
+        updates::Status::Available { asset: Some(_), .. } => {
+            let updates = updates.clone();
+            Button::new("settings-install-update")
+                .label("Download & install")
+                .compact()
+                .tooltip("Download this platform's build, verify its digest, and open it")
+                .on_click(move |_, _, cx| {
+                    if let Some(asset) = updates.read(cx).asset() {
+                        updates.update(cx, |updates, cx| updates.install(asset, cx));
+                    }
+                })
+        }
+        updates::Status::Idle | updates::Status::UpToDate { .. } | updates::Status::Failed(_) => {
+            let updates = updates.clone();
+            Button::new("settings-check-updates")
+                .label("Check now")
+                .outline()
+                .compact()
+                .tooltip("Fetch the release manifest and compare it with this build")
+                .on_click(move |_, _, cx| updates.update(cx, |updates, cx| updates.check(cx)))
+        }
+    }
+}
+
+/// The tone a status line is read in. A separate value from the colour so the
+/// sentence can be tested without building a palette, which needs an `App`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Tone {
+    Muted,
+    Success,
+    Info,
+    Warning,
+    Danger,
+}
+
+impl Tone {
+    fn color(self, palette: &Palette) -> Hsla {
+        match self {
+            Self::Muted => palette.muted,
+            Self::Success => palette.success,
+            Self::Info => palette.info,
+            Self::Warning => palette.warning,
+            Self::Danger => palette.danger,
+        }
+    }
+}
+
+/// The sentence under the version, in the tone the state deserves. `None` while
+/// nothing has been checked in this session: an idle page says nothing rather
+/// than saying "idle".
+fn update_sentence(status: &updates::Status) -> Option<(String, Tone)> {
+    let line = match status {
+        updates::Status::Idle => return None,
+        updates::Status::Checking => (
+            "Contacting the release channel\u{2026}".to_owned(),
+            Tone::Muted,
+        ),
+        updates::Status::UpToDate { current } => {
+            (format!("restbook {current} is up to date."), Tone::Success)
+        }
+        updates::Status::Available {
+            latest,
+            notes,
+            asset: Some(_),
+        } => {
+            let mut sentence = format!("restbook {latest} is available.");
+            if let Some(notes) = notes.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                sentence.push(' ');
+                sentence.push_str(notes);
+            }
+            (sentence, Tone::Info)
+        }
+        updates::Status::Available { latest, .. } => (
+            format!(
+                "restbook {latest} is available, but no build is published for {}.",
+                updater::platform_key()
+            ),
+            Tone::Warning,
+        ),
+        updates::Status::Downloading { latest } => (
+            format!("Downloading restbook {latest}\u{2026}"),
+            Tone::Muted,
+        ),
+        updates::Status::Ready {
+            latest,
+            closes_app: true,
+            ..
+        } => (
+            format!(
+                "The installer for restbook {latest} is opening; restbook will close so \
+                 it can be replaced."
+            ),
+            Tone::Success,
+        ),
+        updates::Status::Ready { latest, path, .. } => (
+            format!(
+                "restbook {latest} was downloaded to {}. Open it to finish installing.",
+                path.display()
+            ),
+            Tone::Success,
+        ),
+        updates::Status::Failed(message) => (message.clone(), Tone::Danger),
+    };
+    Some(line)
 }
 
 /// Restore the first-run arrangement. The dialog closes first so the reset (and
@@ -455,9 +610,9 @@ fn clear_cookies_item(workspace: WeakEntity<Workspace>) -> SettingItem {
             Button::new("settings-clear-cookies")
                 .label("Clear cookies")
                 .outline()
-                .on_click(move |_, _, cx| {
+                .on_click(move |_, window, cx| {
                     workspace
-                        .update(cx, |workspace, cx| workspace.clear_cookies(cx))
+                        .update(cx, |workspace, cx| workspace.clear_cookies(window, cx))
                         .ok();
                 })
         }),
@@ -597,66 +752,84 @@ fn info_row(label: &str, value: String, palette: &Palette, metrics: &Metrics) ->
         .into_any_element()
 }
 
-/// Run a check off the UI thread and report the result as a notification.
-///
-/// The dialog's builder is a plain `Fn` that may run again, so nothing here is
-/// stored in it: the notification is the state, and it is pushed through the
-/// window handle captured before the await.
-fn check_now(window: &mut Window, cx: &mut App) {
-    let handle = window.window_handle();
-    let url = updater::manifest_url();
+#[cfg(test)]
+mod tests {
+    use super::{update_sentence, Tone};
+    use crate::updater::{Asset, CURRENT_VERSION};
+    use crate::workspace::updates::Status;
+    use std::path::PathBuf;
 
-    cx.spawn(async move |cx| {
-        let outcome = cx
-            .background_spawn(async move {
-                match url {
-                    Some(url) => updater::check(&url),
-                    None => Ok(updater::Outcome::NotConfigured),
-                }
-            })
-            .await;
+    fn asset() -> Asset {
+        Asset {
+            url: "https://example.com/restbook.exe".to_owned(),
+            sha256: None,
+            signature: None,
+        }
+    }
 
-        cx.update_window(handle, |_, window, cx| {
-            window.push_notification(update_notification(outcome), cx);
+    /// Each state says one thing, and the page never shows a stale sentence for
+    /// a state it is not in.
+    #[test]
+    fn every_state_explains_itself() {
+        assert_eq!(update_sentence(&Status::Idle), None);
+
+        let (text, tone) = update_sentence(&Status::Checking).unwrap();
+        assert!(text.starts_with("Contacting"));
+        assert_eq!(tone, Tone::Muted);
+
+        let (text, tone) = update_sentence(&Status::UpToDate {
+            current: CURRENT_VERSION.to_owned(),
         })
-        .ok();
-    })
-    .detach();
-}
+        .unwrap();
+        assert!(text.contains("up to date"));
+        assert_eq!(tone, Tone::Success);
 
-/// Turn a check's result into the one sentence a notification has room for.
-fn update_notification(result: anyhow::Result<updater::Outcome>) -> Notification {
-    match result {
-        // Unreachable for a packaged build: the channel URL is compiled in.
-        // It stays as the answer for a build whose version is not semver.
-        Ok(updater::Outcome::NotConfigured) => Notification::warning(
-            "This build has no update channel, so it cannot check for releases.",
-        ),
-        Ok(updater::Outcome::UpToDate { current }) => {
-            Notification::success(format!("restbook {current} is up to date."))
-        }
-        Ok(updater::Outcome::Available {
-            latest,
-            notes,
-            asset,
-        }) => {
-            let mut message = match asset {
-                // The direct link is what a phase-1 user acts on: this build
-                // does not install anything yet.
-                Some(asset) => format!("restbook {latest} is available: {}", asset.url),
-                // The release exists, but this machine has nothing to install;
-                // saying so is more useful than implying a broken download.
-                None => format!(
-                    "restbook {latest} is available, but no build is published for {}.",
-                    updater::platform_key()
-                ),
-            };
-            if let Some(notes) = notes.filter(|notes| !notes.trim().is_empty()) {
-                message.push(' ');
-                message.push_str(notes.trim());
-            }
-            Notification::info(message)
-        }
-        Err(error) => Notification::error(format!("Couldn’t check for updates. {error}")),
+        let (text, tone) = update_sentence(&Status::Available {
+            latest: "0.2.0".to_owned(),
+            notes: Some("Fixes the thing.".to_owned()),
+            asset: Some(asset()),
+        })
+        .unwrap();
+        assert!(text.contains("0.2.0 is available"));
+        assert!(text.ends_with("Fixes the thing."));
+        assert_eq!(tone, Tone::Info);
+
+        // A release with nothing for this machine is still news, but it is not
+        // an install the page can offer.
+        let (text, tone) = update_sentence(&Status::Available {
+            latest: "0.2.0".to_owned(),
+            notes: None,
+            asset: None,
+        })
+        .unwrap();
+        assert!(text.contains("no build is published"));
+        assert_eq!(tone, Tone::Warning);
+
+        let (text, tone) = update_sentence(&Status::Downloading {
+            latest: "0.2.0".to_owned(),
+        })
+        .unwrap();
+        assert!(text.starts_with("Downloading"));
+        assert_eq!(tone, Tone::Muted);
+
+        let (text, _) = update_sentence(&Status::Ready {
+            latest: "0.2.0".to_owned(),
+            path: PathBuf::from("/tmp/restbook.exe"),
+            closes_app: true,
+        })
+        .unwrap();
+        assert!(text.contains("will close"));
+
+        let (text, _) = update_sentence(&Status::Ready {
+            latest: "0.2.0".to_owned(),
+            path: PathBuf::from("/tmp/restbook.deb"),
+            closes_app: false,
+        })
+        .unwrap();
+        assert!(text.contains("Open it to finish"));
+
+        let (text, tone) = update_sentence(&Status::Failed("offline".to_owned())).unwrap();
+        assert_eq!(text, "offline");
+        assert_eq!(tone, Tone::Danger);
     }
 }
