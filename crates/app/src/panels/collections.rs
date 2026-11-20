@@ -252,6 +252,11 @@ pub(crate) struct CollectionsPanel {
     filter_cache: Option<(String, u64, Vec<Collection>)>,
     /// Bumped on every mutation of `collections`; keys `filter_cache`.
     revision: u64,
+    /// Overrides the environment chip's width cap in render tests, so the same
+    /// button can be laid out uncapped to learn the placeholder's own width.
+    /// `None` in every build that is not a test.
+    #[cfg(test)]
+    chip_cap: Option<f32>,
     focus_handle: FocusHandle,
 }
 
@@ -399,6 +404,8 @@ impl CollectionsPanel {
             composing: false,
             filter_cache: None,
             revision: 0,
+            #[cfg(test)]
+            chip_cap: None,
             focus_handle: cx.focus_handle(),
         }
     }
@@ -858,14 +865,22 @@ impl CollectionsPanel {
             menu
         };
 
+        // A long environment name would push the header's buttons off the
+        // edge, so the chip truncates instead. The cap has to clear the
+        // placeholder's own width: a narrower one ellipsises "No environment"
+        // to "No enviro…" before any environment is picked.
+        #[cfg(test)]
+        let chip_cap = self.chip_cap.unwrap_or(self.metrics.gutter * 16.0);
+        #[cfg(not(test))]
+        let chip_cap = self.metrics.gutter * 16.0;
+
         Button::new("collections-environment")
             .icon(IconName::Globe)
             .label(label)
             .compact()
-            // A long environment name would push the header's buttons off
-            // the edge, so the chip truncates instead.
-            .max_w(px(self.metrics.gutter * 10.0))
+            .max_w(px(chip_cap))
             .dropdown_caret(true)
+            .debug_selector(|| "collections-environment-chip".to_owned())
             .tooltip("Active environment")
             .dropdown_menu(menu)
             .into_any_element()
@@ -2397,5 +2412,101 @@ mod tests {
             }),
             Some(RowTarget::Item("req-1".to_owned())),
         );
+    }
+}
+
+/// The header's environment chip, laid out by the real renderer.
+///
+/// The chip is content-sized, so its `max_w` alone decides where the label
+/// ellipsises. That is invisible to a unit test and to the style declarations:
+/// only layout knows the natural width the cap has to clear.
+#[cfg(test)]
+mod render_tests {
+    use std::sync::Arc;
+
+    use gpui_kit::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+    use restbook_core::Store;
+    use restbook_store::MemoryStore;
+
+    use super::{CollectionsPanel, Variables};
+    use crate::document::Document;
+    use crate::preview::tree;
+
+    /// The selector the chip records for the element-tree dump.
+    const CHIP: &str = "collections-environment-chip";
+
+    /// Open a window whose root is the pane, on an empty store, and draw one
+    /// frame. No environment is active, which is the state that shows the
+    /// placeholder. `chip_cap` overrides the chip's width cap, so the test can
+    /// lay the same button out uncapped and learn the placeholder's own width.
+    fn open(
+        cx: &mut TestAppContext,
+        chip_cap: Option<f32>,
+    ) -> (Entity<CollectionsPanel>, &mut VisualTestContext) {
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+            let document = cx.new(|_| Document::new());
+            let variables = cx.new(|cx| Variables::new(store.clone(), cx));
+            let mut panel = CollectionsPanel::new(store, document, variables, window, cx);
+            panel.chip_cap = chip_cap;
+            panel
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        (view, cx)
+    }
+
+    /// The chip's painted width, read back from the recorded bounds.
+    fn chip_width(cx: &mut VisualTestContext) -> f32 {
+        let text = tree::bounds_tree(cx, "collections-chip", &[CHIP]);
+        let line = text
+            .lines()
+            // The first line is the `# title`, which contains the selector too.
+            .filter(|line| line.contains(CHIP))
+            .find(|line| line.contains('@'))
+            .unwrap_or_else(|| panic!("the chip should be in the tree:\n{text}"));
+        // A recorded row reads `selector @x,y WxH`: the box is after the
+        // space, and its width is the part before the `x`.
+        let size = line
+            .split('@')
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().nth(1))
+            .unwrap_or_else(|| panic!("a recorded box in {line:?}"));
+        size.split('x')
+            .next()
+            .expect("a recorded width")
+            .parse()
+            .expect("a numeric width")
+    }
+
+    /// The chip must show its placeholder whole before any environment is
+    /// picked.
+    ///
+    /// The chip is content-sized, so `max_w` alone decides where its label
+    /// ellipsises. With no environment active the label is exactly
+    /// `No environment`, and a cap below that string's width is what painted
+    /// `No enviro…`. The width measured here is the natural one: the same
+    /// button laid out without a cap, which is the placeholder's own width.
+    #[test]
+    fn the_environment_chip_fits_its_placeholder() {
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+
+        let capped = {
+            let (_view, vcx) = open(&mut cx, None);
+            chip_width(vcx)
+        };
+        let natural = {
+            let (_view, vcx) = open(&mut cx, Some(f32::INFINITY));
+            chip_width(vcx)
+        };
+
+        assert!(
+            capped >= natural - 0.5,
+            "the chip truncates its placeholder: {capped}px at the cap but \
+             `No environment` needs {natural}px, which is the `No enviro…` \
+             defect"
+        );
+
+        cx.quit();
     }
 }
