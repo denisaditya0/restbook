@@ -703,9 +703,9 @@ pub(crate) mod tree {
         let mut nodes: Vec<Node> = selectors
             .iter()
             .filter_map(|selector| {
-                let bounds = cx.debug_bounds(*selector)?;
+                let bounds = cx.debug_bounds(selector)?;
                 Some(Node {
-                    selector: *selector,
+                    selector,
                     left: f32::from(bounds.origin.x),
                     top: f32::from(bounds.origin.y),
                     width: f32::from(bounds.size.width),

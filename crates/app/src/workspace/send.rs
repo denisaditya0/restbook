@@ -229,8 +229,7 @@ impl Workspace {
                                 cx.notify();
                             });
                         } else {
-                            if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == send_id)
-                            {
+                            if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == send_id) {
                                 // The document now describes the tab the user
                                 // switched to, so the failure goes into the
                                 // sender's snapshot; the other tab keeps its own

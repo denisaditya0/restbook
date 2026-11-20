@@ -45,26 +45,25 @@ impl RequestEditor {
             (BodyKind::Binary, "Binary"),
         ];
 
-        let kind_strip =
-            h_flex()
-                .gap(px(metrics.space_xs))
-                .pb(px(metrics.space_sm))
-                .children(kinds.into_iter().map(|(kind, label)| {
-                    let current = kind == self.body_kind;
-                    // Keyed on the variant, not its label, so a relabel cannot
-                    // re-key the control.
-                    Button::new(format!("body-kind-{kind:?}"))
-                        .label(label)
-                        .compact()
-                        .ghost()
-                        .selected(current)
-                        .toggled(current)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.body_kind = kind;
-                            cx.notify();
-                        }))
-                        .into_any_element()
-                }));
+        let kind_strip = h_flex()
+            .gap(px(metrics.space_xs))
+            .pb(px(metrics.space_sm))
+            .children(kinds.into_iter().map(|(kind, label)| {
+                let current = kind == self.body_kind;
+                // Keyed on the variant, not its label, so a relabel cannot
+                // re-key the control.
+                Button::new(format!("body-kind-{kind:?}"))
+                    .label(label)
+                    .compact()
+                    .ghost()
+                    .selected(current)
+                    .toggled(current)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.body_kind = kind;
+                        cx.notify();
+                    }))
+                    .into_any_element()
+            }));
 
         let content = match self.body_kind {
             BodyKind::None => div()
@@ -141,14 +140,9 @@ impl RequestEditor {
 
                 v_flex()
                     .gap(px(metrics.space_sm))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(self.palette.muted)
-                            .child(
-                                "A part with a file path is a file upload; without one it is a text field.",
-                            ),
-                    )
+                    .child(div().text_xs().text_color(self.palette.muted).child(
+                        "A part with a file path is a file upload; without one it is a text field.",
+                    ))
                     .child(parts_table::render(
                         &self.parts,
                         &self.palette,

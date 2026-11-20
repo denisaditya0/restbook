@@ -216,23 +216,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config cmake libssl-dev dbus
+            build-essential pkg-config cmake libssl-dev
 
-      # An address the runner already exported would take precedence over a
-      # started bus, so the shared variable is used rather than shadowed. It is
-      # cleared in `finally` because a job that leaks its own bus can hang.
+      # The tests install `keyring`'s in-memory credential store before they open
+      # a database (`sqlcipher.rs`, `exclusive`), because a real Secret Service
+      # needs a desktop session a runner does not have. Nothing here starts a
+      # D-Bus bus or needs `gnome-keyring`; the production path still uses the
+      # platform keyring.
       - name: Store tests (SQLCipher)
         shell: bash
         env:
           OPENSSL_DIR: /usr
-        run: |
-          set -euo pipefail
-
-          bus=unix:path=${RUNNER_TEMP}/restbook-ci-bus
-          echo "DBUS_SESSION_BUS_ADDRESS=$bus" >> "$GITHUB_ENV"
-
-          dbus-daemon --session --fork --address="$bus" --print-pid > "$RUNNER_TEMP/bus.pid"
-          cleanup() { kill "$(cat "$RUNNER_TEMP/bus.pid")" 2>/dev/null || true; }
-          trap cleanup EXIT
-
-          cargo test -p restbook-store --features sqlcipher
+        run: cargo test -p restbook-store --features sqlcipher

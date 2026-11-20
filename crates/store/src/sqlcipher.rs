@@ -111,7 +111,14 @@ pub struct SqlcipherStore {
 
 impl SqlcipherStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let key = load_or_create_key()?;
+        Self::open_with_key(path, &load_or_create_key()?)
+    }
+
+    /// Open with a key the caller already holds. Production code reaches this
+    /// through [`open`], which takes the key from the OS keyring; the tests pin
+    /// one instead, because a headless machine may have no credential store to
+    /// read it back from.
+    fn open_with_key(path: impl AsRef<Path>, key: &[u8; 32]) -> Result<Self> {
         let hex: String = key.iter().map(|byte| format!("{byte:02x}")).collect();
 
         let mut conn = Connection::open(path.as_ref()).map_err(db_error)?;
@@ -1035,6 +1042,16 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// A key every test database opens with. The real path takes it from the OS
+    /// keyring, which a headless machine or CI runner may not have, and
+    /// `keyring`'s own mock store keeps nothing between entries — useless for a
+    /// test that reopens a database.
+    const TEST_KEY: [u8; 32] = [0x5a; 32];
+
+    fn open_test(path: impl AsRef<Path>) -> Result<SqlcipherStore> {
+        SqlcipherStore::open_with_key(path, &TEST_KEY)
+    }
+
     fn sample_entry() -> HistoryEntry {
         let mut request = RequestDef::new(Method::Post, "https://example.com/things");
         request.headers.push(restbook_core::Kv::new("x-test", "1"));
@@ -1068,7 +1085,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let store = SqlcipherStore::open(dir.join("history.db")).unwrap();
+        let store = open_test(dir.join("history.db")).unwrap();
         let id = store.append_history(&sample_entry()).unwrap();
         assert!(id > 0);
 
@@ -1094,7 +1111,7 @@ mod tests {
         let _guard = exclusive();
         let dir = test_dir("restbook-sqlcipher-origin-test");
         let db = dir.join("history.db");
-        let store = SqlcipherStore::open(&db).unwrap();
+        let store = open_test(&db).unwrap();
 
         let url = "https://example.com/things";
         let mut earlier = entry_named(Method::Get, url, "things", 1_700_000_000_000);
@@ -1161,7 +1178,7 @@ mod tests {
 
         // The owners are on disk, not in memory.
         drop(store);
-        let reopened = SqlcipherStore::open(&db).unwrap();
+        let reopened = open_test(&db).unwrap();
         assert_eq!(
             reopened
                 .history_for_origin(&node_a, 10)
@@ -1185,7 +1202,7 @@ mod tests {
         let _guard = exclusive();
         let dir = test_dir("restbook-sqlcipher-delete-test");
         let db = dir.join("history.db");
-        let store = SqlcipherStore::open(&db).unwrap();
+        let store = open_test(&db).unwrap();
 
         let a = entry_named(
             Method::Get,
@@ -1239,7 +1256,7 @@ mod tests {
 
         // The deletions are on disk, and the index agrees on reopen.
         drop(store);
-        let reopened = SqlcipherStore::open(&db).unwrap();
+        let reopened = open_test(&db).unwrap();
         assert!(reopened.search_history("", 10).unwrap().is_empty());
         assert!(reopened.get_history(a_id).unwrap().is_none());
 
@@ -1255,14 +1272,14 @@ mod tests {
         let db = dir.join("history.db");
 
         let id = {
-            let store = SqlcipherStore::open(&db).unwrap();
+            let store = open_test(&db).unwrap();
             store.append_history(&sample_entry()).unwrap()
         };
 
         // Strip the feature back to the previous schema, index included: the
         // index references the columns, so SQLite refuses to drop them first.
         {
-            let store = SqlcipherStore::open(&db).unwrap();
+            let store = open_test(&db).unwrap();
             let conn = store
                 .conn
                 .lock()
@@ -1275,7 +1292,7 @@ mod tests {
             .expect("the bundled SQLite supports DROP COLUMN");
         }
 
-        let store = SqlcipherStore::open(&db).unwrap();
+        let store = open_test(&db).unwrap();
         assert_eq!(
             store.get_history(id).unwrap().unwrap().origin,
             Origin::Standalone
@@ -1309,7 +1326,7 @@ mod tests {
     fn trims_the_oldest_executions_and_rebuilds_the_index() {
         let _guard = exclusive();
         let dir = test_dir("restbook-sqlcipher-trim-test");
-        let store = SqlcipherStore::open(dir.join("history.db")).unwrap();
+        let store = open_test(dir.join("history.db")).unwrap();
 
         for index in 0..20 {
             let url = format!("https://example.com/item/{index}");
@@ -1350,7 +1367,7 @@ mod tests {
 
         let db = dir.join("history.db");
         {
-            let store = SqlcipherStore::open(&db).unwrap();
+            let store = open_test(&db).unwrap();
             store
                 .save_environment(&Environment {
                     name: "dev".to_owned(),
@@ -1373,7 +1390,7 @@ mod tests {
         }
 
         // Reopen so the roundtrip goes through the encrypted file, not memory.
-        let store = SqlcipherStore::open(&db).unwrap();
+        let store = open_test(&db).unwrap();
 
         let environments = store.environments().unwrap();
         assert_eq!(environments.len(), 1);
@@ -1402,7 +1419,7 @@ mod tests {
 
         let db = dir.join("history.db");
         let id = {
-            let store = SqlcipherStore::open(&db).unwrap();
+            let store = open_test(&db).unwrap();
             let id = store
                 .save_draft(&Draft {
                     id: 0,
@@ -1415,7 +1432,7 @@ mod tests {
         };
 
         // Reopen so the roundtrip goes through the encrypted file, not memory.
-        let store = SqlcipherStore::open(&db).unwrap();
+        let store = open_test(&db).unwrap();
         let drafts = store.drafts().unwrap();
         assert_eq!(drafts.len(), 1);
         assert_eq!(drafts[0].id, id);
@@ -1460,7 +1477,7 @@ mod tests {
         let _guard = exclusive();
         let dir = test_dir("restbook-sqlcipher-fts-substring-test");
 
-        let store = SqlcipherStore::open(dir.join("history.db")).unwrap();
+        let store = open_test(dir.join("history.db")).unwrap();
         store
             .append_history(&entry_named(
                 Method::Get,
@@ -1485,7 +1502,7 @@ mod tests {
         let _guard = exclusive();
         let dir = test_dir("restbook-sqlcipher-fts-short-test");
 
-        let store = SqlcipherStore::open(dir.join("history.db")).unwrap();
+        let store = open_test(dir.join("history.db")).unwrap();
         store
             .append_history(&entry_named(
                 Method::Get,
@@ -1507,7 +1524,7 @@ mod tests {
         let _guard = exclusive();
         let dir = test_dir("restbook-sqlcipher-fts-quotes-test");
 
-        let store = SqlcipherStore::open(dir.join("history.db")).unwrap();
+        let store = open_test(dir.join("history.db")).unwrap();
         store
             .append_history(&entry_named(
                 Method::Get,
@@ -1530,7 +1547,7 @@ mod tests {
         let _guard = exclusive();
         let dir = test_dir("restbook-sqlcipher-fts-method-name-test");
 
-        let store = SqlcipherStore::open(dir.join("history.db")).unwrap();
+        let store = open_test(dir.join("history.db")).unwrap();
         store
             .append_history(&entry_named(
                 Method::Patch,
@@ -1551,7 +1568,7 @@ mod tests {
         let db = dir.join("history.db");
 
         {
-            let store = SqlcipherStore::open(&db).unwrap();
+            let store = open_test(&db).unwrap();
             for index in 0..3 {
                 store
                     .append_history(&entry_named(
@@ -1567,13 +1584,13 @@ mod tests {
         // Each open runs the one-time backfill check; a second open must not
         // index the same executions again, or hits would multiply.
         for _ in 0..2 {
-            let store = SqlcipherStore::open(&db).unwrap();
+            let store = open_test(&db).unwrap();
             assert_eq!(store.search_history("example.co", 10).unwrap().len(), 3);
         }
 
         // Hits written after a reopen are indexed on insert, not only by the
         // backfill, and come back newest first.
-        let store = SqlcipherStore::open(&db).unwrap();
+        let store = open_test(&db).unwrap();
         store
             .append_history(&entry_named(
                 Method::Get,
@@ -1593,7 +1610,7 @@ mod tests {
         let dir = test_dir("restbook-sqlcipher-fts-sync-test");
         let db = dir.join("history.db");
 
-        let store = SqlcipherStore::open(&db).unwrap();
+        let store = open_test(&db).unwrap();
         // The bundled SQLCipher has FTS5 with the trigram tokenizer. If this
         // ever fails, the store still works but search is back on the scan.
         assert!(store.fts, "FTS5 trigram is unavailable in this build");

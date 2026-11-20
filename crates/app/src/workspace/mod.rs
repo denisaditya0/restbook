@@ -202,7 +202,10 @@ enum Deleted {
         parent: Vec<String>,
         /// The item's index among the siblings it was removed from.
         index: usize,
-        item: CollectionItem,
+        /// Boxed: a saved request carries its whole draft, so an inline item
+        /// would make every snapshot — which lives only as long as its toast —
+        /// several hundred bytes wide.
+        item: Box<CollectionItem>,
         noun: &'static str,
     },
     Environment {
@@ -252,7 +255,7 @@ impl Deleted {
                     )));
                 };
                 let items = folder_items(&mut collection.items, parent)?;
-                items.insert((*index).min(items.len()), item.clone());
+                items.insert((*index).min(items.len()), item.as_ref().clone());
                 store.save_collection(collection)
             }
             Self::Environment {
@@ -353,7 +356,7 @@ fn snapshot_delete(target: &PendingDelete, store: &dyn Store) -> Option<Deleted>
                         collection_id: collection.id,
                         parent,
                         index,
-                        item,
+                        item: Box::new(item),
                         noun,
                     });
                 }
@@ -397,7 +400,7 @@ fn deletion_landed(deleted: &Deleted, store: &dyn Store) -> bool {
             item,
             ..
         } => {
-            let id = match item {
+            let id = match item.as_ref() {
                 CollectionItem::Folder(folder) => &folder.id,
                 CollectionItem::Request(request) => &request.id,
             };
@@ -577,9 +580,7 @@ impl PanelName {
     }
 
     fn parse(name: &str) -> Option<Self> {
-        Self::all()
-            .into_iter()
-            .find(|panel| panel.as_str() == name)
+        Self::all().into_iter().find(|panel| panel.as_str() == name)
     }
 }
 
@@ -605,8 +606,7 @@ impl Workspace {
         let document = cx.new(|_| Document::new());
         let variables = cx.new(|cx| Variables::new(store.clone(), cx));
         let save_name = cx.new(|cx| InputState::new(window, cx).placeholder("Request name"));
-        let settings = cx
-            .new(|_| settings::Settings::new(state_dir.join(settings::SETTINGS_FILE)));
+        let settings = cx.new(|_| settings::Settings::new(state_dir.join(settings::SETTINGS_FILE)));
 
         // Install the theme *before* any pane is built: every pane snapshots
         // its palette with `Palette::new(cx)` in its constructor, so the tokens
@@ -1771,12 +1771,7 @@ impl Workspace {
 
             let name_row = v_flex()
                 .gap(px(metrics.space_xs))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(palette.muted)
-                        .child("Name"),
-                )
+                .child(div().text_xs().text_color(palette.muted).child("Name"))
                 .child(Input::new(&field).id("save-request-name"));
 
             let cancel = Button::new("save-request-cancel")
@@ -1819,7 +1814,12 @@ impl Workspace {
     /// the two-click dance the panes used to run: a dialog is what a user
     /// expects before a collection or an environment is destroyed, it can name
     /// the thing, and it cannot be triggered by a mis-aimed second click.
-    fn open_delete_dialog(&mut self, request: PendingDelete, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_delete_dialog(
+        &mut self,
+        request: PendingDelete,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // What the dialog says and what its confirm button does, per target.
         let (title, description, confirm_label) = match &request {
             PendingDelete::Node(collections_panel::RowTarget::Collection(id)) => (
@@ -1912,7 +1912,12 @@ impl Workspace {
     }
 
     /// Carry out the delete a dialog confirmed.
-    fn perform_delete(&mut self, target: PendingDelete, window: &mut Window, cx: &mut Context<Self>) {
+    fn perform_delete(
+        &mut self,
+        target: PendingDelete,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // Retire the previous offer before the new act, including a delete
         // that has no undo of its own (history, tabs).
         self.dismiss_flash();
@@ -1920,9 +1925,9 @@ impl Workspace {
 
         match target {
             PendingDelete::Node(collections_panel::RowTarget::Collection(id)) => {
-                self.panes.collections.update(cx, |panel, cx| {
-                    panel.delete_collection(&id, window, cx)
-                });
+                self.panes
+                    .collections
+                    .update(cx, |panel, cx| panel.delete_collection(&id, window, cx));
             }
             PendingDelete::Node(collections_panel::RowTarget::Item(id)) => {
                 self.panes
@@ -1930,9 +1935,9 @@ impl Workspace {
                     .update(cx, |panel, cx| panel.delete_item(&id, window, cx));
             }
             PendingDelete::Environment(name) => {
-                self.panes.environment.update(cx, |panel, cx| {
-                    panel.delete_environment(&name, cx)
-                });
+                self.panes
+                    .environment
+                    .update(cx, |panel, cx| panel.delete_environment(&name, cx));
             }
             PendingDelete::HistorySend(id) => match self.store.delete_history(id) {
                 Ok(_) => self.history_changed(cx),
@@ -1970,8 +1975,7 @@ impl Workspace {
                         );
                         self.notice(
                             &Notice::Failed(
-                                format!("Couldn't clear this request's history. {error}")
-                                    .into(),
+                                format!("Couldn't clear this request's history. {error}").into(),
                             ),
                             cx,
                         );
@@ -2072,8 +2076,8 @@ impl Workspace {
             return;
         }
 
-        let take_over = self.tabs.is_empty()
-            || (self.tabs.len() == 1 && self.tabs[0].is_pristine());
+        let take_over =
+            self.tabs.is_empty() || (self.tabs.len() == 1 && self.tabs[0].is_pristine());
         if !take_over {
             // `select_tab` snapshots the tab being left before it stops being the
             // active one.
@@ -2220,12 +2224,7 @@ impl Workspace {
                 let Some(index) = self.tabs.position(id) else {
                     return;
                 };
-                let ids = self
-                    .tabs
-                    .iter()
-                    .skip(index + 1)
-                    .map(|tab| tab.id)
-                    .collect();
+                let ids = self.tabs.iter().skip(index + 1).map(|tab| tab.id).collect();
                 self.confirm_close_tabs(ids, cx);
             }
             TabAction::CloseAll => {
@@ -3075,9 +3074,10 @@ impl Render for Workspace {
                             .icon(IconName::ClipboardPaste)
                             .on_click(move |_, window, cx| {
                                 paste.update(cx, |workspace, cx| {
-                                    workspace.panes.request.update(cx, |panel, cx| {
-                                        panel.paste_curl(window, cx)
-                                    })
+                                    workspace
+                                        .panes
+                                        .request
+                                        .update(cx, |panel, cx| panel.paste_curl(window, cx))
                                 });
                             }),
                     );
@@ -3108,25 +3108,23 @@ impl Render for Workspace {
                     menu = menu.separator();
                     for &(name, visible) in &panel_visibility {
                         let target = workspace.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new(name.label())
-                                .checked(visible)
-                                .on_click(move |_, window, cx| {
+                        menu =
+                            menu.item(PopupMenuItem::new(name.label()).checked(visible).on_click(
+                                move |_, window, cx| {
                                     target.update(cx, |workspace, cx| {
                                         workspace.reveal_panel(name, window, cx);
                                         workspace.focus_panel(name, window, cx);
                                     });
-                                }),
-                        );
+                                },
+                            ));
                     }
                     let reset = workspace.clone();
                     menu = menu.item(
                         PopupMenuItem::new("Reset layout")
                             .icon(IconName::RefreshCcw)
                             .on_click(move |_, window, cx| {
-                                reset.update(cx, |workspace, cx| {
-                                    workspace.reset_layout(window, cx)
-                                });
+                                reset
+                                    .update(cx, |workspace, cx| workspace.reset_layout(window, cx));
                             }),
                     );
                     // The diagnostics pair is a run of quiet utilities, not a
@@ -3245,12 +3243,8 @@ impl Render for Workspace {
                 }
             }))
             .on_action(cx.listener(|this, _: &NextTab, _, cx| this.select_relative(1, cx)))
-            .on_action(
-                cx.listener(|this, _: &PreviousTab, _, cx| this.select_relative(-1, cx)),
-            )
-            .on_action(
-                cx.listener(|this, _: &ReopenClosedTab, _, cx| this.reopen_closed_tab(cx)),
-            )
+            .on_action(cx.listener(|this, _: &PreviousTab, _, cx| this.select_relative(-1, cx)))
+            .on_action(cx.listener(|this, _: &ReopenClosedTab, _, cx| this.reopen_closed_tab(cx)))
             .on_action(cx.listener(|this, _: &SaveRequestAs, _, cx| this.save_active_as(cx)))
             // Settings is app-level, so its key works with focus anywhere, the
             // same as the menu entry and the palette command.
@@ -3261,16 +3255,12 @@ impl Render for Workspace {
             // anywhere, and the level lives in the theme global rather than in
             // one pane. The palette reaches the same two helpers through
             // `run_command`, so a zoom is one code path whichever opened it.
-            .on_action(
-                cx.listener(|this, _: &ZoomIn, window, cx| {
-                    this.zoom_by(theme::ZOOM_STEP, window, cx)
-                }),
-            )
-            .on_action(
-                cx.listener(|this, _: &ZoomOut, window, cx| {
-                    this.zoom_by(1.0 / theme::ZOOM_STEP, window, cx)
-                }),
-            )
+            .on_action(cx.listener(|this, _: &ZoomIn, window, cx| {
+                this.zoom_by(theme::ZOOM_STEP, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ZoomOut, window, cx| {
+                this.zoom_by(1.0 / theme::ZOOM_STEP, window, cx)
+            }))
             .on_action(
                 cx.listener(|this, _: &ResetZoom, window, cx| this.set_zoom(1.0, window, cx)),
             )
@@ -3547,7 +3537,7 @@ mod tests {
                 collection_id: "col-1".to_owned(),
                 parent: Vec::new(),
                 index: 0,
-                item: request("req-1"),
+                item: Box::new(request("req-1")),
                 noun: "Request",
             };
             assert_eq!(deleted.deleted_message(), "Request deleted");
@@ -3665,9 +3655,8 @@ mod tests {
         fn harness(window: &mut gpui_kit::Window, cx: &mut gpui_kit::Context<Harness>) -> Harness {
             let store: Arc<dyn restbook_core::Store> = Arc::new(MemoryStore::new());
             let (dock, _skin) = DockSkin::dock_area("status-test", None, window, cx);
-            let settings = cx.new(|_| {
-                settings::Settings::new(std::env::temp_dir().join("status-test.json"))
-            });
+            let settings =
+                cx.new(|_| settings::Settings::new(std::env::temp_dir().join("status-test.json")));
             let history = cx.new(|cx| HistoryPanel::new(store.clone(), settings, window, cx));
             let document = cx.new(|_| super::super::Document::new());
             let variables = cx.new(|cx| Variables::new(store.clone(), cx));
@@ -3781,9 +3770,8 @@ mod tests {
         fn docks(window: &mut gpui_kit::Window, cx: &mut gpui_kit::Context<Docks>) -> Docks {
             let store: Arc<dyn restbook_core::Store> = Arc::new(MemoryStore::new());
             let (dock, _skin) = DockSkin::dock_area("test-dock", None, window, cx);
-            let settings = cx.new(|_| {
-                settings::Settings::new(std::env::temp_dir().join("docks-test.json"))
-            });
+            let settings =
+                cx.new(|_| settings::Settings::new(std::env::temp_dir().join("docks-test.json")));
             let history = cx.new(|cx| HistoryPanel::new(store.clone(), settings, window, cx));
             let document = cx.new(|_| Document::new());
             let variables = cx.new(|cx| Variables::new(store, cx));

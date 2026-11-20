@@ -229,12 +229,16 @@ impl Flash {
     }
 }
 
+/// A toast action's callback: shared rather than copied so a flash stays cheap
+/// to clone into render code.
+type FlashHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+
 /// A command the toast offers, such as Undo. The callback is shared (`Rc`)
 /// rather than copied so the flash stays cheap to clone into render code.
 #[derive(Clone)]
 pub(crate) struct FlashAction {
     pub label: SharedString,
-    on_click: Rc<dyn Fn(&mut Window, &mut App)>,
+    on_click: FlashHandler,
 }
 
 impl FlashAction {
