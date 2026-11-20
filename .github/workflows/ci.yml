@@ -31,10 +31,13 @@ on:
   workflow_dispatch:
 
 # A new push to the same branch supersedes the old run: only the newest commit
-# is worth a verdict.
+# is worth a verdict — except on `master`, where each commit's verdict is what
+# `release.yml` reads before it publishes. Cancelling there would leave a tagged
+# commit with no result and block the release it was meant to unblock, so a
+# superseded `master` run is allowed to finish.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
