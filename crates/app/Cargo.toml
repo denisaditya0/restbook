@@ -1,6 +1,6 @@
 [package]
 name = "restbook-app"
-version = "0.1.1"
+version = "0.1.1-beta.1"
 edition = "2021"
 publish = false
 # The resource compiler needs the icon before the crate compiles, and it is the
@@ -10,6 +10,17 @@ publish = false
 # instead (the `.app` bundle and the hicolor theme), because neither reads one
 # out of the binary.
 build = "build.rs"
+# The package keeps its `restbook-app` name — that is the crate, the log target
+# and what `cargo -p` takes — but the artifact is `restbook`. That name is what a
+# user sees in Program Files, what the Start-menu shortcut runs, and what
+# `CFBundleExecutable` and the Linux `.desktop` entry have to match. Without
+# `autobins = false` cargo would also build the package-named default bin from
+# the same `main.rs`.
+autobins = false
+
+[[bin]]
+name = "restbook"
+path = "src/main.rs"
 
 # Standalone workspace: the engine must build without GPUI in the dependency
 # graph, and GPUI moves fast enough that we do not want it in the shared lockfile.

@@ -189,7 +189,7 @@ guide.
 | U38 | Request phase timings | The transport already tracks `sent`/`headers_received`/`received`; render locally only (scope forbids analytics) |
 | U56 | Find in response body | A query field with match count and next/previous, for the pretty rows and the raw block alike. Today a large body can only be read, not searched |
 | U57 | Save response body to a file | `ResponseBody::File` exists (B18 step 1) but nothing in the UI can write one, so a downloaded body only lives in memory |
-| U58 | Cookie management | The Cookies tab lists what the response set; `Transport::clear_cookies` exists but is wired to nothing, and a cookie cannot be edited or deleted from the UI |
+| U58 | Cookie management | The Cookies tab lists what the response set. Settings › Privacy now exposes `Transport::clear_cookies`, so a session can be reset; a cookie still cannot be edited or deleted individually from the UI |
 | U59 | History filters and per-row delete | The history sheet/pane searches by URL text (`Store::search_history`) and has Clear All; method, status, and date ranges are not offered, and one row cannot be removed |
 | U60 | Drag to reorder | Tabs and collection rows reorder only through the context menu's Move up/down (backlog 1.8). Drag is the gesture users try first |
 

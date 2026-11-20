@@ -7,10 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::Context;
-
-use gpui_kit::*;
 
 /// The preferences file, beside `layout.json` in the data directory.
 pub(crate) const SETTINGS_FILE: &str = "settings.json";
@@ -84,10 +81,9 @@ pub(crate) const HISTORY_LIMIT_MAX: u32 = 1_000;
 pub(crate) const HISTORY_MAX_ENTRIES_MIN: u32 = 100;
 pub(crate) const HISTORY_MAX_ENTRIES_MAX: u32 = 100_000;
 
-/// Metadata for one numeric preference: its stable element id, the text the
-/// dialog shows, and the bounds its value is held to.
+/// Metadata for one numeric preference: the text the dialog shows and the
+/// bounds its value is held to.
 pub(crate) struct NumberSpec {
-    pub(crate) key: &'static str,
     pub(crate) label: &'static str,
     pub(crate) hint: &'static str,
     pub(crate) min: u32,
@@ -113,16 +109,14 @@ impl NumberField {
     pub(crate) fn spec(self) -> NumberSpec {
         match self {
             NumberField::HistoryLimit => NumberSpec {
-                key: "settings-history-limit",
                 label: "History search limit",
-                hint: "how many entries the sidebar searches",
+                hint: "How many entries the sidebar searches.",
                 min: HISTORY_LIMIT_MIN,
                 max: HISTORY_LIMIT_MAX,
             },
             NumberField::HistoryMaxEntries => NumberSpec {
-                key: "settings-history-max-entries",
                 label: "History retention",
-                hint: "most entries kept; older sends are pruned",
+                hint: "The most entries kept; older sends are pruned.",
                 min: HISTORY_MAX_ENTRIES_MIN,
                 max: HISTORY_MAX_ENTRIES_MAX,
             },
@@ -154,7 +148,10 @@ impl NumberField {
     }
 
     /// Parse typed text and clamp it. `None` for a blank or unparseable field,
-    /// which means "ignore this keystroke" rather than "use zero".
+    /// which means "ignore this input" rather than "use zero". The Settings
+    /// dialog's number inputs clamp on their own; this stays for a hand-edited
+    /// value and for tests.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn parse(self, text: &str) -> Option<u32> {
         text.trim()
             .parse::<u32>()
@@ -204,76 +201,18 @@ pub(crate) struct Settings {
     /// Where `current` is written. Optional so the entity can be built in a test
     /// without a filesystem, and so a future embedding could run memory-only.
     path: Option<PathBuf>,
-    /// The numeric fields, owned here rather than by the dialog. The dialog is
-    /// rebuilt on every notify, so an input the dialog created would be thrown
-    /// away mid-edit; owning them on the entity is what keeps the caret put
-    /// while each value is written through on every keystroke. Built from
-    /// [`NumberField::ALL`], so a new setting needs no new plumbing.
-    numbers: Vec<(NumberField, Entity<InputState>)>,
 }
 
 impl Settings {
-    pub(crate) fn new(path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let current = AppSettings::load(&path);
-
-        let numbers: Vec<(NumberField, Entity<InputState>)> = NumberField::ALL
-            .into_iter()
-            .map(|field| {
-                let spec = field.spec();
-                let value = field.read(&current);
-                let input = cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .placeholder(spec.min.to_string())
-                        .default_value(value.to_string())
-                });
-                (field, input)
-            })
-            .collect();
-
-        // One write-through handler for every numeric field. A blank or
-        // unparseable value is ignored — the last good value stands — and
-        // anything parsed is clamped, so a store query or retention pass is
-        // never asked for nothing or for an absurd number.
-        for (field, input) in &numbers {
-            let field = *field;
-            cx.subscribe_in(input, window, move |this, _, event: &InputEvent, _, cx| {
-                if !matches!(event, InputEvent::Change) {
-                    return;
-                }
-                let value = {
-                    let text = this.number_input(field).read(cx).value();
-                    field.parse(&text)
-                };
-                let Some(value) = value else {
-                    return;
-                };
-                if value != field.read(&this.current) {
-                    field.write(&mut this.current, value);
-                    this.persist();
-                    cx.notify();
-                }
-            })
-            .detach();
-        }
-
+    pub(crate) fn new(path: PathBuf) -> Self {
         Self {
-            current,
+            current: AppSettings::load(&path),
             path: Some(path),
-            numbers,
         }
     }
 
     pub(crate) fn current(&self) -> &AppSettings {
         &self.current
-    }
-
-    /// The input for a numeric field, for the dialog to draw.
-    pub(crate) fn number_input(&self, field: NumberField) -> &Entity<InputState> {
-        self.numbers
-            .iter()
-            .find(|(candidate, _)| *candidate == field)
-            .map(|(_, input)| input)
-            .expect("every NumberField is built in Settings::new")
     }
 
     /// Replace the settings, persist, and redraw dependents. The observer the

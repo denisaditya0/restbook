@@ -606,7 +606,7 @@ impl Workspace {
         let variables = cx.new(|cx| Variables::new(store.clone(), cx));
         let save_name = cx.new(|cx| InputState::new(window, cx).placeholder("Request name"));
         let settings = cx
-            .new(|cx| settings::Settings::new(state_dir.join(settings::SETTINGS_FILE), window, cx));
+            .new(|_| settings::Settings::new(state_dir.join(settings::SETTINGS_FILE)));
 
         // Install the theme *before* any pane is built: every pane snapshots
         // its palette with `Palette::new(cx)` in its constructor, so the tokens
@@ -2495,14 +2495,31 @@ impl Workspace {
 
     /// Open the Settings dialog. It reads the settings entity the workspace
     /// owns, so a toggle takes effect everywhere at once; the workspace root is
-    /// passed along so the dialog can show where data is being read from.
+    /// passed along so the dialog can show where data is being read from, and a
+    /// weak self handle lets the dialog run the two data-clearing actions.
     fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         settings_view::open(
             self.settings.clone(),
             self.workspace_root.clone(),
+            cx.entity().downgrade(),
             window,
             cx,
         );
+    }
+
+    /// Ask for confirmation before wiping every stored send. Settings closes
+    /// first, so the alert is the only overlay left when it appears.
+    pub(crate) fn request_clear_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.close_dialog(cx);
+        self.pending_delete = Some(PendingDelete::AllHistory);
+        cx.notify();
+    }
+
+    /// Drop the shared cookie jar. This is the only reset short of restarting
+    /// the app, and Settings is its one entry point.
+    pub(crate) fn clear_cookies(&mut self, cx: &mut Context<Self>) {
+        restbook_core::Transport::clear_cookies(self.transport.as_ref());
+        self.flash(chrome::FlashKind::Success, "Cookies cleared", cx);
     }
 
     /// Open the command palette, routing every command back here.
@@ -3648,8 +3665,8 @@ mod tests {
         fn harness(window: &mut gpui_kit::Window, cx: &mut gpui_kit::Context<Harness>) -> Harness {
             let store: Arc<dyn restbook_core::Store> = Arc::new(MemoryStore::new());
             let (dock, _skin) = DockSkin::dock_area("status-test", None, window, cx);
-            let settings = cx.new(|cx| {
-                settings::Settings::new(std::env::temp_dir().join("status-test.json"), window, cx)
+            let settings = cx.new(|_| {
+                settings::Settings::new(std::env::temp_dir().join("status-test.json"))
             });
             let history = cx.new(|cx| HistoryPanel::new(store.clone(), settings, window, cx));
             let document = cx.new(|_| super::super::Document::new());
@@ -3764,8 +3781,8 @@ mod tests {
         fn docks(window: &mut gpui_kit::Window, cx: &mut gpui_kit::Context<Docks>) -> Docks {
             let store: Arc<dyn restbook_core::Store> = Arc::new(MemoryStore::new());
             let (dock, _skin) = DockSkin::dock_area("test-dock", None, window, cx);
-            let settings = cx.new(|cx| {
-                settings::Settings::new(std::env::temp_dir().join("docks-test.json"), window, cx)
+            let settings = cx.new(|_| {
+                settings::Settings::new(std::env::temp_dir().join("docks-test.json"))
             });
             let history = cx.new(|cx| HistoryPanel::new(store.clone(), settings, window, cx));
             let document = cx.new(|_| Document::new());

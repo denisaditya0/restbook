@@ -1252,7 +1252,7 @@ impl ResponsePanel {
             .px(px(self.metrics.space_lg))
             .py(px(self.metrics.space_sm))
             .font_family(palette.mono_font.clone())
-            .text_size(px(12.))
+            .text_size(px(self.metrics.font_small))
             .children(
                 response
                     .headers
@@ -1295,7 +1295,7 @@ impl ResponsePanel {
             .px(px(self.metrics.space_lg))
             .py(px(self.metrics.space_sm))
             .font_family(palette.mono_font.clone())
-            .text_size(px(12.))
+            .text_size(px(self.metrics.font_small))
             .children(cookies.into_iter().enumerate().map(|(index, cookie)| {
                 h_flex()
                     .id(("response-cookie", index))
@@ -2007,7 +2007,7 @@ mod render_tests {
         last_url: Option<String>,
         origin: Origin,
     ) -> (Entity<ResponsePanel>, &mut VisualTestContext) {
-        let (view, cx) = cx.add_window_view(|window, cx| {
+        let (view, cx) = cx.add_window_view(|_window, cx| {
             let document = cx.new(|_| {
                 let mut document = Document::new();
                 let url = "http://sample/one-line".to_owned();
@@ -2017,8 +2017,7 @@ mod render_tests {
                 document.origin = origin;
                 document
             });
-            let settings =
-                cx.new(|cx| Settings::new(PathBuf::from("restbook-render-test.json"), window, cx));
+            let settings = cx.new(|_| Settings::new(PathBuf::from("restbook-render-test.json")));
             ResponsePanel::new(document, store, settings, cx)
         });
         (view, cx)

@@ -292,9 +292,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out
-          # One file: the installer carries restbook-app.exe — with OpenSSL
-          # linked in — plus the Start-menu entry and the taskbar identity. Its
-          # name already matches the release's spelling.
+          # One file: the installer carries restbook.exe — with OpenSSL linked
+          # in — plus the Start-menu entry and the taskbar identity. Its name
+          # already matches the release's spelling.
           installer="dist/restbook-${VERSION}-${PLATFORM}.exe"
           if [ ! -f "$installer" ]; then
             echo "::error::$installer was not built; see the Package step's ISCC output" >&2

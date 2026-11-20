@@ -49,10 +49,7 @@ fn embed_windows_resources() -> Result<(), Box<dyn std::error::Error>> {
     // name instead of the exe's file name.
     res.set("FileDescription", "restbook");
     res.set("ProductName", "restbook");
-    res.set(
-        "OriginalFilename",
-        concat!("restbook-", env!("CARGO_PKG_VERSION"), ".exe"),
-    );
+    res.set("OriginalFilename", "restbook.exe");
     res.set("LegalCopyright", "MIT OR Apache-2.0");
     res.set("FileVersion", env!("CARGO_PKG_VERSION"));
     res.set("ProductVersion", env!("CARGO_PKG_VERSION"));

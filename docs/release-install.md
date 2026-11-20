@@ -5,7 +5,7 @@ These builds are unsigned, so each OS shows a first-run warning — see the
 per-platform note below its artifact.
 
 - **Windows** — download `restbook-<version>-windows-x86_64.exe` and run it. It
-  installs per-user: `restbook-app.exe` — one file, OpenSSL linked in —
+  installs per-user: `restbook.exe` — one file, OpenSSL linked in —
   a Start-menu entry, an optional desktop shortcut, and an uninstaller. No admin
   rights needed. SmartScreen warns about an unknown publisher; choose
   *More info → Run anyway*.

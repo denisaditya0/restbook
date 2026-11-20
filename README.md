@@ -82,7 +82,7 @@ sh scripts/package.sh            # or --release
 
 What `dist/` holds depends on the machine you run it on:
 
-- **Windows** — `restbook-app.exe` and, unless the build asked for a static
+- **Windows** — `restbook.exe` and, unless the build asked for a static
   OpenSSL (`--vendored`), the `libcrypto-<major>-x64.dll` it imports. If
   [Inno Setup](https://jrsoftware.org/isinfo.php) is installed,
   `restbook-<version>-windows-x86_64.exe` as well: one installer carrying both,

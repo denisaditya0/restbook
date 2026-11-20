@@ -244,7 +244,7 @@ impl PreviewRoot {
 
         let document = cx.new(|_| fixture_document());
         let variables = cx.new(|cx| Variables::new(store.clone(), cx));
-        let settings = cx.new(|cx| Settings::new(state_dir.join(SETTINGS_FILE), window, cx));
+        let settings = cx.new(|_| Settings::new(state_dir.join(SETTINGS_FILE)));
 
         // The panes snapshot their palette in their constructors, so the theme
         // has to be installed first — and the user's own, so the preview is

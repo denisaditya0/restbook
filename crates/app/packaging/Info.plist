@@ -31,7 +31,7 @@
     <key>CFBundleShortVersionString</key>
     <string>@VERSION@</string>
     <key>CFBundleExecutable</key>
-    <string>restbook-app</string>
+    <string>restbook</string>
     <key>CFBundleIconFile</key>
     <string>@ICON@</string>
     <key>CFBundlePackageType</key>

@@ -101,7 +101,7 @@ not a registry, so this list is exhaustive.
 | Toggle environment | — (palette only) | reveal the Environment pane | Right dock | `reveal_panel` |
 | Toggle collections | — (palette only) | reveal the Collections pane | Left dock | `reveal_panel` |
 | Reset layout | — (palette only) | apply the first-run arrangement and persist it | Left dock + Center | `Workspace::reset_layout` |
-| Settings… | `secondary-,` | open the Settings dialog | Overlay (dialog, 560px) | `Workspace::open_settings` |
+| Settings… | `secondary-,` | open the Settings dialog | Overlay (dialog, 880px) | `Workspace::open_settings` |
 | Zoom in | `secondary-=` | scale the whole UI up, persist to `settings.json` | Chrome (all panes redraw) | `Workspace::set_zoom` |
 | Zoom out | `secondary--` | scale the whole UI down | Chrome (all panes redraw) | `Workspace::set_zoom` |
 | Reset zoom | `secondary-0` | return zoom to 100% | Chrome (all panes redraw) | `Workspace::set_zoom` |
@@ -197,7 +197,7 @@ consumes it with `window.defer`.
 | Surface | Triggered by | Position / size | Source |
 |---|---|---|---|
 | Command palette | `secondary-shift-p`, titlebar menu | centered dialog, 520px | `command_palette::open` |
-| Settings | palette `Settings…`, titlebar menu | centered dialog, 560px | `settings_view::open` |
+| Settings | palette `Settings…`, titlebar menu | centered dialog, 880px, category rail | `settings_view::open` |
 | Save request | Save on an unbound tab | centered dialog, 460px | `Workspace::open_save_dialog` |
 | Delete confirmation | a row's trash button (Collections) or Delete (Environment) | centered **alert** dialog, 420px | `Workspace::open_delete_dialog` |
 | History sheet | response clock control | right sheet, 440px | `history_sheet::open` |

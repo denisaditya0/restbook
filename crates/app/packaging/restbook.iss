@@ -1,9 +1,10 @@
 ; restbook's Windows installer.
 ;
-; A bare `restbook-app.exe` imports `libcrypto-*` at load time, so it only runs
-; next to the DLL that shipped with it, and it gets a generic taskbar identity.
-; This script wraps both files into one self-installing executable and gives it
-; the identity `branding::APP_ID` declares.
+; A bare `restbook.exe` imports `libcrypto-*` at load time when the build linked
+; OpenSSL dynamically, so it only runs next to the DLL that shipped with it, and
+; it gets a generic taskbar identity without the icon. This script wraps the
+; files into one self-installing executable and gives it the identity
+; `branding::APP_ID` declares.
 ;
 ; `scripts/package.sh` compiles it with Inno Setup's `ISCC.exe` and passes what
 ; cannot be read from this file:
@@ -67,7 +68,7 @@ DisableProgramGroupPage=yes
 AllowNoIcons=yes
 SetupMutex=restbook-setup
 SetupIconFile={#IconFile}
-UninstallDisplayIcon={app}\restbook-app.exe
+UninstallDisplayIcon={app}\restbook.exe
 SourceDir={#SourceDir}
 OutputDir={#OutputDir}
 OutputBaseFilename=restbook-{#Version}-windows-{#Architecture}
@@ -93,7 +94,7 @@ ArchitecturesInstallIn64BitMode=x64compatible and not arm64
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "restbook-app.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "restbook.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; The DLL's name follows the OpenSSL major version, so it is passed in rather
 ; than spelled out here — and it is absent when the build linked OpenSSL
 ; statically, where the exe needs nothing beside it.
@@ -108,12 +109,16 @@ Source: "{#CryptoDll}"; DestDir: "{app}"; Flags: ignoreversion
 ; here is safe because this section runs before `[Files]`, so the DLL the new
 ; build imports is written back afterwards. An install that ships none (a
 ; static build) simply ends up without one.
+;
+; `restbook-app.exe` is the name the binary had up to 0.1.0; an upgrade from one
+; of those would otherwise leave a second, unlaunched copy beside the new exe.
 [InstallDelete]
 Type: files; Name: "{app}\libcrypto-*.dll"
+Type: files; Name: "{app}\restbook-app.exe"
 
 [Icons]
-Name: "{group}\restbook"; Filename: "{app}\restbook-app.exe"; AppUserModelID: "{#AppId}"
-Name: "{autodesktop}\restbook"; Filename: "{app}\restbook-app.exe"; Tasks: desktopicon; AppUserModelID: "{#AppId}"
+Name: "{group}\restbook"; Filename: "{app}\restbook.exe"; AppUserModelID: "{#AppId}"
+Name: "{autodesktop}\restbook"; Filename: "{app}\restbook.exe"; Tasks: desktopicon; AppUserModelID: "{#AppId}"
 
 [Run]
-Filename: "{app}\restbook-app.exe"; Description: "{cm:LaunchProgram,restbook}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\restbook.exe"; Description: "{cm:LaunchProgram,restbook}"; Flags: nowait postinstall skipifsilent

@@ -128,7 +128,7 @@ package_windows() {
     openssl_dir=$(sh "$root/scripts/dev.sh" --print-openssl-dir 2>/dev/null || true)
 
     mkdir -p "$out"
-    exe="$target/$profile/restbook-app.exe"
+    exe="$target/$profile/restbook.exe"
     cp "$exe" "$out/"
 
     # `libsqlite3-sys` links libcrypto with the `dylib` kind, so the built exe
@@ -143,8 +143,9 @@ package_windows() {
     # application was unable to start correctly" — before it could log a line.
     #
     # Anything left over from an earlier run is removed first, so `dist/` can
-    # never carry two majors and the installer cannot pick up the stale one.
-    rm -f "$out"/libcrypto-*.dll
+    # never carry two majors and the installer cannot pick up the stale one. The
+    # binary was called `restbook-app.exe` up to 0.1.0, so that name goes too.
+    rm -f "$out"/libcrypto-*.dll "$out"/restbook-app.exe
 
     crypto_dll=$(crypto_dll_name "$exe")
     if [ -n "$crypto_dll" ]; then
@@ -260,6 +261,9 @@ build_installer() {
     # `VersionInfoVersion` must be four numbers, and a prerelease suffix has
     # none: `0.2.0-beta.1` becomes `0.2.0.0`.
     numeric_version=$(printf '%s' "$version" | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1.0/')
+    # A `dist/` carried over from an earlier run would otherwise hold the last
+    # version's installer beside this one, where it reads as the current build.
+    rm -f "$out"/restbook-*-windows-*.exe
 
     # Built as a list because the DLL is optional; `set --` inside a function
     # only replaces this call's own arguments, which is what is wanted here.
@@ -306,7 +310,7 @@ package_macos() {
     rm -rf "$app"
     mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 
-    cp "$target/$profile/restbook-app" "$app/Contents/MacOS/"
+    cp "$target/$profile/restbook" "$app/Contents/MacOS/"
 
     icon="$root/crates/app/icons/$name.icns"
     if [ -f "$icon" ]; then
@@ -370,7 +374,7 @@ package_linux() {
     rm -rf "$prefix"
     mkdir -p "$prefix/bin" "$prefix/share/applications"
 
-    cp "$target/$profile/restbook-app" "$prefix/bin/"
+    cp "$target/$profile/restbook" "$prefix/bin/"
 
     # Every hicolor size the icon set has. A launcher picks the closest one.
     for png in "$root/crates/app/icons/$name"-*.png; do
