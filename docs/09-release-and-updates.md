@@ -40,43 +40,47 @@ of the engine build), so it carries its own version instead of inheriting
 crate means the app's own number — so a stale app version makes the app
 advertise the wrong build to itself.
 
-Tags are the bare version: `0.2.0`, `0.2.0-beta.1`. No `v` prefix, no build
-metadata, so the tag, the manifest, and `semver::Version` all agree.
+Tags are the bare version: `0.2.0`. No `v` prefix, no build metadata, no
+prerelease suffix, so the tag, the manifest, and `semver::Version` all agree.
 
-## Channels
+## One channel
 
-Two channels, two manifests, one code path:
+There is one release channel and one manifest, `latest.json`, attached to
+whatever tag is newest. `verify` refuses a tag whose version carries a
+prerelease suffix: the updater's only URL is `releases/latest`, which never
+serves a prerelease, so a `0.2.0-beta.1` tag would publish something no client
+could ever find — or quietly take the `latest` marker from a real release.
 
-| Channel | Manifest asset | Published as |
-|---|---|---|
-| `stable` | `latest.json` | a normal release |
-| `beta` | `latest-beta.json` | a prerelease (`0.2.0-beta.1`) |
+Versions are chosen by the size of the change, not by channel:
 
-Both channels work with the existing check because `semver::Version` already
-orders prereleases correctly: an app on `0.1.0` offered `0.2.0-beta.1` sees an
-update, and an app on `0.2.0-beta.1` offered `0.2.0` sees an update too. Nothing
-in `interpret()` needs a channel concept; the channel is which manifest URL the
-build was pointed at.
+| Change | Version |
+|---|---|
+| Bug fix, doc correction, CI change | patch — `0.1.2` |
+| A batch of user-visible features | minor — `0.2.0` |
+| First release that promises compatibility, or a breaking change | major — `1.0.0` |
 
-That leaves one real gap, now closed: `updater::manifest_url()` used to read
-`RESTBOOK_UPDATE_URL` at **runtime** with `std::env::var` only, and a GUI app
-launched from Explorer or Finder has no useful environment — a packaged build
-reported itself unconfigured and could never learn about a later release.
-The URL is now derived from the compiled version's channel and baked in:
+A beta channel used to exist for the cases where a bad release cannot be undone
+for someone who already installed it — a `history.db` migration, an installer
+layout change, signing. If one of those needs a shakedown, that is when to add
+the channel back, with the mirror and the semver ordering described in this
+file's history.
+
+## Where the manifest URL comes from
+
+`updater::manifest_url()` used to read `RESTBOOK_UPDATE_URL` at **runtime** with
+`std::env::var` only, and a GUI app launched from Explorer or Finder has no
+useful environment — a packaged build reported itself unconfigured and could
+never learn about a later release. The URL is now baked in:
 
 ```rust
 // crates/app/src/updater.rs — runtime env still wins, so a test or a developer
 // can point one build anywhere; then the build-time env; then the channel.
 pub(crate) fn manifest_url() -> Option<String> {
-    runtime_override().or_else(build_override).or_else(channel_url)
+    runtime_override().or_else(build_override).or_else(release_url)
 }
 
-fn manifest_url_for(repo: &str, version: &Version) -> String {
-    if version.pre.is_empty() {
-        format!("https://github.com/{repo}/releases/latest/download/latest.json")
-    } else {
-        format!("https://github.com/{repo}/releases/tags/beta-latest/download/latest-beta.json")
-    }
+fn manifest_url_for(repo: &str) -> String {
+    format!("https://github.com/{repo}/releases/latest/download/latest.json")
 }
 ```
 
@@ -95,32 +99,13 @@ GitHub Releases hosts the binaries, and the manifest is just another asset — s
 no server, no API token, no rate limit:
 
 ```
-stable  https://github.com/<owner>/restbook/releases/latest/download/latest.json
+https://github.com/<owner>/restbook/releases/latest/download/latest.json
 ```
 
 `releases/latest` resolves to the newest **non-prerelease** release, which is
-exactly the stable channel. It cannot serve beta, because a prerelease is never
-"latest". So the beta channel is a permanent release tagged `beta-latest` whose
-only asset is `latest-beta.json`, and a beta build points at:
-
-```
-beta    https://github.com/<owner>/restbook/releases/tags/beta-latest/download/latest-beta.json
-```
-
-Both URLs are static: updating a channel means replacing one asset, and no
-client ever calls `api.github.com` (60 unauthenticated requests per hour).
-
-`beta-latest` is refreshed by **every** release, not just prereleases. A beta
-build polls it for the rest of its life, so if a stable release only updated
-`latest.json`, everyone who installed a beta would sit on that beta and never be
-told the stable version exists. Mirrored, the beta channel is simply "the newest
-release on either channel", and a beta user is promoted to stable automatically.
-
-The mirror never moves backwards: a patch on an old line (`0.1.2` while
-`0.2.0-beta.1` is out) leaves the channel where it is. That comparison needs a
-real semver rule — `sort -V` puts `0.2.0` *before* `0.2.0-beta.1`, while semver
-says the plain release is newer — so the workflow carries a small
-`semver_gt` helper instead of sorting version strings.
+exactly what the release job publishes (`gh release edit --latest`). The URL is
+static: updating the channel means attaching a fresh `latest.json`, and no client
+ever calls `api.github.com` (60 unauthenticated requests per hour).
 
 ## The manifest contract
 
@@ -223,7 +208,7 @@ but the release matrix still builds no artifact with it on Linux.
 ## Pull requests
 
 The gate before a change reaches `master`, and therefore before it can be tagged
-as a beta. `.github/workflows/ci.yml` runs on every pull request, on pushes to
+for release. `.github/workflows/ci.yml` runs on every pull request, on pushes to
 `master`, and by hand. It is Linux only: the release matrix already builds the
 three shipped targets natively, while a pull request needs a verdict, not
 packaging.
@@ -283,9 +268,8 @@ What `.github/workflows/release.yml` does, in order:
    an Actions artifact. No job touches the release yet, so a failed matrix
    leaves nothing on GitHub.
 5. **Assemble and publish** in one job: create the release as a **draft**, write
-   the channel manifest from the downloaded bytes' own checksums, upload every
-   asset, then un-draft. Stable also gets `--latest`; a version with a
-   prerelease suffix is a GitHub prerelease and publishes `latest-beta.json`.
+   `latest.json` from the downloaded bytes' own checksums, upload every asset,
+   then un-draft and mark it `latest`.
 
 A re-run resumes rather than duplicates: the release is created only if the tag
 has none, and uploads use `--clobber`, so replacing one failed artifact does not
@@ -294,8 +278,7 @@ touch the others.
 Triggers:
 
 ```sh
-git tag 0.1.0 && git push origin 0.1.0      # normal release
-git tag 0.2.0-beta.1 && git push origin 0.2.0-beta.1   # beta channel
+git tag 0.1.0 && git push origin 0.1.0      # a release
 ```
 
 `workflow_dispatch` takes the same tag plus a `dry_run` flag, which builds and

@@ -7,10 +7,10 @@
 //! leave this build running.
 //!
 //! A packaged app is launched from Explorer or Finder with no useful
-//! environment, so the manifest URL is derived from this build's release
-//! channel at compile time. `RESTBOOK_UPDATE_URL` still overrides it, at build
-//! time or at runtime, which is how a test or a preview build points one binary
-//! somewhere else.
+//! environment, so the manifest URL is baked in at compile time: there is one
+//! release channel, and `releases/latest` is it. `RESTBOOK_UPDATE_URL` still
+//! overrides the URL, at build time or at runtime, which is how a test or a
+//! preview build points one binary somewhere else.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -26,8 +26,8 @@ use sha2::{Digest as _, Sha256};
 /// `User-Agent` of a check.
 pub(crate) const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Overrides the release manifest URL. Empty or unset means the channel's own
-/// URL is used, which is the normal case for a packaged build.
+/// Overrides the release manifest URL. Empty or unset means the baked-in URL is
+/// used, which is the normal case for a packaged build.
 pub(crate) const MANIFEST_URL_ENV: &str = "RESTBOOK_UPDATE_URL";
 
 /// The repository whose releases this build polls. `RESTBOOK_UPDATE_REPO`
@@ -38,10 +38,9 @@ const RELEASE_REPO: &str = match option_env!("RESTBOOK_UPDATE_REPO") {
     None => "denisaditya0/restbook",
 };
 
-/// Manifest asset names, one per channel. `docs/09-release-and-updates.md`
-/// owns the convention; the release workflow writes these files.
-const STABLE_MANIFEST: &str = "latest.json";
-const BETA_MANIFEST: &str = "latest-beta.json";
+/// The manifest asset name. `docs/09-release-and-updates.md` owns the
+/// convention; the release workflow writes this file.
+const MANIFEST: &str = "latest.json";
 
 /// How long a check may take. This runs off the UI thread, but a manifest is a
 /// few hundred bytes: a stalled server should become an error, not a task that
@@ -70,14 +69,13 @@ pub(crate) struct Manifest {
     pub(crate) assets: BTreeMap<String, Asset>,
 }
 
-/// One downloadable build. Phase 1 selects the entry for this OS and
-/// architecture; the installer phase consumes `url`, `sha256`, and `signature`
-/// before writing anything.
+/// One downloadable build. The check selects the entry for this OS and
+/// architecture; [`download`] consumes `url` and `sha256` before writing
+/// anything, and `signature` is reserved for when releases are signed.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct Asset {
     pub(crate) url: String,
-    // Read by the installer phase. Kept in the format from the start so a
-    // manifest published today does not have to be replaced when that lands.
+    // Checked by `download`: a file that does not match is never opened.
     #[serde(default)]
     pub(crate) sha256: Option<String>,
     #[allow(dead_code)]
@@ -115,7 +113,7 @@ pub(crate) enum Outcome {
     NotConfigured,
     /// The running build is at least as new as the published one.
     UpToDate { current: String },
-    /// A newer version exists. Phase 1 only reports it; nothing is installed.
+    /// A newer version exists, and this is the build for it.
     Available {
         latest: String,
         notes: Option<String>,
@@ -126,11 +124,11 @@ pub(crate) enum Outcome {
 }
 
 /// The manifest URL for this build: the runtime or build-time override when one
-/// is set, otherwise the URL of the channel the compiled version belongs to.
+/// is set, otherwise the one release channel's URL.
 pub(crate) fn manifest_url() -> Option<String> {
     runtime_override()
         .or_else(build_override)
-        .or_else(channel_url)
+        .or_else(release_url)
 }
 
 /// `RESTBOOK_UPDATE_URL` in the process environment. A developer or a test can
@@ -145,24 +143,23 @@ fn build_override() -> Option<String> {
     option_env!("RESTBOOK_UPDATE_URL").and_then(|url| non_blank(url.to_owned()))
 }
 
-/// The channel this build belongs to: a version with a prerelease suffix is
-/// beta, everything else is stable.
-fn channel_url() -> Option<String> {
-    let version = Version::parse(CURRENT_VERSION).ok()?;
-    Some(manifest_url_for(RELEASE_REPO, &version))
+/// The one release channel.
+///
+/// A build whose version does not parse has no channel at all: it cannot say
+/// which release it belongs to, and `release.yml` refuses to publish such a
+/// version anyway.
+fn release_url() -> Option<String> {
+    Version::parse(CURRENT_VERSION).ok()?;
+    Some(manifest_url_for(RELEASE_REPO))
 }
 
-/// Where `repo` publishes the manifest for `version`'s channel.
+/// Where `repo` publishes the manifest.
 ///
-/// `releases/latest` resolves to the newest non-prerelease release, which is
-/// exactly stable. It can never serve a prerelease, so beta is a permanent
-/// `beta-latest` release whose single asset is replaced in place.
-fn manifest_url_for(repo: &str, version: &Version) -> String {
-    if version.pre.is_empty() {
-        format!("https://github.com/{repo}/releases/latest/download/{STABLE_MANIFEST}")
-    } else {
-        format!("https://github.com/{repo}/releases/tags/beta-latest/download/{BETA_MANIFEST}")
-    }
+/// `releases/latest` resolves to the newest non-prerelease release, which is the
+/// only kind this project publishes. A prerelease tag is refused by `verify`,
+/// so there is no second URL to fall back to.
+fn manifest_url_for(repo: &str) -> String {
+    format!("https://github.com/{repo}/releases/latest/download/{MANIFEST}")
 }
 
 /// `None` for a URL that is empty or only whitespace.
@@ -313,8 +310,6 @@ fn verify(bytes: &[u8], expected: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use semver::Version;
-
     use super::{
         interpret, manifest_url, manifest_url_for, platform_key, verify, Asset, Manifest, Outcome,
     };
@@ -399,26 +394,18 @@ mod tests {
 
     #[test]
     fn a_packaged_build_always_has_a_manifest_url() {
-        // The whole point of the baked-in channel: a GUI app started with no
+        // The whole point of the baked-in URL: a GUI app started with no
         // environment still knows where to look.
         assert!(manifest_url().is_some());
     }
 
+    /// One channel: every build asks `releases/latest`, which is the only place
+    /// a release is published now that `verify` refuses prerelease tags.
     #[test]
-    fn a_stable_build_reads_the_stable_manifest() {
-        let url = manifest_url_for("owner/repo", &Version::parse("0.1.0").unwrap());
+    fn every_build_reads_the_one_manifest() {
         assert_eq!(
-            url,
+            manifest_url_for("owner/repo"),
             "https://github.com/owner/repo/releases/latest/download/latest.json"
-        );
-    }
-
-    #[test]
-    fn a_prerelease_build_reads_the_beta_channel() {
-        let url = manifest_url_for("owner/repo", &Version::parse("0.2.0-beta.1").unwrap());
-        assert_eq!(
-            url,
-            "https://github.com/owner/repo/releases/tags/beta-latest/download/latest-beta.json"
         );
     }
 
