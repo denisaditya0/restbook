@@ -194,11 +194,9 @@ jobs:
   # change to the encrypted path cannot merge untested.
   #
   # SQLCipher builds SQLCipher and `libsqlite3-sys` finds OpenSSL, hence the
-  # OpenSSL dev package. On Linux `keyring` is the Secret Service backend, which
-  # talks over D-Bus: the tests' `load_or_create_key` needs the *default* bus,
-  # not just any session bus, so `runner.temp` is handed to the runner as
-  # `DBUS_SESSION_BUS_ADDRESS` (a custom address would never be seen) and cleared
-  # afterwards. `dbus-run-session` would start a separate bus nobody points at.
+  # OpenSSL dev package. The tests pin their own key (`sqlcipher.rs`, `open_test`)
+  # rather than reading the OS keyring, which on Linux is the Secret Service over
+  # D-Bus — a runner has none. Nothing here installs or starts D-Bus.
   sqlcipher:
     name: Encrypted store
     runs-on: ubuntu-22.04
@@ -218,13 +216,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config cmake libssl-dev
 
-      # The tests install `keyring`'s in-memory credential store before they open
-      # a database (`sqlcipher.rs`, `exclusive`), because a real Secret Service
-      # needs a desktop session a runner does not have. Nothing here starts a
-      # D-Bus bus or needs `gnome-keyring`; the production path still uses the
-      # platform keyring.
+      # The tests pin their own key before opening a database (`sqlcipher.rs`,
+      # `open_test`), because the real one lives in the OS keyring and a runner has
+      # no Secret Service. `--no-fail-fast` so one broken test does not hide the
+      # others, and a backtrace so a panic names its line in the log.
       - name: Store tests (SQLCipher)
         shell: bash
         env:
           OPENSSL_DIR: /usr
-        run: cargo test -p restbook-store --features sqlcipher
+          RUST_BACKTRACE: "1"
+        run: cargo test -p restbook-store --features sqlcipher -- --no-fail-fast
