@@ -277,16 +277,15 @@ to have: the problem, the fix, the evidence, the checks. The template is the
 contract, not decoration — the evidence section is where the `--preview`
 captures go, attached rather than committed.
 
-So a change that reaches a beta is checked three times: on the pull request, on
-the release tag, and by however much of the manual path above applies. The two
-that CI cannot cover are the smoke path and the `--preview` captures, and they
-are the reason a pull request still needs a human.
+So a change that reaches a release is checked twice: on the pull request, and by
+`release.yml` reading that commit's CI verdict before it builds. The two things
+CI cannot cover are the smoke path and the `--preview` captures, and they are
+the reason a pull request still needs a human.
 
-There is no separate beta branch. A beta is a tag whose version carries a
-prerelease suffix (`0.2.0-beta.1`); `release.yml` reads the suffix, publishes a
-GitHub prerelease and replaces `latest-beta.json`, and the stable manifest is
-left alone. Cut it from `master`, after the pull request is merged — the version
-bump belongs to that tag, which is why CI rejects one in a pull request.
+There is one channel: a release is a tag on `master` whose version carries no
+suffix, cut after the pull request is merged. The version bump belongs to that
+commit, which is why CI rejects one in a pull request (`0.1.x` for fixes,
+`0.2.0` for a feature batch, `1.0.0` for the first supported release).
 
 ### 6. Update the documents that own the change
 
@@ -333,7 +332,8 @@ What lands in `dist/` depends on where it runs:
   `restbook-<version>-linux-<arch>.deb` when `dpkg-deb` exists.
 
 Version bumps touch both workspaces plus both lockfiles; tags are the bare
-version (`0.2.0`, `0.2.0-beta.1`). There is no download-and-replace updater yet —
+version (`0.2.0`), with no prerelease suffix. The updater checks the release
+channel, downloads this platform's asset, verifies its `sha256` and opens it —
 the contract is in `09-release-and-updates.md`.
 
 ## Test strategy at a glance
