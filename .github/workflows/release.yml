@@ -134,11 +134,15 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
 
-  # Engine and app tests, on the cheap runner, before the matrix spends
-  # Windows and (especially) macOS minutes. SQLCipher is off here for the same
-  # reason it is off in the Linux artifact: it costs minutes of C per job.
+  # The same gate `ci.yml` puts on a pull request, repeated here because a tag
+  # can point at a commit that never went through it: a hotfix pushed straight
+  # to master, or a tag moved after the fact. Formatting and lints come first —
+  # they fail in seconds and name the file.
+  #
+  # SQLCipher is off here for the same reason it is off in the Linux artifact: it
+  # costs minutes of C per job.
   test:
-    name: Test
+    name: Checks
     needs: verify
     runs-on: ubuntu-22.04
     steps:
@@ -163,6 +167,20 @@ jobs:
             libxcb-xinput-dev libxcb-render0-dev libxcb-sync-dev \
             libxcb-present-dev libxcb-damage0-dev libxcb-composite0-dev \
             libfontconfig1-dev libfreetype6-dev libzstd-dev
+
+      - name: Formatting (engine)
+        run: cargo fmt --check
+
+      - name: Formatting (app)
+        working-directory: crates/app
+        run: cargo fmt --check
+
+      - name: Engine clippy
+        run: cargo clippy --all-targets --message-format short -- -D warnings
+
+      - name: App clippy
+        working-directory: crates/app
+        run: cargo clippy --all-targets --no-default-features --message-format short -- -D warnings
 
       - name: Engine tests
         run: cargo test --workspace
