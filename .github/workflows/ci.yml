@@ -225,9 +225,25 @@ jobs:
       # `open_test`), because the real one lives in the OS keyring and a runner has
       # no Secret Service. `--no-fail-fast` so one broken test does not hide the
       # others, and a backtrace so a panic names its line in the log.
+      #
+      # Failures are also repeated as annotations. The job log needs a signed-in
+      # browser; annotations come back from the API, which is what makes a red run
+      # diagnosable from outside GitHub.
       - name: Store tests (SQLCipher)
         shell: bash
         env:
           OPENSSL_DIR: /usr
           RUST_BACKTRACE: "1"
-        run: cargo test -p restbook-store --features sqlcipher -- --no-fail-fast
+        run: |
+          set -uo pipefail
+
+          status=0
+          cargo test --no-fail-fast -p restbook-store --features sqlcipher 2>&1 \
+            | tee store-tests.log || status=$?
+
+          if [ "$status" -ne 0 ]; then
+            grep -E '^(error|thread |test result|failures:)|^    [a-z0-9_:]+$|panicked at' store-tests.log \
+              | head -40 \
+              | while IFS= read -r line; do echo "::error::$line"; done
+            exit "$status"
+          fi
