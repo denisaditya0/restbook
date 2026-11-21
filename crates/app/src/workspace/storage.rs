@@ -199,6 +199,49 @@ fn marked_workspace(dir: &Path) -> bool {
     dir.join(restbook_store::MARKER_FILE).is_file()
 }
 
+/// Why a folder cannot be turned into a workspace root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EnableWorkspaceError {
+    /// The folder is not there, or is not a folder.
+    NotADirectory,
+    /// It already holds a marker. Writing one would be a no-op at best and a
+    /// silent rewrite of someone else's workspace at worst.
+    AlreadyAWorkspace,
+    /// The marker could not be written.
+    WriteFailed,
+}
+
+/// Turn `dir` into a workspace root by writing the marker file.
+///
+/// The marker is what [`workspace_root`] looks for, so writing it is the whole
+/// operation; the caller decides when the change takes effect. It refuses a
+/// directory that is already marked rather than rewriting the file, because an
+/// existing `restbook.json` may carry settings this app does not own.
+pub(crate) fn enable_workspace(dir: &Path) -> Result<(), EnableWorkspaceError> {
+    if !dir.is_dir() {
+        return Err(EnableWorkspaceError::NotADirectory);
+    }
+    if marked_workspace(dir) {
+        return Err(EnableWorkspaceError::AlreadyAWorkspace);
+    }
+    // `create_new` so a folder that gained a marker between the check above and
+    // this call is reported rather than overwritten.
+    let marker = dir.join(restbook_store::MARKER_FILE);
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&marker)
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::AlreadyExists => EnableWorkspaceError::AlreadyAWorkspace,
+            _ => EnableWorkspaceError::WriteFailed,
+        })?;
+    use std::io::Write as _;
+    file.write_all(b"{}\n")
+        .map_err(|_| EnableWorkspaceError::WriteFailed)?;
+    log::info!("workspace enabled at {}", dir.display());
+    Ok(())
+}
+
 /// The label for a workspace: its directory name, falling back to the app name
 /// for a root with no usable final component (a drive root, say).
 fn workspace_name(root: &Path) -> String {
@@ -323,7 +366,7 @@ fn legacy_files() -> Vec<PathBuf> {
 mod tests {
     // Named imports rather than `use super::*`: this crate glob-imports
     // `gpui_kit::*` elsewhere, and that macro set shadows `#[test]`.
-    use super::{marked_workspace, workspace_name};
+    use super::{enable_workspace, marked_workspace, workspace_name, EnableWorkspaceError};
     use std::path::PathBuf;
 
     #[test]
@@ -367,6 +410,35 @@ mod tests {
         let nested = dir.join("collections");
         std::fs::create_dir_all(&nested).unwrap();
         assert!(!marked_workspace(&nested));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Enabling a workspace writes the marker and nothing else, and refuses the
+    /// two cases that would be destructive or pointless.
+    #[test]
+    fn enabling_a_workspace_writes_the_marker_once() {
+        let dir = std::env::temp_dir().join("restbook-storage-enable-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        assert!(!marked_workspace(&dir));
+        enable_workspace(&dir).expect("a bare directory can become a workspace");
+        assert!(marked_workspace(&dir));
+
+        // A second call must not rewrite a marker this app does not own.
+        assert_eq!(
+            enable_workspace(&dir),
+            Err(EnableWorkspaceError::AlreadyAWorkspace)
+        );
+
+        // A path that is not a directory is refused rather than created.
+        let missing = dir.join("not-there");
+        assert_eq!(
+            enable_workspace(&missing),
+            Err(EnableWorkspaceError::NotADirectory)
+        );
+        assert!(!missing.exists(), "a refused path must not be created");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
