@@ -191,7 +191,11 @@ struct Finding {
     /// The query these were computed for, so a stale set is never shown.
     query: String,
     /// `(row index, byte offset, length)` in reading order.
-    hits: Vec<(usize, usize, usize)>,
+    ///
+    /// An `Rc` because `body_view` clones it once per paint to hand it to the
+    /// row builder; the hit set can be long on a repetitive body, and a deep
+    /// copy per frame is what this exists to avoid.
+    hits: Rc<Vec<(usize, usize, usize)>>,
     /// The hit the arrows last moved to; `None` until one is chosen, which is
     /// what makes the count read "3 matches" rather than "1 of 3".
     current: Option<usize>,
@@ -223,6 +227,9 @@ struct DisplayCache {
     /// Sliced by line at cache time so the virtualized list can hand a row its
     /// own runs without translating global offsets on every frame.
     highlights: Rc<Vec<Vec<HighlightRun>>>,
+    /// How many `Set-Cookie` headers the response carried, parsed once here
+    /// rather than on every frame just to size the tab's badge.
+    cookie_count: usize,
 }
 
 /// Identity of a record's body for caching purposes: where the bytes live, how
@@ -924,6 +931,11 @@ impl ResponsePanel {
             lines,
             plain,
             highlights,
+            // The tab badge is the only reader, and it needs a number, not the
+            // parsed cookies. Counting here means the badge costs nothing on a
+            // repaint; splitting every `Set-Cookie` per frame was the whole
+            // cost the badge imposed.
+            cookie_count: util::cookies(&response.headers).len(),
         });
         (text, truncated)
     }
@@ -1053,7 +1065,13 @@ impl ResponsePanel {
     }
 
     fn render_tabs(&self, response: &ResponseRecord, cx: &mut Context<Self>) -> AnyElement {
-        let cookie_count = util::cookies(&response.headers).len();
+        // From the display cache, which parsed it once, rather than splitting
+        // every `Set-Cookie` header again for each repaint.
+        let cookie_count = self
+            .display
+            .as_ref()
+            .map(|cache| cache.cookie_count)
+            .unwrap_or_else(|| util::cookies(&response.headers).len());
         let counts = [0, response.headers.len(), cookie_count];
         let labels = ResponseTab::ALL
             .iter()
@@ -1133,7 +1151,7 @@ impl ResponsePanel {
             .filter(|index| *index < hits.len());
         self.finding = Some(Finding {
             query,
-            hits,
+            hits: Rc::new(hits),
             current,
         });
     }
@@ -1460,7 +1478,7 @@ impl ResponsePanel {
             background_color: Some(palette.search_match),
             ..Default::default()
         };
-        let hits_by_row: Vec<(usize, usize, usize)> = self
+        let hits_by_row: Rc<Vec<(usize, usize, usize)>> = self
             .finding
             .as_ref()
             .map(|finding| finding.hits.clone())
@@ -2386,6 +2404,41 @@ mod render_tests {
 
     fn draw(cx: &mut VisualTestContext) {
         cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+
+    /// The tab badge's count is parsed once, when the body is decoded.
+    ///
+    /// It used to split every `Set-Cookie` header inside `render_tabs`, which
+    /// runs on every frame; a scroll alone repaints continuously, so a response
+    /// with many cookies paid for the badge on each one. What is asserted is the
+    /// cache: the count is stored with the decoded body, so a repaint reads it
+    /// instead of recomputing it.
+    #[test]
+    fn the_cookie_count_is_cached_with_the_body() {
+        let mut record = json_response("{\"a\":1}");
+        record
+            .headers
+            .push(("set-cookie".to_owned(), "sid=abc; Path=/".to_owned()));
+        record
+            .headers
+            .push(("set-cookie".to_owned(), "theme=dark".to_owned()));
+        // A header that parses to nothing must not inflate the badge.
+        record
+            .headers
+            .push(("set-cookie".to_owned(), "nonsense".to_owned()));
+        assert_eq!(crate::util::cookies(&record.headers).len(), 2);
+
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+        let (view, cx) = open(&mut cx, Some(record.clone()));
+        draw(cx);
+
+        let cached = cx.update(|_, cx| {
+            let panel = view.read(cx);
+            panel.display.as_ref().map(|cache| cache.cookie_count)
+        });
+        assert_eq!(cached, Some(2), "the count is stored with the decoded body");
+        cx.quit();
     }
 
     /// Selectors the response pane records for the element-tree dump. The body
