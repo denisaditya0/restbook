@@ -218,6 +218,10 @@ pub(crate) struct Palette {
     /// highlighted while it is focused, while a text selection is a transient
     /// gesture and reads better as a translucent wash.
     pub selection: Hsla,
+    /// The mark behind a find-in-body match (U56). A translucent `warning`, so
+    /// a found substring reads as the same class of "look here" as every other
+    /// warning without adding a token a theme file has to define.
+    pub search_match: Hsla,
     pub success: Hsla,
     pub warning: Hsla,
     pub info: Hsla,
@@ -566,6 +570,7 @@ impl Palette {
             hover: pick(&colors.hover, theme.secondary_hover),
             selected: pick(&colors.selected, theme.secondary_active),
             selection: theme.selection,
+            search_match: theme.warning.opacity(0.32),
             success: pick(&colors.success, theme.success),
             warning: pick(&colors.warning, theme.warning),
             info: pick(&colors.info, theme.info),
