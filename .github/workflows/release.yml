@@ -166,18 +166,19 @@ jobs:
 
           failed=0
           for job in Lint Clippy Test "Encrypted store"; do
-            result=$(awk -v job="$job" '$1 == job { print }' results.txt | head -n 1)
-            case "$result" in
-              "$job completed success") ;;
-              "")
-                echo "::error::$job never ran for $sha; push it and wait for CI before tagging" >&2
-                failed=1
-                ;;
-              *)
-                echo "::error::$job is not green for $sha: $result" >&2
-                failed=1
-                ;;
-            esac
+            # The name is matched as a whole prefix, not as `$1`: a job name may
+            # contain a space ("Encrypted store"), and comparing only the first
+            # field made that job impossible to satisfy.
+            result=$(grep -F -m 1 "${job} completed " results.txt || true)
+            if [ "$result" = "${job} completed success" ]; then
+              continue
+            fi
+            if [ -z "$result" ]; then
+              echo "::error::$job never ran for $sha; push it and wait for CI before tagging" >&2
+            else
+              echo "::error::$job is not green for $sha: $result" >&2
+            fi
+            failed=1
           done
           exit "$failed"
 
