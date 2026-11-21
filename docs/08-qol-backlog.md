@@ -467,42 +467,53 @@ release, never the tail of a feature lane. That is the correction: inside
 it, and it slipped twice. `test_support.rs` landed in `0.1.4` so the tests have
 a harness to move onto.
 
-At the time of writing it is 4,108 lines, of which 601 are tests: roughly 3,500
-lines of code in a single `impl Workspace` spanning `new` to `status`. That block
-owns the dock layout, tab state, save and delete dialogs, undo, notices, the
-status line, the launch update offer, and persistence. `panels/response.rs` is
-next at 2,859 (2,000 code) and `panels/collections.rs` at 2,331 (1,996 code),
-but those are panes whose surface is genuinely large; the canvas is not supposed
-to be.
+At the time of writing it is 4,132 lines, of which 601 are tests: 2,560 lines
+of code in a single `impl Workspace` of 85 methods. That block owns the dock
+layout, tab state, save and delete dialogs, undo, notices, the status line, the
+launch update offer, and persistence. `panels/response.rs` is next at 2,859
+(2,000 code) and `panels/collections.rs` at 2,331 (1,996 code), but those are
+panes whose surface is genuinely large; the canvas is not supposed to be. The
+five steps below take about 1,636 of those lines out, leaving roughly 924.
 
 The cost is not line count by itself. It is that a new feature lands in this
 file by default, so two unrelated changes conflict, and reviewing a change
 directed at tabs means reading save, undo, and layout too. `chrome.rs` holds two
 bars and the flash in 623 lines, which is the size this codebase works well at.
 
-**Fix:** five coherent modules out of the canvas, in this order, each a
-behaviour-neutral move:
+**Fix:** five coherent modules out of the canvas, each a behaviour-neutral
+move and **each its own pull request**, merged in this order before the next
+begins:
 
-1. **Tabs** — `Tab`, `TabId`, `Tabs`, `select_tab`, `close_tab`, `move_tab`,
-   `handle_tab_action`, `snapshot_active`, `adopt_active`, `push_tabs` (~600
-   lines).
+1. **Updates** — `check_updates_on_launch`, `open_update_offer_dialog`,
+   `should_offer` (~150 lines). Smallest, newest code, no dependency on the
+   rest of the canvas: it proves the pattern before anything large moves.
 2. **Delete and undo** — `PendingDelete`, `Deleted`, `snapshot_delete`,
-   `restore`, `deletion_landed`, `undo_delete` (~300 lines).
-3. **Persistence** — `install_layout`, `save_layout`, `flush_draft`,
-   `persist_draft`, `flush_leaving_draft`, completing the move into
-   `workspace/persistence.rs`.
-4. **Updates** — `check_updates_on_launch`, `open_update_offer_dialog`,
-   `should_offer` (~150 lines). It arrived in `0.1.4` and has no dependency on
-   the rest of the canvas.
+   `deletion_landed`, `undo_delete`, `open_delete_dialog`, `perform_delete`
+   (~290 lines). Self-contained, and its tests already exist.
+3. **Tabs** — `select_tab`, `close_tab`, `move_tab`, `handle_tab_action`,
+   `snapshot_active`, `adopt_active`, `push_tabs` and their neighbours (~413
+   lines, 21 methods). The largest win; `workspace/tabs.rs` already exists.
+4. **Persistence** — `install_layout`, `apply_layout`, `flush_draft`,
+   `persist_draft`, `save_on_close`, `flush_on_quit` (~463 lines). The biggest
+   risk, so it lands after the routine is proven; `workspace/persistence.rs`
+   already owns the layout file.
 5. **Dock and flash** — `reveal_panel`, `close_panel`, `toggle_sidebar`,
    `toggle_tools`, `dock_showing`, `panel_visible`, and the flash cluster
    (`flash`, `flash_undo`, `set_flash`, `dismiss_flash`, `schedule_flash_clear`)
-   (~350 lines).
+   (~320 lines). Last because `flash` is called from about 17 places, so it is
+   the one that has to survive as a free function or small trait rather than a
+   method on a module.
 
-Steps 1 and 3 extend decisions already made: `workspace/tabs.rs` holds `TabId`
-and `TabState`, and `workspace/persistence.rs` already owns the layout file.
-Steps 4 and 5 were not separate jobs when this item was written; they became
-visible once the update offer landed on the canvas.
+One step per pull request, not one pull request for all five: a 1,600-line
+move shows as 1,600 additions and 1,600 deletions, and no reviewer can tell a
+relocation from a rewrite in that. Five PRs are five independent reverts, and
+five short windows in which `0.1.5` blocks other work instead of one long one.
+Each step ends with the suite green before the next starts.
+
+Steps 3 and 4 extend decisions already made: `workspace/tabs.rs` holds
+`TabId` and `TabState`, and `workspace/persistence.rs` already owns the layout
+file. Steps 1 and 5 were not separate jobs when this item was written; they
+became visible once the update offer landed on the canvas.
 
 **Do not** fold this into a feature lane. It occupies `0.1.5` whole, in a PR
 with nothing else in flight, because it touches the file every other fix
