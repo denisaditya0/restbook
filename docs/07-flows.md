@@ -19,7 +19,7 @@ not fit one of these, that is a design smell, not a missing bucket.
 | **Right dock** | the tools dock: History / Environment | `workspace/mod.rs` `reveal_panel`, `install_layout` |
 | **Center** | Request over Response, in a vertical split | `workspace/mod.rs` `install_layout` |
 | **Chrome** | the titlebar (34px) and status bar (24px), app-drawn | `workspace/chrome.rs` |
-| **Overlay** | a window-level dialog, sheet, palette, or toast | `window.open_dialog` / `open_sheet_at`, `chrome::flash` |
+| **Overlay** | a window-level dialog, sheet, palette, or notification | `window.open_dialog` / `open_sheet_at`, `window.push_notification` |
 
 The layering rule that makes this predictable is in
 [`02-ui-plan.md`](02-ui-plan.md): *the canvas decides placement, panes decide
@@ -135,8 +135,8 @@ This is the "intent as event" rule in action.
 | Editor tab click | `Event::SelectTab(i)` | switch tabs | Center (tab strip) | `Workspace::select_tab` |
 | New-tab button | `Event::NewTab` | push a tab | Center | `Workspace::new_tab` |
 | Tab close button / `secondary-w` | `Event::CloseTab(i)` | close that tab; a tab with unsaved edits asks through the close alert dialog first | Center, or Overlay (alert dialog) | `Workspace::confirm_close_tab` |
-| Paste-curl imported | `Event::Imported` | flash a toast, then open the Save As dialog when a collection is selected | Overlay (bottom-right, optionally a dialog) | `Workspace::imported` |
-| Paste-curl failed | `Event::Notice(_)` | flash a toast with the parse error | Overlay (bottom-right) | `Workspace::notice` |
+| Paste-curl imported | `Event::Imported` | report a notification, then open the Save As dialog when a collection is selected | Overlay (notification, optionally a dialog) | `Workspace::imported` |
+| Paste-curl failed | `Event::Notice(_)` | report a notification with the parse error | Overlay (notification) | `Workspace::notice` |
 
 ### Sidebar → workspace
 
@@ -145,7 +145,7 @@ This is the "intent as event" rule in action.
 | History row click | `HistoryEvent::Picked { id }` | load the full entry, adopt the request **and** show the stored response | Center | `Workspace::listen` |
 | Collections: request row click | `CollectionsEvent::Open { node, request }` | select the tab already holding `node`, else open the request in its own tab (taking over only the lone pristine placeholder), bind the tab to the node, delete any stale draft | Center | `Workspace::open_saved` |
 | Collections: draft row click | `CollectionsEvent::OpenDraft { id }` | select the tab holding that draft, or open it | Center | `Workspace::open_draft` |
-| Collections: any mutation | `CollectionsEvent::Notice(_)` | flash a toast (create/delete/rename/save) | Overlay (bottom-right) | `Workspace::notice` |
+| Collections: any mutation | `CollectionsEvent::Notice(_)` | report a notification (create/delete/rename/save) | Overlay (notification) | `Workspace::notice` |
 | Collections: delete a row | `CollectionsEvent::ConfirmDelete(target)` | open the delete alert dialog; delete on confirm | Overlay (alert dialog) | `Workspace::open_delete_dialog` |
 | Environment: delete | `EnvironmentEvent::ConfirmDelete(name)` | open the delete alert dialog; delete on confirm | Overlay (alert dialog) | `Workspace::open_delete_dialog` |
 
@@ -212,7 +212,7 @@ are opened with a deliberate two-step: an event or a background task has no
 | Delete confirmation | a row's trash button (Collections) or Delete (Environment) | centered **alert** dialog, 420px | `Workspace::open_delete_dialog` |
 | Update offer | the launch check finding a newer release that is not skipped | centered dialog, 448px; *Install now* / *Later* / *Skip this version* | `Workspace::open_update_offer_dialog` |
 | History sheet | response clock control | right sheet, 440px | `history_sheet::open` |
-| Flash toast | any `Notice` / `flash`, including the two dock toggles | bottom-right, 2.6s, non-blocking | `chrome::flash` |
+| Flash toast | any `Notice` / `flash`, including the two dock toggles | park in `pending_notice`, then a kit notification above dialogs | `Workspace::issue_notice` |
 
 The update offer is a plain dialog, not an alert: an alert's confirm/cancel pair
 has nowhere to put a third choice, and nothing here is destructive. *Install

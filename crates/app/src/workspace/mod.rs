@@ -73,14 +73,6 @@ const LAYOUT_FILE: &str = "layout.json";
 /// A drag emits a layout change per frame, so the file is written on a pause.
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(400);
 
-/// How long a confirmation stays on screen. Long enough to read a short
-/// sentence, short enough that it never becomes part of the window.
-const FLASH_DURATION: Duration = Duration::from_millis(2600);
-
-/// An undo offer outlives a plain confirmation: acting on it is a decision,
-/// not a glance. It is still short enough to stay a revert, not a trash can.
-const UNDO_DURATION: Duration = Duration::from_millis(6000);
-
 /// How many closed tabs Reopen Closed Tab can walk back through. The stack is
 /// process-local and cheap, so this only stops an all-day session from holding
 /// every request it ever closed.
@@ -138,12 +130,14 @@ pub(crate) struct Workspace {
     /// per tick: a send notifies the document ~10-20 times a second, and only
     /// the last edit should start the debounce.
     draft_gen: u64,
-    /// A transient confirmation of an action that had no window to notify
-    /// through. Cleared by `flash_task`.
+    /// The last message an action reported. Kept so [`Self::dismiss_flash`] has
+    /// something to retire and so `issue_notice` can re-read it; the kit owns the
+    /// visible toast, so this no longer needs a timer.
     flash: Option<chrome::Flash>,
-    /// The timer that clears `flash`. Held so a new flash cancels the old one,
-    /// which is what keeps a rapid pair of actions from clearing each other.
-    flash_task: Option<Task<()>>,
+    /// A message waiting for a `Window` to be shown in. `flash` is called from
+    /// paths that have none, and a notification is window-level, so the message
+    /// is parked here and `render` drains it.
+    pending_notice: Option<chrome::Flash>,
     /// The window root's focus target: keyboard actions dispatched while no
     /// pane owns focus still reach the workspace's handlers.
     focus_handle: FocusHandle,
@@ -171,6 +165,11 @@ pub(crate) struct Workspace {
     /// write would bump `updated_at` and duplicate the work.
     flushed: bool,
 }
+
+/// Nothing: the type is the identity. The kit keys in-app notifications by
+/// `TypeId`, so one marker replaces the previous workspace notice instead of
+/// stacking a second one under it.
+struct WorkspaceNotice;
 
 /// A newer release the launch check found, held until render can open the
 /// dialog offering it. The `Asset` is what `Updates::install` downloads, so an
@@ -673,7 +672,7 @@ impl Workspace {
             draft_task: None,
             draft_gen: 0,
             flash: None,
-            flash_task: None,
+            pending_notice: None,
             focus_handle: cx.focus_handle(),
             save_name,
             pending_save: false,
@@ -1288,8 +1287,44 @@ impl Workspace {
         // Replacing the whole flash is the point: the new message and its kind
         // must land together, never one from each action.
         self.set_flash(kind, message.into());
-        self.schedule_flash_clear(FLASH_DURATION, cx);
+        self.pending_notice = self.flash.clone();
         cx.notify();
+    }
+
+    /// Hand the parked flash to the kit's notification layer.
+    ///
+    /// A notification is window-level, and most of the paths that report an
+    /// outcome have no `Window`, so [`Self::flash`] parks the message and this
+    /// issues it from render. The kit stacks these above dialogs, which is what
+    /// the hand-drawn toast could not do: it was part of the dock tree, so an
+    /// open dialog covered it.
+    fn issue_notice(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(flash) = self.pending_notice.take() else {
+            return;
+        };
+        let mut notification = match flash.kind {
+            chrome::FlashKind::Success => Notification::success(flash.message.clone()),
+            chrome::FlashKind::Error => Notification::error(flash.message.clone()),
+        };
+        // One id for every workspace notice, so a second message replaces the
+        // first instead of stacking: that is the rule the hand-drawn toast had
+        // and the one a user expects from a confirmation.
+        notification = notification.id::<WorkspaceNotice>();
+        if let Some(action) = &flash.action {
+            let on_click = action.on_click.clone();
+            let label = action.label.clone();
+            notification = notification.action(move |_, _, _| {
+                let on_click = on_click.clone();
+                Button::new("workspace-flash-action")
+                    .label(label.clone())
+                    .ghost()
+                    .compact()
+                    .on_click(move |_, window, cx| on_click(window, cx))
+            });
+            // An undo offer must not vanish before it can be clicked.
+            notification = notification.autohide(false);
+        }
+        window.push_notification(notification, cx);
     }
 
     /// [`Self::flash`] for a dialog that holds only a weak handle here.
@@ -1334,26 +1369,12 @@ impl Workspace {
         if let Some(flash) = &mut self.flash {
             flash.action = Some(action);
         }
-        self.schedule_flash_clear(UNDO_DURATION, cx);
+        self.pending_notice = self.flash.clone();
         cx.notify();
     }
 
-    /// The timer half of [`Self::flash`], shared so an undo offer can stay up
-    /// longer than a plain confirmation without a second implementation.
-    fn schedule_flash_clear(&mut self, duration: Duration, cx: &mut Context<Self>) {
-        self.flash_task = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(duration).await;
-            this.update(cx, |workspace, cx| {
-                workspace.flash = None;
-                workspace.flash_task = None;
-                cx.notify();
-            })
-            .ok();
-        }));
-    }
-
     /// The state half of [`Self::flash`], split out so the replace-in-place
-    /// rule can be tested without an executor to run the timer on.
+    /// rule can be tested without a window to push a notification to.
     fn set_flash(&mut self, kind: chrome::FlashKind, message: SharedString) {
         self.flash = Some(chrome::Flash {
             kind,
@@ -1367,7 +1388,7 @@ impl Workspace {
     /// previous one's Undo looking like it belongs to the new message.
     fn dismiss_flash(&mut self) {
         self.flash = None;
-        self.flash_task = None;
+        self.pending_notice = None;
     }
 
     /// Put a captured value back after the toast's Undo was clicked, then
@@ -3029,7 +3050,6 @@ impl Workspace {
         // No timer has a window to paint into any more. The draft's last edit
         // is written directly below instead of waiting out its debounce.
         let layout_dirty = self.save_task.take().is_some();
-        self.flash_task.take();
         let draft_dirty = self.draft_task.take().is_some();
 
         if layout_dirty {
@@ -3178,6 +3198,15 @@ impl Render for Workspace {
                 this.update(cx, |workspace, cx| {
                     workspace.open_update_offer_dialog(offer, window, cx);
                 });
+            });
+        }
+
+        // A confirmation has no window to reach until here either. The kit draws
+        // it above dialogs, which the hand-drawn toast never could.
+        if self.pending_notice.is_some() {
+            let this = cx.entity();
+            window.defer(cx, move |window, cx| {
+                this.update(cx, |workspace, cx| workspace.issue_notice(window, cx));
             });
         }
 
@@ -3494,13 +3523,6 @@ impl Render for Workspace {
                 left_toggle,
                 right_toggle,
             ))
-            // The confirmation floats over the window rather than taking a row,
-            // so it cannot push the layout around when it appears.
-            .children(
-                self.flash
-                    .as_ref()
-                    .map(|flash| chrome::flash(&palette, &metrics, flash)),
-            )
     }
 }
 
