@@ -119,6 +119,37 @@ jobs:
 
           exit "$failed"
 
+      # The other half of the version rule: a tree that has moved past its newest
+      # tag. Nothing else notices that state — `release.yml` only runs when a tag
+      # is pushed, and the check above only fires inside a pull request — which
+      # is how `master` can sit with the work for a release finished and no tag
+      # for it. A notice, not an error: an untagged tree is a pending release, not
+      # a broken one.
+      - name: Unreleased commits on the default branch
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag=$(git describe --tags --abbrev=0 --match '[0-9]*' 2>/dev/null || true)
+          if [ -z "$tag" ]; then
+            echo "::notice::no release tag exists yet"
+            exit 0
+          fi
+
+          ahead=$(git rev-list --count "${tag}..HEAD")
+          if [ "$ahead" -eq 0 ]; then
+            echo "tree is at the newest tag ($tag)"
+            exit 0
+          fi
+
+          version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          if [ "$version" = "$tag" ]; then
+            echo "::notice::$ahead commit(s) past $tag; if they are a release, bump both versions, wait for CI, then tag"
+          else
+            echo "::notice::$ahead commit(s) past $tag, and the tree is already at $version — tag $version once this run is green"
+          fi
+
   # Type checking and the lints, over both workspaces. Clippy is denied
   # warnings, matching the "nothing lands with a warning" rule the dev cycle
   # states; `--all-targets` so test and bench code is linted too.
