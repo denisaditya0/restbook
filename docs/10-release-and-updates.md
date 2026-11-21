@@ -294,8 +294,15 @@ label moves.
 ## What the app does with it
 
 - On launch, if `settings.check_updates` is true and a manifest URL is
-  configured, one background check runs and nothing else — an available version
-  becomes a flash message pointing at Settings.
+  configured, one background check runs. An available version offers itself in
+  a dialog — *Install now* / *Later* / *Skip this version* — rather than only a
+  flash pointing at Settings. A skip is remembered in `settings.json` so the
+  same version is not offered again. The button install path is unchanged:
+  `Updates::install` downloads, verifies the `sha256` and hands the package to
+  the OS.
+- Nothing installs without a click. Auto-install is gated on signing (`R4`):
+  until a build carries a signature, an unattended update means a compromised
+  release channel installs itself on every machine.
 - Settings › Updates always checks on demand, shows the compiled version, and
   names the manifest URL it reads. It renders its own state inline — one button
   whose meaning follows it (Check now, Download & install, busy), and one sentence
