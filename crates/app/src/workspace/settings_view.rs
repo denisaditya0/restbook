@@ -67,7 +67,7 @@ pub(crate) fn open(
             history_page(&settings),
             privacy_page(&workspace),
             updates_page(&settings, &updates),
-            storage_page(&workspace_root),
+            storage_page(&workspace_root, &workspace),
             about_page(),
         ];
 
@@ -193,13 +193,111 @@ fn updates_page(settings: &Entity<Settings>, updates: &Entity<Updates>) -> Setti
         )
 }
 
-/// Storage: where this session reads and writes. Read-only, but useful in a bug
-/// report and otherwise invisible.
-fn storage_page(workspace_root: &Option<PathBuf>) -> SettingPage {
+/// Storage: where this session reads and writes. The rows are facts for a bug
+/// report; when the app is not in a workspace, one row is a control that makes
+/// a folder into one.
+fn storage_page(
+    workspace_root: &Option<PathBuf>,
+    workspace: &WeakEntity<Workspace>,
+) -> SettingPage {
+    let mut group = SettingGroup::new().item(storage_item(workspace_root));
+    if workspace_root.is_none() {
+        group = group.item(enable_workspace_item(workspace.clone()));
+    }
     SettingPage::new("Storage")
         .icon(IconName::HardDrive)
-        .description("Where this session reads and writes. Read-only.")
-        .group(SettingGroup::new().item(storage_item(workspace_root)))
+        .description("Where this session reads and writes.")
+        .group(group)
+}
+
+/// Make a folder into a workspace root.
+///
+/// The choice only takes effect on the next launch: the store and every pane are
+/// built from the root at startup, so switching in place would rebuild the app
+/// mid-dialog. Saying so in the row is cheaper than pretending the button did
+/// something this frame.
+fn enable_workspace_item(workspace: WeakEntity<Workspace>) -> SettingItem {
+    SettingItem::new(
+        "Workspace",
+        SettingField::render(move |_, _, _| {
+            let workspace = workspace.clone();
+            Button::new("settings-enable-workspace")
+                .label("Choose a folder\u{2026}")
+                .outline()
+                .on_click(move |_, window, cx| {
+                    choose_workspace_folder(workspace.clone(), window, cx)
+                })
+                .into_any_element()
+        }),
+    )
+    .description(
+        "Keep collections and environments as files in a folder you choose, so \
+         they can be shared or committed. Takes effect the next time restbook \
+         starts.",
+    )
+    .keywords(["workspace", "folder", "enable", "share", "git", "files"])
+}
+
+/// Pick a folder, then write the marker into it.
+///
+/// The picker is the platform's, through GPUI, so no dialog dependency is
+/// involved. The result is reported as a flash on the workspace rather than in
+/// this dialog: the folder chooser closes over it, and a message the user
+/// cannot see is the same as no message.
+fn choose_workspace_folder(workspace: WeakEntity<Workspace>, _window: &mut Window, cx: &mut App) {
+    let paths = cx.prompt_for_paths(PathPromptOptions {
+        files: false,
+        directories: true,
+        multiple: false,
+        prompt: Some("Choose a folder for the workspace".into()),
+    });
+
+    // `spawn` rather than `spawn_in`: the oneshot carries the answer on its own,
+    // so the task needs no window to run on.
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let Ok(Ok(Some(paths))) = paths.await else {
+            return;
+        };
+        let Some(dir) = paths.into_iter().next() else {
+            return;
+        };
+
+        let (message, failed) = match storage::enable_workspace(&dir) {
+            Ok(()) => (
+                format!(
+                    "Workspace enabled at {}. Restart restbook to open it.",
+                    dir.display()
+                ),
+                false,
+            ),
+            Err(storage::EnableWorkspaceError::AlreadyAWorkspace) => (
+                format!("{} is already a workspace folder.", dir.display()),
+                true,
+            ),
+            Err(storage::EnableWorkspaceError::NotADirectory) => {
+                (format!("{} is not a folder.", dir.display()), true)
+            }
+            Err(storage::EnableWorkspaceError::WriteFailed) => (
+                format!(
+                    "Couldn\u{2019}t write the workspace marker into {}.",
+                    dir.display()
+                ),
+                true,
+            ),
+        };
+
+        let kind = if failed {
+            crate::workspace::chrome::FlashKind::Error
+        } else {
+            crate::workspace::chrome::FlashKind::Success
+        };
+        workspace
+            .update(cx, |workspace, cx| {
+                workspace.notice_flash(kind, message, cx)
+            })
+            .ok();
+    })
+    .detach();
 }
 
 /// About: the identity the operating system is shown.
@@ -658,10 +756,6 @@ fn storage_rows(workspace_root: &Option<PathBuf>) -> Vec<(String, String)> {
         None => vec![
             ("Mode".to_owned(), "Local database".to_owned()),
             ("Data directory".to_owned(), data_dir.display().to_string()),
-            (
-                "Enable a workspace".to_owned(),
-                "add a restbook.json marker to a folder".to_owned(),
-            ),
         ],
     };
 

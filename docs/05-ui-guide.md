@@ -826,8 +826,9 @@ visible to every observing pane before the dialog closes.
 The dialog is a **category rail over one page**, the way Zed presents
 preferences: `General` (appearance, theme, zoom, response formatting, layout),
 `History` (search limit and retention), `Privacy` (clear history, clear
-cookies), `Updates`, `Storage` (read-only paths), and `About` (the branding
-identity). The kit's `Settings` component supplies the rail, the page header,
+cookies), `Updates`, `Storage` (the paths in use, plus a folder picker that
+makes a folder into a workspace when the app is not already in one), and `About`
+(the branding identity). The kit's `Settings` component supplies the rail, the page header,
 the per-page search field, and the reset control; each page is composed from
 `SettingItem`s so a control is a row, not a new layout.
 

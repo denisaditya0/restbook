@@ -1149,6 +1149,20 @@ impl Workspace {
         cx.notify();
     }
 
+    /// [`Self::flash`] for a dialog that holds only a weak handle here.
+    ///
+    /// Settings reports the outcome of a folder choice from inside its own
+    /// callback, where the workspace is reached as `WeakEntity`; without this
+    /// the message would have to be dropped or routed through a second action.
+    pub(crate) fn notice_flash(
+        &mut self,
+        kind: chrome::FlashKind,
+        message: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        self.flash(kind, message, cx);
+    }
+
     /// Offer a one-step undo for the delete that just landed.
     ///
     /// The captured value rides in the action's callback: when the toast
