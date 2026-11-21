@@ -461,39 +461,91 @@ Refs: `docs/05-ui-guide.md` ("Run and verify"), `scripts/dev.sh`.
 
 ### 6.5 `workspace/mod.rs` is one impl block holding five jobs — **P3**
 
-**Still open.** The largest file in the repository, and the one every pane
-change touches.
+**Still open.** Scheduled as `0.1.5`'s whole content — the split is its own
+release, never the tail of a feature lane. That is the correction: inside
+`0.1.4` it was the last item of a release whose visible work kept displacing
+it, and it slipped twice. `test_support.rs` landed in `0.1.4` so the tests have
+a harness to move onto.
 
-At the time of writing it is 3,891 lines, of which about 570 are tests: roughly
-3,300 lines of code in a single `impl Workspace`. That block owns the dock
-layout, tab state, save and delete dialogs, undo, notices, the status line, and
-persistence. `panels/response.rs` is next at 2,444 and `panels/collections.rs`
-at 2,331, but those are panes whose surface is genuinely large; the canvas is
-not supposed to be.
+At the time of writing it is 4,108 lines, of which 601 are tests: roughly 3,500
+lines of code in a single `impl Workspace` spanning `new` to `status`. That block
+owns the dock layout, tab state, save and delete dialogs, undo, notices, the
+status line, the launch update offer, and persistence. `panels/response.rs` is
+next at 2,859 (2,000 code) and `panels/collections.rs` at 2,331 (1,996 code),
+but those are panes whose surface is genuinely large; the canvas is not supposed
+to be.
 
 The cost is not line count by itself. It is that a new feature lands in this
 file by default, so two unrelated changes conflict, and reviewing a change
 directed at tabs means reading save, undo, and layout too. `chrome.rs` holds two
 bars and the flash in 623 lines, which is the size this codebase works well at.
 
-**Fix:** three coherent modules out of the canvas, in this order, each a
+**Fix:** five coherent modules out of the canvas, in this order, each a
 behaviour-neutral move:
 
 1. **Tabs** — `Tab`, `TabId`, `Tabs`, `select_tab`, `close_tab`, `move_tab`,
-   `snapshot_active`, `adopt_active`, `push_tabs` (~600 lines).
+   `handle_tab_action`, `snapshot_active`, `adopt_active`, `push_tabs` (~600
+   lines).
 2. **Delete and undo** — `PendingDelete`, `Deleted`, `snapshot_delete`,
-   `restore`, `deletion_landed` (~300 lines).
+   `restore`, `deletion_landed`, `undo_delete` (~300 lines).
 3. **Persistence** — `install_layout`, `save_layout`, `flush_draft`,
-   `persist_draft`, completing the move into `workspace/persistence.rs`.
+   `persist_draft`, `flush_leaving_draft`, completing the move into
+   `workspace/persistence.rs`.
+4. **Updates** — `check_updates_on_launch`, `open_update_offer_dialog`,
+   `should_offer` (~150 lines). It arrived in `0.1.4` and has no dependency on
+   the rest of the canvas.
+5. **Dock and flash** — `reveal_panel`, `close_panel`, `toggle_sidebar`,
+   `toggle_tools`, `dock_showing`, `panel_visible`, and the flash cluster
+   (`flash`, `flash_undo`, `set_flash`, `dismiss_flash`, `schedule_flash_clear`)
+   (~350 lines).
 
-`workspace/tabs.rs` already exists and holds `TabId` and `TabState`, so (1) is
-an extension of a decision already made rather than a new one.
+Steps 1 and 3 extend decisions already made: `workspace/tabs.rs` holds `TabId`
+and `TabState`, and `workspace/persistence.rs` already owns the layout file.
+Steps 4 and 5 were not separate jobs when this item was written; they became
+visible once the update offer landed on the canvas.
 
-**Do not** fold this into a lane: it touches the file every other fix touches,
-so it wants a pull request with nothing else in flight. No user-visible change,
-so no capture; the suite passing before and after is the evidence.
+**Do not** fold this into a feature lane. It occupies `0.1.5` whole, in a PR
+with nothing else in flight, because it touches the file every other fix
+touches. No user-visible change, so no capture; the suite passing before and
+after is the evidence.
 
-Refs: `crates/app/src/workspace/mod.rs`, `crates/app/src/workspace/tabs.rs`.
+**The tests move with it.** `test_support.rs` (landed in `0.1.4`) gives the
+split a harness: `init_ui` installs the theme before any pane snapshots its
+palette and reduces motion, and `DataDir` points `RESTBOOK_DATA_DIR` at a
+temporary directory so a test can open a real `Workspace` instead of building
+panes by hand. Three private helpers are called from the test module
+(`wrap_index`, `close_needs_confirmation`, `close_tabs_copy` for tabs;
+`snapshot_delete`, `deletion_landed` for delete/undo), so their visibility drops
+to `pub(super)` as they move. `folder_items`, `removed_item` and
+`contains_item` are reached from the live `Deleted::restore` path — they are not
+dead, and a move must carry them.
+
+**A worked precedent.** Zedis (`github.com/vicanso/zedis`), a GPUI Kit desktop
+client of about this size, split its own `src/root.rs` this way and recorded it
+in `docs/agents/refactor-plan.md`. Its root was 1,440 lines and is 946; the tab
+strip moved to `root/tabs.rs`, the action listeners to `root/handlers.rs`, the
+desktop-only fields to a `root/desktop.rs` sub-struct, and the methods stayed
+inherent `impl Zedis` blocks in those files, re-exported from the parent. That
+is this item's shape, arrived at independently — and it confirms the plan is
+mechanical rather than inventive.
+
+The same document is the source of two corrections worth carrying:
+
+- **The field count is a separate, later job.** Their state struct reached 76
+  fields and 282 methods; they split it only after the files, by renaming every
+  field in a copy and letting `cargo check` report each access, then grouping
+  by which methods touch which fields, and keeping public methods as one-line
+  delegates. Our ~30 `Workspace` fields should wait for the same treatment.
+- **A long `render` is fixed by method extraction, not a module.** They took
+  nine render functions of 450–685 lines down to 56–206 by naming the sections
+  they already drew, with no layout change. That is the cheaper fix for
+  `panels/collections.rs`'s 403-line render block, and it does not touch this
+  item.
+
+Refs: `crates/app/src/workspace/mod.rs`, `crates/app/src/workspace/tabs.rs`,
+`crates/app/src/workspace/send.rs` (the `impl Workspace` in a sibling file that
+already proves the mechanism here).
+
 ### 6.6 Two type scales: rem helpers and `Metrics` px disagree — **P2**
 
 **Still open.** The panes render their text two ways, and the two do not give
