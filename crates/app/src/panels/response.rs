@@ -11,6 +11,7 @@ use gpui_kit::base::{
 };
 use gpui_kit::component::button::*;
 use gpui_kit::component::highlighter::{HighlightTheme, SyntaxHighlighter};
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::tab::{TabBar, TabVariant};
@@ -123,11 +124,78 @@ pub(crate) struct ResponsePanel {
     /// stay inside the header band at a narrow pane instead of pushing the
     /// actions beside them out of the window.
     tabs_scroll: ScrollHandle,
+    /// The find query and its field (U56). Empty means the find row is closed.
+    find: Entity<InputState>,
+    /// Matches for `query` in the body rows, recomputed when the query or the
+    /// decoded body changes rather than per frame. `(row, byte offset in row)`
+    /// for each match start, plus the index the arrows are centred on.
+    finding: Option<Finding>,
     focus_handle: FocusHandle,
+}
+
+/// The mark runs for one row: each hit on it, as `start..start + len`.
+///
+/// `hits` is `(row, byte offset, length)` for the whole body, so the row index
+/// selects the ones that belong here. Offsets index the lowercased copy the
+/// search scanned; that is only safe for painting, never for slicing.
+fn mark_runs(
+    row: &str,
+    hits: &[(usize, usize, usize)],
+    index: usize,
+    style: &HighlightStyle,
+) -> Vec<(Range<usize>, HighlightStyle)> {
+    let width = row.len();
+    hits.iter()
+        .filter(|(at, _, _)| *at == index)
+        .filter_map(|(_, start, len)| {
+            let end = (start + len).min(width);
+            (*start < end).then_some((*start..end, *style))
+        })
+        .collect()
+}
+
+/// Every match of `query` across `rows`, in reading order.
+///
+/// Case-insensitive, because a body is text a user is scanning rather than a
+/// true identifier they are locating exactly. An empty query matches nothing:
+/// the find row still draws (so the field keeps focus while it is cleared) but
+/// the count reads "No matches" instead of claiming every byte.
+fn find_rows(rows: &[SharedString], query: &str) -> Vec<(usize, usize, usize)> {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    let mut hits = Vec::new();
+    for (index, row) in rows.iter().enumerate() {
+        let haystack = row.to_lowercase();
+        let mut from = 0;
+        // Deliberately not overlapping: `aa` in `aaa` is one match, not two.
+        // The offsets index the lowercased copy, which is only safe because
+        // this is used for painting a mark, never for slicing the original.
+        while let Some(offset) = haystack[from..].find(&needle) {
+            let at = from + offset;
+            hits.push((index, at, needle.len()));
+            from = at + needle.len();
+        }
+    }
+    hits
 }
 
 /// One syntax run: a byte range and the style it paints in.
 type HighlightRun = (Range<usize>, HighlightStyle);
+
+/// Matches for one query, flattened across the rows so next/previous is an
+/// index rather than a search. Row `None` is the raw block, which is a single
+/// line; `Some(n)` is row `n` of the numbered view.
+struct Finding {
+    /// The query these were computed for, so a stale set is never shown.
+    query: String,
+    /// `(row index, byte offset, length)` in reading order.
+    hits: Vec<(usize, usize, usize)>,
+    /// The hit the arrows last moved to; `None` until one is chosen, which is
+    /// what makes the count read "3 matches" rather than "1 of 3".
+    current: Option<usize>,
+}
 
 /// A rendered body, keyed by the record bytes it came from. See
 /// [`ResponsePanel::display`].
@@ -630,6 +698,7 @@ impl ResponsePanel {
         document: Entity<Document>,
         store: Arc<dyn Store>,
         settings: Entity<Settings>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         // Any change to the document — a finished send, an error, a cancel —
@@ -649,6 +718,14 @@ impl ResponsePanel {
         .detach();
 
         let pretty = settings.read(cx).current().pretty_responses;
+        let find = cx.new(|cx| InputState::new(window, cx).placeholder("Find in response"));
+        // The field notifies its own state, not this pane, so the matches have
+        // to be recomputed once per keystroke rather than on every paint.
+        cx.observe(&find, |this, _, cx| {
+            this.refresh_finding(cx);
+            cx.notify();
+        })
+        .detach();
         let mut panel = Self {
             palette: Palette::new(cx),
             metrics: Metrics::current(cx),
@@ -663,6 +740,8 @@ impl ResponsePanel {
             tab: ResponseTab::Body,
             display: None,
             tabs_scroll: ScrollHandle::new(),
+            find,
+            finding: None,
             focus_handle: cx.focus_handle(),
         };
         panel.sync_history(cx);
@@ -1010,6 +1089,150 @@ impl ResponsePanel {
             .into_any_element()
     }
 
+    /// Whether the body is drawn as numbered rows or as the raw block. Both
+    /// shapes get find marks, so this decides which rows the matches are
+    /// computed against.
+    fn numbered(&self) -> bool {
+        self.pretty
+            && self
+                .display
+                .as_ref()
+                .map(|cache| cache.lines.len())
+                .unwrap_or(0)
+                <= MAX_NUMBERED_LINES
+    }
+
+    /// Recompute the matches when the query or the decoded body changed.
+    ///
+    /// Called from the input's own change observer and from `body_for_display`,
+    /// never from paint: a scroll repaints continuously, and rescanning a
+    /// quarter-megabyte body on every frame is the cost this exists to avoid.
+    fn refresh_finding(&mut self, cx: &mut Context<Self>) {
+        let query = self.find.read(cx).value().to_string();
+        let Some(cache) = self.display.as_ref() else {
+            self.finding = None;
+            return;
+        };
+
+        // Same shape rule as the body view, so a match never points at a row
+        // the user cannot see.
+        let hits = if self.numbered() {
+            find_rows(&cache.lines, &query)
+        } else {
+            find_rows(std::slice::from_ref(&cache.text), &query)
+        };
+
+        // Keep the current position only while the query is the same, so
+        // typing narrows the set from the top rather than jumping to an index
+        // that no longer means anything.
+        let current = self
+            .finding
+            .as_ref()
+            .filter(|old| old.query == query)
+            .and_then(|old| old.current)
+            .filter(|index| *index < hits.len());
+        self.finding = Some(Finding {
+            query,
+            hits,
+            current,
+        });
+    }
+
+    /// Move to the next or previous match and return it, wrapping at the ends.
+    ///
+    /// The first press after typing picks the first match rather than the
+    /// second, which is what makes Enter behave like the field's own "go".
+    fn step_match(
+        &mut self,
+        forward: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<(usize, usize, usize)> {
+        self.refresh_finding(cx);
+        let finding = self.finding.as_mut()?;
+        if finding.hits.is_empty() {
+            return None;
+        }
+        let total = finding.hits.len();
+        let next = match (finding.current, forward) {
+            (None, _) => {
+                if forward {
+                    0
+                } else {
+                    total - 1
+                }
+            }
+            (Some(current), true) => (current + 1) % total,
+            (Some(current), false) => (current + total - 1) % total,
+        };
+        finding.current = Some(next);
+        cx.notify();
+        Some(finding.hits[next])
+    }
+
+    /// The find row under the body toolbar: the query field, the count, and
+    /// next/previous. Absent until the query is non-empty, so the toolbar is not
+    /// permanently wider than it needs to be.
+    fn render_find_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = &self.palette;
+        let metrics = &self.metrics;
+        let (hits, current) = self
+            .finding
+            .as_ref()
+            .map(|finding| (finding.hits.len(), finding.current))
+            .unwrap_or((0, None));
+        let count = match (hits, current) {
+            (0, _) => "No matches".to_owned(),
+            (total, Some(index)) => format!("{} of {total}", index + 1),
+            (total, None) => format!("{total} matches"),
+        };
+
+        h_flex()
+            .flex_none()
+            .items_center()
+            .gap(px(metrics.space_xs))
+            .px(px(metrics.space_md))
+            .py(px(metrics.space_xs))
+            .border_b_1()
+            .border_color(palette.border)
+            .debug_selector(|| "response-find-row".to_owned())
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(Input::new(&self.find).id("response-find")),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_xs()
+                    .text_color(palette.muted)
+                    .debug_selector(|| "response-find-count".to_owned())
+                    .child(count),
+            )
+            .child(
+                Button::new("find-prev")
+                    .icon(IconName::ChevronUp)
+                    .ghost()
+                    .compact()
+                    .debug_selector(|| "response-find-prev".to_owned())
+                    .tooltip("Previous match")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.step_match(false, cx);
+                    })),
+            )
+            .child(
+                Button::new("find-next")
+                    .icon(IconName::ChevronDown)
+                    .ghost()
+                    .compact()
+                    .debug_selector(|| "response-find-next".to_owned())
+                    .tooltip("Next match")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.step_match(true, cx);
+                    })),
+            )
+    }
+
     /// The body's own toolbar: the format switch and both copy controls.
     ///
     /// These describe the payload, so they belong beside it rather than in the
@@ -1025,48 +1248,69 @@ impl ResponsePanel {
         let (summary, _) = summary_for(response, palette);
         let copy_text = summary;
 
-        h_flex()
+        let find_open = !self.find.read(cx).value().is_empty();
+        let find_button = Button::new("find-body")
+            .icon(IconName::Search)
+            .ghost()
+            .compact()
+            .debug_selector(|| "response-find-toggle".to_owned())
+            .tooltip("Find in the body")
+            .on_click(cx.listener(|this, _, window, cx| {
+                log::info!(target: "restbook_app::ui", "response: find");
+                this.find.update(cx, |state, cx| {
+                    state.focus_handle(cx).focus(window, cx);
+                });
+            }));
+
+        v_flex()
             .flex_none()
-            .items_center()
-            .gap(px(self.metrics.space_xs))
-            .px(px(self.metrics.space_md))
-            .py(px(self.metrics.space_xs))
-            .border_b_1()
-            .border_color(palette.border)
             .debug_selector(|| "response-body-toolbar".to_owned())
-            .child(self.render_format_switch(response, cx))
-            .child(div().flex_1())
             .child(
-                Button::new("copy-body")
-                    .icon(IconName::ClipboardCopy)
-                    .ghost()
-                    .compact()
-                    .debug_selector(|| "response-copy-body".to_owned())
-                    .tooltip("Copy the body as displayed")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        log::info!(target: "restbook_app::ui", "response: copy body");
-                        let response = this.document.read(cx).response.clone();
-                        if let Some(response) = response {
-                            let (body, _) = this.body_for_display(&response, window, cx);
-                            // The cache hands back a `SharedString`; the
-                            // clipboard wants an owned string, and a copy is a
-                            // user gesture so paying for it here is fine.
-                            cx.write_to_clipboard(ClipboardItem::new_string(String::from(body)));
-                        }
-                    })),
+                h_flex()
+                    .items_center()
+                    .gap(px(self.metrics.space_xs))
+                    .px(px(self.metrics.space_md))
+                    .py(px(self.metrics.space_xs))
+                    .border_b_1()
+                    .border_color(palette.border)
+                    .child(self.render_format_switch(response, cx))
+                    .child(div().flex_1())
+                    .child(find_button)
+                    .child(
+                        Button::new("copy-body")
+                            .icon(IconName::ClipboardCopy)
+                            .ghost()
+                            .compact()
+                            .debug_selector(|| "response-copy-body".to_owned())
+                            .tooltip("Copy the body as displayed")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                log::info!(target: "restbook_app::ui", "response: copy body");
+                                let response = this.document.read(cx).response.clone();
+                                if let Some(response) = response {
+                                    let (body, _) = this.body_for_display(&response, window, cx);
+                                    // The cache hands back a `SharedString`; the
+                                    // clipboard wants an owned string, and a copy is a
+                                    // user gesture so paying for it here is fine.
+                                    cx.write_to_clipboard(ClipboardItem::new_string(String::from(
+                                        body,
+                                    )));
+                                }
+                            })),
+                    )
+                    .child(
+                        Button::new("copy-summary")
+                            .icon(IconName::Copy)
+                            .ghost()
+                            .compact()
+                            .debug_selector(|| "response-copy-summary".to_owned())
+                            .tooltip("Copy the status, time, and size")
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                log::info!(target: "restbook_app::ui", "response: copy summary");
+                                cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
+                            })),
+                    ),
             )
-            .child(
-                Button::new("copy-summary")
-                    .icon(IconName::Copy)
-                    .ghost()
-                    .compact()
-                    .debug_selector(|| "response-copy-summary".to_owned())
-                    .tooltip("Copy the status, time, and size")
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        log::info!(target: "restbook_app::ui", "response: copy summary");
-                        cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
-                    })),
-            )
+            .children(find_open.then(|| self.render_find_row(cx)))
             .into_any_element()
     }
 
@@ -1127,6 +1371,30 @@ impl ResponsePanel {
                 .map(|cache| cache.plain.clone())
                 .unwrap_or_default();
             let styled = StyledText::new(body.clone()).with_highlights(spans.iter().cloned());
+            // The raw block is one row, so every hit is on row 0. The marks are
+            // appended after the syntax runs so a highlighted token keeps its
+            // colour.
+            let match_style = HighlightStyle {
+                background_color: Some(self.palette.search_match),
+                ..Default::default()
+            };
+            let hits = self
+                .finding
+                .as_ref()
+                .map(|finding| finding.hits.clone())
+                .unwrap_or_default();
+            let styled = {
+                let mut all: Vec<(Range<usize>, HighlightStyle)> = spans
+                    .iter()
+                    .map(|(range, style)| (range.clone(), *style))
+                    .collect();
+                all.extend(mark_runs(&body, &hits, 0, &match_style));
+                if all.is_empty() {
+                    styled
+                } else {
+                    styled.with_highlights(all)
+                }
+            };
             return div()
                 .id("response-body")
                 // Read by the render test to compare the content width against
@@ -1186,6 +1454,17 @@ impl ResponsePanel {
         let number_pad = px(self.metrics.space_sm);
         let subtle = palette.subtle;
         let selection = palette.selection;
+        // Resolved once per frame: the match style is the same for every row, and
+        // the set of matching rows is small even when the body is not.
+        let match_style = HighlightStyle {
+            background_color: Some(palette.search_match),
+            ..Default::default()
+        };
+        let hits_by_row: Vec<(usize, usize, usize)> = self
+            .finding
+            .as_ref()
+            .map(|finding| finding.hits.clone())
+            .unwrap_or_default();
 
         div()
             .id("response-body")
@@ -1231,10 +1510,21 @@ impl ResponsePanel {
                                                     .map(Vec::as_slice)
                                                     .unwrap_or(&[]);
                                                 let styled = StyledText::new(lines[index].clone());
-                                                let styled = if spans.is_empty() {
+                                                // The search mark is appended after the syntax
+                                                // runs, so a highlighted token keeps its colour
+                                                // and only gains a background.
+                                                let mut all: Vec<(Range<usize>, HighlightStyle)> =
+                                                    spans.to_vec();
+                                                all.extend(mark_runs(
+                                                    &lines[index],
+                                                    &hits_by_row,
+                                                    index,
+                                                    &match_style,
+                                                ));
+                                                let styled = if all.is_empty() {
                                                     styled
                                                 } else {
-                                                    styled.with_highlights(spans.iter().cloned())
+                                                    styled.with_highlights(all)
                                                 };
                                                 // The gutter is a sibling, not part of this
                                                 // run, so a copied drag contains body text
@@ -1711,7 +2001,9 @@ impl Render for ResponsePanel {
 mod tests {
     // Named imports only: `gpui_kit::*` brings in a `test` macro that shadows
     // `#[test]`, and `use super::*` would drag it in.
-    use super::{display_key, highlights_by_line, response_language, summary_line};
+    use super::{
+        display_key, find_rows, highlights_by_line, mark_runs, response_language, summary_line,
+    };
     use gpui_kit::HighlightStyle;
 
     #[test]
@@ -1731,6 +2023,46 @@ mod tests {
         for pair in spans.windows(2) {
             assert_eq!(pair[0].0.end, pair[1].0.start);
         }
+    }
+
+    /// A find is case-insensitive and reports every row, in reading order, so
+    /// next/previous can walk one flat list instead of searching per row.
+    #[test]
+    fn find_reports_every_match_across_rows_in_order() {
+        let rows: Vec<gpui_kit::SharedString> =
+            vec!["{\"Status\": \"OK\"}".into(), "  \"status\": \"ok\"".into()];
+        let hits = find_rows(&rows, "status");
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0], (0, 2, 6));
+        assert_eq!(hits[1], (1, 3, 6));
+    }
+
+    /// An empty or whitespace-only query matches nothing. Otherwise clearing
+    /// the field would claim to match every position, and the count would read
+    /// "412 matches" for a query the user just deleted.
+    #[test]
+    fn an_empty_query_finds_nothing() {
+        let rows: Vec<gpui_kit::SharedString> = vec!["abc".into()];
+        assert!(find_rows(&rows, "").is_empty());
+        assert!(find_rows(&rows, "   ").is_empty());
+    }
+
+    /// `aaa` searched for `aa` is one match, not two: matches do not overlap,
+    /// which is what a reader expects from a highlight that walks forwards.
+    #[test]
+    fn matches_do_not_overlap() {
+        let rows: Vec<gpui_kit::SharedString> = vec!["aaa".into()];
+        assert_eq!(find_rows(&rows, "aa"), vec![(0, 0, 2)]);
+    }
+
+    /// A mark covers exactly the matched bytes, and only on its own row.
+    #[test]
+    fn a_mark_covers_the_match_on_its_row_only() {
+        let hits = vec![(0, 2, 3), (1, 0, 3)];
+        let style = HighlightStyle::default();
+        let marks = mark_runs("abcdef", &hits, 0, &style);
+        assert_eq!(marks.len(), 1);
+        assert_eq!(marks[0].0, 2..5);
     }
 
     #[test]
@@ -2036,7 +2368,7 @@ mod render_tests {
         last_url: Option<String>,
         origin: Origin,
     ) -> (Entity<ResponsePanel>, &mut VisualTestContext) {
-        let (view, cx) = cx.add_window_view(|_window, cx| {
+        let (view, cx) = cx.add_window_view(|window, cx| {
             let document = cx.new(|_| {
                 let mut document = Document::new();
                 let url = "http://sample/one-line".to_owned();
@@ -2047,7 +2379,7 @@ mod render_tests {
                 document
             });
             let settings = cx.new(|_| Settings::new(PathBuf::from("restbook-render-test.json")));
-            ResponsePanel::new(document, store, settings, cx)
+            ResponsePanel::new(document, store, settings, window, cx)
         });
         (view, cx)
     }

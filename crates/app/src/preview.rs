@@ -490,6 +490,7 @@ fn build_pane(
                 fixture.document.clone(),
                 fixture.store.clone(),
                 fixture.settings.clone(),
+                window,
                 cx,
             )
         })),

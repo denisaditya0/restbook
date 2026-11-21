@@ -641,7 +641,13 @@ impl Workspace {
             request: cx
                 .new(|cx| RequestPanel::new(document.clone(), variables.clone(), window, cx)),
             response: cx.new(|cx| {
-                ResponsePanel::new(document.clone(), store.clone(), settings.clone(), cx)
+                ResponsePanel::new(
+                    document.clone(),
+                    store.clone(),
+                    settings.clone(),
+                    window,
+                    cx,
+                )
             }),
             environment: cx
                 .new(|cx| EnvironmentPanel::new(variables.clone(), document.clone(), window, cx)),
