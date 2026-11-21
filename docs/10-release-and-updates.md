@@ -55,7 +55,7 @@ Versions are chosen by the size of the change, not by channel:
 
 | Change | Version |
 |---|---|
-| Bug fix, doc correction, CI change | patch — `0.1.2` |
+| Bug fix, doc correction, CI change | patch — `0.1.3` |
 | A batch of user-visible features | minor — `0.2.0` |
 | First release that promises compatibility, or a breaking change | major — `1.0.0` |
 
@@ -257,6 +257,12 @@ What `.github/workflows/release.yml` does, in order:
    version or the workflow fails rather than shipping a mislabeled build. The
    bump is its own commit on `master`, after the pull requests it covers are
    merged; `ci.yml` rejects one inside a pull request.
+
+   The tag is pushed **after** that commit's `ci.yml` run finishes green, not
+   alongside the bump: step 3 reads the check runs for the tag's SHA, and a tag
+   pushed early fails with "never ran for `<sha>`" — which is how a good tree
+   turns into a release that had to be re-tagged. `scripts/release.sh` does the
+   bump and prints the tag command; it never pushes one.
 2. **Verify** on a Linux runner: tag/version equality for both workspaces, and
    ancestry on the default branch.
 3. **Refuse a commit CI has not passed.** The verdict comes from `ci.yml`'s
@@ -291,7 +297,9 @@ label moves.
   configured, one background check runs and nothing else — an available version
   becomes a flash message pointing at Settings.
 - Settings › Updates always checks on demand, shows the compiled version, and
-  names the manifest URL it reads.
+  names the manifest URL it reads. It renders its own state inline — one button
+  whose meaning follows it (Check now, Download & install, busy), and one sentence
+  in the tone the state deserves.
 - `Outcome::Available` with no asset for this platform is still reported as an
   update, with the platform named: "newer exists, but nothing to install here".
 
@@ -306,7 +314,7 @@ them is on disk; each one is independent of the UI/engine milestone tables.
 | R2 | CI matrix | **3 of 6 done**: `.github/workflows/release.yml` builds Windows x86_64, macOS arm64 and Linux x86_64 on native runners, verifies tag/version/ancestry, runs the test suites, then publishes a draft→release with a derived channel manifest. The ARM64 and macOS Intel rows remain |
 | R3 | Installers | **Done on all three platforms, at different depths.** Windows: `scripts/package.sh` compiles `crates/app/packaging/restbook.iss` with Inno Setup when `ISCC.exe` is installed (the release workflow does), producing a per-user `.exe` with a Start-menu entry and an uninstaller. macOS: a `.dmg` with an `Applications` symlink (drag to install; no uninstaller beyond dragging the `.app` out). Linux: a `.deb` for `apt`, plus the portable tarball. Only the Windows package installs itself with a wizard |
 | R4 | Signing and notarization | Nothing signed. `sha256`/`signature` are already parsed from the manifest and unused, so the contract does not change when this lands |
-| R5 | Download and install | The updater fetches, compares, and reports. Nothing is downloaded or replaced, so a user who is told about a newer version still installs by hand |
+| R5 | Download and install | **Done.** Settings › Updates downloads this platform's asset, verifies it against the manifest's `sha256`, and hands it to the OS: Windows runs the installer and quits so the exe can be replaced; macOS and Linux open the package and stay running. `signature` is still parsed and unused (R4) |
 
 Until R2-R3 exist for a given target, a release is a **local artifact**, not a channel: build it
 with `sh scripts/package.sh --release` and hand it to whoever needs it. Note
@@ -326,7 +334,8 @@ version block; only the MSVC build in the R2 matrix has them.
   history is plaintext.
 - No AppImage, `.rpm`, or Flatpak: Debian-based distros are the only ones with a
   packaged install today.
-- No download/install phase — the app cannot apply an update yet.
+- No download/install phase on a platform whose manifest entry is missing: the
+  app says a newer version exists but has nothing to install here.
 - No delta updates, no mirrors, no self-hosted fallback.
 - Only three of six targets are built; the workflow does not yet produce the
   two ARM64 artifacts or the macOS Intel one.
