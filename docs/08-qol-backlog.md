@@ -412,11 +412,26 @@ Refs: `crates/app/src/main.rs`, `panels/response.rs` (`mod render_tests`).
 Render tests exercise every response shape, but there is no way to dump the
 element tree or a deterministic screenshot for a visual diff.
 
-**Fix:** a `#[cfg(test)]` helper that walks `VisualTestContext` bounds (already
-used by the horizontal-scroll tests) and writes a simple text tree; a real
-screenshot diff can wait.
+**Partly done.** `preview::tree` writes a deterministic bounds tree, and
+`response.rs` is the one pane that dumps it (`target/preview/response-numbered.txt`).
+Two gaps remain:
 
-Refs: `panels/response.rs` (`render_tests`), `02-ui-plan.md` U45.
+1. **No pane dumps a tree but the response pane**, so a change to the
+   Collections header or the Settings rows has no artifact at all. Extending
+   the dump is following an existing pattern: add `debug_selector`s, a
+   `TREE_SELECTORS` list, and one `write_tree` call.
+2. **No pixels.** The tree proves where a box landed, not whether it reads
+   well. GPUI has no headless renderer on Windows, so a real screenshot needs
+   Linux (Xvfb + Mesa lavapipe) or macOS (Metal). WSL Debian is a viable host
+   for the Linux half; nothing verifies that `--preview` renders under lavapipe
+   yet, so that is a spike, not a known-good setup.
+
+**Fix:** (1) first, for every pane that has a `render_tests` module; (2) only if
+pixel review is actually wanted, as a separate spike that either produces a
+capture or records why it cannot.
+
+Refs: `panels/response.rs` (`render_tests`), `src/preview.rs` (`tree`),
+`02-ui-plan.md` U45.
 
 ### 6.3 App crate holds everything, so preview needs the full dependency graph — **P3**
 
