@@ -70,6 +70,32 @@ fn the_changelog_entry_is_plain_prose() {
     );
 }
 
+/// The manifest's `notes` is the changelog entry alone, never the install block
+/// `docs/release-install.md` puts at the top of the release *page*.
+///
+/// The page is read in a browser by someone who has not installed the app; the
+/// manifest is read inside the app, where being told to download the installer
+/// is nonsense. `release.yml` prepended the block to both and 0.1.4 shipped
+/// with `<!-- restbook-install -->` rendered in the update dialog. The workflow
+/// now keeps the two apart; this fails if that ever rejoins.
+#[test]
+fn the_release_workflow_keeps_install_text_out_of_the_manifest() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows/release.yml");
+    let workflow = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+
+    // The `--arg notes` must be given the changelog entry, not the page body.
+    let binding = workflow
+        .lines()
+        .find(|line| line.contains("--arg notes"))
+        .expect("the manifest's jq expression moved; update this test");
+    assert!(
+        binding.contains("--arg notes \"$notes\""),
+        "the manifest's notes must be the changelog entry ($notes), not the release \
+         page's body ($body with the install block above it)",
+    );
+}
+
 /// The app's own manifest must agree with the root workspace, or the release
 /// publishes artifacts whose `latest.json` version the updater cannot match.
 #[test]

@@ -620,16 +620,9 @@ fn update_sentence(status: &updates::Status) -> Option<(String, Tone)> {
         }
         updates::Status::Available {
             latest,
-            notes,
             asset: Some(_),
-        } => {
-            let mut sentence = format!("restbook {latest} is available.");
-            if let Some(notes) = notes.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
-                sentence.push(' ');
-                sentence.push_str(notes);
-            }
-            (sentence, Tone::Info)
-        }
+            ..
+        } => (format!("restbook {latest} is available."), Tone::Info),
         updates::Status::Available { latest, .. } => (
             format!(
                 "restbook {latest} is available, but no build is published for {}.",
@@ -894,19 +887,20 @@ mod tests {
 
         let (text, tone) = update_sentence(&Status::Available {
             latest: "0.2.0".to_owned(),
-            notes: Some("Fixes the thing.".to_owned()),
             asset: Some(asset()),
         })
         .unwrap();
-        assert!(text.contains("0.2.0 is available"));
-        assert!(text.ends_with("Fixes the thing."));
+        // The status line says only that there is a newer version; the offer
+        // dialog carries what changed. Concatenating the changelog onto it
+        // turned the row into a wall of text, which is what 0.1.4 shipped when
+        // the manifest's notes still began with the install block.
+        assert_eq!(text, "restbook 0.2.0 is available.");
         assert_eq!(tone, Tone::Info);
 
         // A release with nothing for this machine is still news, but it is not
         // an install the page can offer.
         let (text, tone) = update_sentence(&Status::Available {
             latest: "0.2.0".to_owned(),
-            notes: None,
             asset: None,
         })
         .unwrap();

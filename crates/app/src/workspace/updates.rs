@@ -28,7 +28,6 @@ pub(crate) enum Status {
     },
     Available {
         latest: String,
-        notes: Option<String>,
         /// `None` when the release published nothing for this platform: newer
         /// exists, but not one this machine can install.
         asset: Option<Asset>,
@@ -104,13 +103,13 @@ impl Updates {
             Ok(updater::Outcome::UpToDate { current }) => Status::UpToDate { current },
             Ok(updater::Outcome::Available {
                 latest,
-                notes,
+                // The offer dialog is handed the notes straight from the
+                // outcome (`PendingUpdate`); the status is read by the Settings
+                // page, which needs only the version and whether a build
+                // exists. Carrying the prose here too made it dead weight.
+                notes: _,
                 asset,
-            }) => Status::Available {
-                latest,
-                notes,
-                asset,
-            },
+            }) => Status::Available { latest, asset },
             Err(error) => Status::Failed(format!("Couldn’t check for updates. {error}")),
         };
         cx.notify();
@@ -125,7 +124,6 @@ impl Updates {
     pub(crate) fn install_offered(&mut self, latest: String, asset: Asset, cx: &mut Context<Self>) {
         self.status = Status::Available {
             latest,
-            notes: None,
             asset: Some(asset.clone()),
         };
         self.install(asset, cx);
@@ -203,7 +201,6 @@ mod tests {
         assert!(with(Status::Checking).asset().is_none());
         assert!(with(Status::Available {
             latest: "0.2.0".to_owned(),
-            notes: None,
             asset: None,
         })
         .asset()

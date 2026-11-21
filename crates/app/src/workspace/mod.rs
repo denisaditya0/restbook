@@ -32,6 +32,7 @@ use gpui_kit::component::dock::{
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
+use gpui_kit::component::text::TextView;
 use gpui_kit::component::{h_flex, v_flex, WindowExt as _};
 use gpui_kit::*;
 
@@ -1169,7 +1170,6 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let settings = self.settings.clone();
-        let palette = Palette::new(cx);
         let metrics = Metrics::current(cx);
         // The download runs in an entity the dialog does not own, so it survives
         // the dialog closing the moment the button is pressed.
@@ -1224,14 +1224,16 @@ impl Workspace {
                             .text_sm()
                             .child(format!("restbook {latest} is available.")),
                     )
+                    // The notes are the changelog entry, which is Markdown. A
+                    // plain `div` printed `**` and `##` literally — 0.1.4's
+                    // release page showed the install block's HTML comment in
+                    // the dialog for exactly that reason. A scrollable band
+                    // keeps a long entry from stretching the dialog.
                     .child(
-                        div()
-                            .id("update-offer-notes")
-                            .max_h(px(240.))
-                            .overflow_y_scroll()
-                            .text_sm()
-                            .text_color(palette.muted)
-                            .child(notes.to_owned()),
+                        div().id("update-offer-notes").max_h(px(240.)).child(
+                            TextView::markdown("update-offer-notes-text", notes.to_owned())
+                                .scrollable(true),
+                        ),
                     ),
                 _ => v_flex().child(
                     div()
