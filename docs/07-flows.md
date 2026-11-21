@@ -43,9 +43,11 @@ sent. A saved `layout.json` restores the user's own arrangement by name.
 
 The center split is fixed to **Request over Response**: there is no command to
 make it horizontal or to move a pane into a dock. Panes can be focused and
-closed from the titlebar's **View** menu, the palette (`Focus <pane>` /
-`Close <pane>`), and each pane's own dock menu, and **Reset layout** restores
-this default. Rearranging the center is a deliberate non-goal for now.
+closed from the palette (`Focus <pane>` / `Close <pane>`) and each pane's own
+dock menu; Request and Response are also in the titlebar's **View** menu, which
+leaves out the three panes that already have a status-bar toggle. **Reset
+layout** restores this default. Rearranging the center is a deliberate non-goal
+for now.
 
 ## Global chrome (always visible)
 
@@ -62,10 +64,13 @@ this default. Rearranging the center is a deliberate non-goal for now.
 
 The titlebar's trailing History button was **removed**: the right dock now has
 its own toggle in the bottom-right corner, under the panel it opens. The window
-menu's **View** section lists every `PanelName` with a checkmark on the pane its
-dock is currently showing; clicking an entry reveals that pane and then focuses
-it (the same pair the palette's `FocusPanel` commands run). `Reset layout` sits
-at the end of that section and is the way back after a pane is closed.
+menu's **View** section lists the panes that have no corner toggle — Request and
+Response — with a checkmark on the pane its dock is currently showing; clicking
+an entry reveals that pane and then focuses it (the same pair the palette's
+`FocusPanel` commands run). Collections, History, and Environment are left out
+because each already has a corner control, and a second route one menu deep
+would be the same command twice. `Reset layout` sits at the end of that section
+and is the way back after a pane is closed, whichever route closed it.
 
 Note: the status code, duration, and size are **not** here — the response pane
 owns them (U43). The status bar answers "where did my data go" and "did anything

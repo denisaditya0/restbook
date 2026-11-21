@@ -553,10 +553,14 @@ impl RequestEditor {
     ///
     /// A single-line `InputState` registers no handler for Up/Down, and Escape
     /// propagates, so those keys reach the row as plain key-down events;
-    /// Ctrl+N / Ctrl+P are the same Emacs-style pair the URL list accepts. Enter
-    /// accepts as a fallback: the input's own `PressEnter` normally does it, and
+    /// Ctrl+N / Ctrl+P are the same Emacs-style pair the URL list accepts. Tab
+    /// and Enter accept: the input's own `PressEnter` normally does Enter, and
     /// an accept closes the list, so this only fires when that action was
-    /// missed. Tab is left to focus traversal.
+    /// missed.
+    ///
+    /// Tab accepts because `InputState` binds `tab` to `IndentInline`, which
+    /// would move the caret rather than take the highlighted row. The event is
+    /// stopped so that binding does not also run.
     fn value_popup_key(
         &mut self,
         value: Entity<InputState>,
@@ -583,8 +587,13 @@ impl RequestEditor {
         }
 
         let key = event.keystroke.key.as_str();
-        if key == "enter" && !modifiers.control && !modifiers.shift {
+        if matches!(key, "enter" | "tab") && !modifiers.control && !modifiers.shift {
             self.accept_value_completion(value, None, window, cx);
+            if key == "tab" {
+                // `InputState` binds `tab` to `IndentInline`; without this the
+                // accept would be followed by the input indenting its text.
+                cx.stop_propagation();
+            }
             return;
         }
 

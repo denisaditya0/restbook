@@ -525,11 +525,15 @@ impl RequestPanel {
     ///
     /// A single-line `InputState` registers no handler for Up/Down, and Escape
     /// propagates, so those keys reach this pane as plain key-down events.
-    /// Ctrl+N / Ctrl+P are the Emacs-style pair accepted here too, and Enter
-    /// accepts as a fallback: the input's own `PressEnter` normally does it, and
-    /// an accept closes the list, so this only fires when that action was
-    /// missed (the click and Enter paths must not disagree). Tab is left to
-    /// focus traversal.
+    /// Ctrl+N / Ctrl+P are the Emacs-style pair accepted here too, Tab and
+    /// Enter accept: the input's own `PressEnter` normally does Enter, and an
+    /// accept closes the list, so this only fires when that action was missed
+    /// (the click and Enter paths must not disagree).
+    ///
+    /// Tab accepts because `InputState` binds `tab` to `IndentInline`, which
+    /// would move the caret rather than take the highlighted row — the same
+    /// keystroke that accepts in the raw body's popover. The event is stopped
+    /// so that binding does not also run.
     fn url_popup_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if !self.url_popup.is_open() {
             return;
@@ -568,6 +572,11 @@ impl RequestPanel {
             cx.notify();
         } else if key == "enter" && !modifiers.control && !modifiers.shift {
             self.accept_url_completion(None, window, cx);
+        } else if key == "tab" && !modifiers.control && !modifiers.shift {
+            self.accept_url_completion(None, window, cx);
+            // `InputState` binds `tab` to `IndentInline`; without this the
+            // accept would be followed by the input indenting its own text.
+            cx.stop_propagation();
         }
     }
 
@@ -1566,6 +1575,56 @@ mod enter_tests {
         });
         cx.simulate_input("{{");
         press_enter(cx);
+
+        let url = cx.update(|_, cx| panel.read(cx).editor.read(cx).url_value(cx));
+        assert_eq!(url, "{{$uuid}}");
+    }
+
+    /// Press Tab the way a keyboard sends it: no text, so the input's own
+    /// `tab` binding is what would see it if the popup did not.
+    fn press_tab(cx: &mut gpui_kit::VisualTestContext) {
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+            window.dispatch_event(
+                gpui_kit::PlatformInput::KeyDown(gpui_kit::KeyDownEvent {
+                    keystroke: gpui_kit::Keystroke {
+                        modifiers: gpui_kit::Modifiers::default(),
+                        key: "tab".to_owned(),
+                        key_char: None,
+                    },
+                    is_held: false,
+                    prefer_character_input: false,
+                }),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+    }
+
+    /// U35: Tab takes the highlighted row in the URL bar's list.
+    ///
+    /// `InputState` binds `tab` to `IndentInline`, so before this the keystroke
+    /// moved the caret instead of accepting — and the accepted URL is the
+    /// assertion because the two outcomes are different text.
+    #[gpui_kit::test]
+    fn tab_accepts_a_url_completion(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let document = cx.update(|cx| cx.new(|_| Document::new()));
+        let variables =
+            cx.update(|cx| cx.new(|cx| Variables::new(Arc::new(MemoryStore::new()), cx)));
+
+        let (panel, cx) = cx.add_window_view(|window, cx| {
+            RequestPanel::new(document.clone(), variables.clone(), window, cx)
+        });
+        panel.update(cx, |panel, cx| {
+            panel.set_tabs(vec![blank_entry()], 0, cx);
+        });
+        cx.update(|window, cx| {
+            panel.update(cx, |panel, cx| panel.focus_url(window, cx));
+        });
+        cx.simulate_input("{{");
+        press_tab(cx);
 
         let url = cx.update(|_, cx| panel.read(cx).editor.read(cx).url_value(cx));
         assert_eq!(url, "{{$uuid}}");
