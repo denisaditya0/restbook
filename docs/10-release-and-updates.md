@@ -263,6 +263,13 @@ What `.github/workflows/release.yml` does, in order:
    pushed early fails with "never ran for `<sha>`" — which is how a good tree
    turns into a release that had to be re-tagged. `scripts/release.sh` does the
    bump and prints the tag command; it never pushes one.
+
+   **Tag it signed, with a message in the same command.** `tag.gpgSign=true`
+   and `gpg.format=ssh` are set here, so `git tag -s <version> -m "…"` signs
+   with the SSH key named by `user.signingkey`. Leave off `-m` and git opens an
+   editor for the message; with no `core.editor` configured that is `vi`, which
+   waits for input a scripted release never gives it. 0.1.4 was first tagged
+   unsigned for exactly that reason and had to be re-tagged.
 2. **Verify** on a Linux runner: tag/version equality for both workspaces, and
    ancestry on the default branch.
 3. **Refuse a commit CI has not passed.** The verdict comes from `ci.yml`'s
