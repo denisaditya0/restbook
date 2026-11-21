@@ -15,7 +15,6 @@ use gpui_kit::component::menu::{DropdownMenu, PopupMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::tab::{TabBar, TabVariant};
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, WindowExt as _};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use restbook_core::{HistoryHit, Origin, ResponseRecord, Store};
@@ -851,18 +850,20 @@ impl ResponsePanel {
     }
 
     /// The response header: what was received on the left, how it went on the
-    /// right — `Body | Headers 3 | Cookies` … `[JSON ⌄] [copy] 200 OK · 593 ms
-    /// · 12.17 KB [copy] · 🕘 1 minute ago`. One line, because the response is
-    /// read far more often than its headers are compared. Each copy button sits
-    /// by what it copies (body by the format switch, since the body is copied
-    /// *as displayed*); identical glyphs side by side left the reader guessing.
+    /// right — `Body | Headers 3 | Cookies` … `200 OK · 593 ms · 12.17 KB ·
+    /// 🕘 1 minute ago`. One line, because the response is read far more often
+    /// than its headers are compared.
+    ///
+    /// The copy controls are **not** here. They act on the body, which the
+    /// Headers and Cookies tabs do not show, so the header was offering a copy
+    /// of something absent from the tab it was drawn under. They live in the
+    /// body's own toolbar; see [`Self::render_body_toolbar`].
     fn render_header(&self, response: &ResponseRecord, cx: &mut Context<Self>) -> AnyElement {
         let palette = &self.palette;
         // One selectable run, not three spans of chrome: the summary the user
         // copies is exactly the one they see, and the role colors ride along as
         // highlight runs so nothing about the strip's look changes.
         let (summary, spans) = summary_for(response, &self.palette);
-        let copy_text = summary.clone();
 
         h_flex()
             .h(px(self.metrics.header_height))
@@ -885,31 +886,6 @@ impl ResponsePanel {
                     .debug_selector(|| "response-tabs".to_owned())
                     .child(self.render_tabs(response, cx)),
             )
-            // Body-only controls: the format switch and "copy body" describe the
-            // payload, which the Headers and Cookies tabs do not show.
-            .when(self.tab == ResponseTab::Body, |this| {
-                this.child(self.render_format_switch(response, cx)).child(
-                    Button::new("copy-body")
-                        .icon(IconName::ClipboardCopy)
-                        .ghost()
-                        .compact()
-                        .tooltip("Copy the body as displayed")
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            log::info!(target: "restbook_app::ui", "response: copy body");
-                            let response = this.document.read(cx).response.clone();
-                            if let Some(response) = response {
-                                let (body, _) = this.body_for_display(&response, window, cx);
-                                // The cache hands back a `SharedString`; the
-                                // clipboard wants an owned string, and a copy
-                                // is a user gesture so paying for it here is
-                                // fine.
-                                cx.write_to_clipboard(ClipboardItem::new_string(String::from(
-                                    body,
-                                )));
-                            }
-                        })),
-                )
-            })
             .child(
                 div()
                     .flex_none()
@@ -917,23 +893,11 @@ impl ResponsePanel {
                     .debug_selector(|| "response-summary".to_owned())
                     .child(SelectableLine::new(
                         "response-summary",
-                        SharedString::from(summary),
-                        StyledText::new(SharedString::from(copy_text.clone()))
-                            .with_highlights(spans),
+                        SharedString::from(summary.clone()),
+                        StyledText::new(SharedString::from(summary)).with_highlights(spans),
                         0,
                         palette.selection,
                     )),
-            )
-            .child(
-                Button::new("copy-summary")
-                    .icon(IconName::Copy)
-                    .ghost()
-                    .compact()
-                    .tooltip("Copy the status, time, and size")
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        log::info!(target: "restbook_app::ui", "response: copy summary");
-                        cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
-                    })),
             )
             .children(self.render_history(cx))
             .into_any_element()
@@ -1043,6 +1007,66 @@ impl ResponsePanel {
                 }
             }))
             .children(labels)
+            .into_any_element()
+    }
+
+    /// The body's own toolbar: the format switch and both copy controls.
+    ///
+    /// These describe the payload, so they belong beside it rather than in the
+    /// header, which also draws for the Headers and Cookies tabs. Moving them
+    /// here is what makes the header one line of facts — status, time, size —
+    /// with no controls whose target is off-screen.
+    ///
+    /// The summary copy stays even though the summary is selectable: a drag is
+    /// the fine-grained gesture, and the button is the one-click "give me the
+    /// whole thing" that does not depend on hitting a row boundary.
+    fn render_body_toolbar(&self, response: &ResponseRecord, cx: &mut Context<Self>) -> AnyElement {
+        let palette = &self.palette;
+        let (summary, _) = summary_for(response, palette);
+        let copy_text = summary;
+
+        h_flex()
+            .flex_none()
+            .items_center()
+            .gap(px(self.metrics.space_xs))
+            .px(px(self.metrics.space_md))
+            .py(px(self.metrics.space_xs))
+            .border_b_1()
+            .border_color(palette.border)
+            .debug_selector(|| "response-body-toolbar".to_owned())
+            .child(self.render_format_switch(response, cx))
+            .child(div().flex_1())
+            .child(
+                Button::new("copy-body")
+                    .icon(IconName::ClipboardCopy)
+                    .ghost()
+                    .compact()
+                    .debug_selector(|| "response-copy-body".to_owned())
+                    .tooltip("Copy the body as displayed")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        log::info!(target: "restbook_app::ui", "response: copy body");
+                        let response = this.document.read(cx).response.clone();
+                        if let Some(response) = response {
+                            let (body, _) = this.body_for_display(&response, window, cx);
+                            // The cache hands back a `SharedString`; the
+                            // clipboard wants an owned string, and a copy is a
+                            // user gesture so paying for it here is fine.
+                            cx.write_to_clipboard(ClipboardItem::new_string(String::from(body)));
+                        }
+                    })),
+            )
+            .child(
+                Button::new("copy-summary")
+                    .icon(IconName::Copy)
+                    .ghost()
+                    .compact()
+                    .debug_selector(|| "response-copy-summary".to_owned())
+                    .tooltip("Copy the status, time, and size")
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        log::info!(target: "restbook_app::ui", "response: copy summary");
+                        cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
+                    })),
+            )
             .into_any_element()
     }
 
@@ -1333,7 +1357,12 @@ impl ResponsePanel {
             .size_full()
             .child(self.render_header(response, cx))
             .child(match self.tab {
-                ResponseTab::Body => self.render_body(response, window, cx),
+                ResponseTab::Body => v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.render_body_toolbar(response, cx))
+                    .child(self.render_body(response, window, cx))
+                    .into_any_element(),
                 ResponseTab::Headers => self.render_headers(response),
                 ResponseTab::Cookies => self.render_cookies(response),
             })
@@ -2034,6 +2063,9 @@ mod render_tests {
         "response-pane",
         "response-summary",
         "response-tabs",
+        "response-body-toolbar",
+        "response-copy-body",
+        "response-copy-summary",
         "response-body-numbered-viewport",
         "response-body-numbered-content",
         "response-body-viewport",
@@ -2079,6 +2111,57 @@ mod render_tests {
         let path = tree::write_tree(cx, "response-numbered", TREE_SELECTORS)
             .expect("the tree dump should be writable");
         assert!(path.exists(), "{}", path.display());
+
+        cx.quit();
+    }
+
+    /// The copy controls belong to the body, not the header strip.
+    ///
+    /// The header also draws for the Headers and Cookies tabs, so a copy button
+    /// there offers a copy of something the current tab does not show. They
+    /// moved into the body's own toolbar, which only the Body tab draws. The
+    /// assertion is positional: each button's top edge is at or below the
+    /// toolbar's, and the toolbar is below the header's summary row.
+    #[test]
+    fn the_copy_controls_live_in_the_body_toolbar() {
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+
+        let (_view, cx) = open(&mut cx, Some(json_response("{\"status\": \"OK\"}")));
+        draw(cx);
+
+        let text = tree::bounds_tree(cx, "response-toolbar", TREE_SELECTORS);
+        let top_of = |selector: &str| -> f32 {
+            text.lines()
+                .filter(|line| line.contains(selector))
+                .find(|line| line.contains('@'))
+                .unwrap_or_else(|| panic!("{selector} should be in the tree:\n{text}"))
+                .split('@')
+                .nth(1)
+                .and_then(|rest| rest.split(',').nth(1))
+                .and_then(|top| top.split_whitespace().next())
+                .unwrap_or_else(|| panic!("a recorded top in {selector}"))
+                .parse()
+                .expect("a numeric top")
+        };
+
+        let summary = top_of("response-summary");
+        let toolbar = top_of("response-body-toolbar");
+        let copy_body = top_of("response-copy-body");
+        let copy_summary = top_of("response-copy-summary");
+
+        assert!(
+            toolbar > summary,
+            "the body toolbar should sit below the header summary: \
+             toolbar at {toolbar}, summary at {summary}"
+        );
+        for (name, top) in [("copy body", copy_body), ("copy summary", copy_summary)] {
+            assert!(
+                top >= toolbar,
+                "the {name} button should be inside the body toolbar: \
+                 button at {top}, toolbar at {toolbar}"
+            );
+        }
 
         cx.quit();
     }
