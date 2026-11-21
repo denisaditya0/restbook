@@ -713,24 +713,36 @@ the open-request strip lives in the request pane.
 ### Report the result of an action (the flash)
 
 A mutation the user cannot see the answer to — saving a request, creating a
-collection, deleting a node — is reported by a *flash*: the transient toast in
-`chrome::flash`, drawn bottom-right above the status bar. It exists because the
-usual route is unavailable. `Ctrl+S` and the tree's menus reach the workspace
-through `cx.subscribe`, and a subscribe callback is handed **no `Window`**, so
-`window.push_notification` cannot be called on that path.
+collection, deleting a node — is reported by a *flash*. It ends up in the kit's
+**notification layer**, because the usual route is unavailable: `Ctrl+S` and the
+tree's menus reach the workspace through `cx.subscribe`, and a subscribe
+callback is handed **no `Window`**, so `window.push_notification` cannot be
+called on that path.
 
-The flash lives on the workspace, not the pane: a pane is a dock panel, so a
-toast anchored to it would be clipped to the pane, and the workspace is the one
-place every path passes through. Panes report by emitting `Notice` (defined in
-`src/notice.rs`, carried by `CollectionsEvent::Notice` and
-`RequestEvent::Notice`) — `Done` for a success, `Failed` for a store error — and
-`Workspace::notice` routes it through `chrome::Flash::from_notice` to
-`Workspace::flash`. A new flash replaces the pending one and its timer, so two
-quick actions never clear each other.
+The workspace therefore *parks* the message and `render` issues it. Panes report
+by emitting `Notice` (defined in `src/notice.rs`, carried by
+`CollectionsEvent::Notice` and `RequestEvent::Notice`) — `Done` for a success,
+`Failed` for a store error — and `Workspace::notice` routes it through
+`chrome::Flash::from_notice` to `Workspace::flash`, which stores it in
+`pending_notice` and asks for a redraw. `render` drains that into
+`Workspace::issue_notice`, which is the only place with a `Window`.
+
+Two rules that follow from the parking seam:
+
+- **One id for every workspace notice** (`Notification::id::<WorkspaceNotice>`),
+  so a second message replaces the first instead of stacking. That is the
+  behaviour the hand-drawn toast had, and what a user expects of a confirmation.
+- **An undo offer sets `autohide(false)`**; the kit keeps a notification with an
+  action up until it is acted on or closed. The old hand-drawn toast needed its
+  own timer for this and no longer does.
+
+A notification is a window-level layer, drawn **above dialogs**. That is the
+reason for the move: the hand-drawn toast was part of the dock tree, so an open
+dialog covered it and a save reported from behind one was invisible.
 
 When you add a mutating action: have it emit `Notice` on the outcome rather than
 calling `push_notification`, and report the store's own error text on failure.
-One flash, one lifetime, one place it is drawn.
+One message, one lifetime, one place it is issued.
 
 The rules, restated as a checklist for a new action:
 

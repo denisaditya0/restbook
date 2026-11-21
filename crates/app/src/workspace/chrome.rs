@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::button::Button;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{h_flex, TitleBar};
@@ -302,7 +302,7 @@ type FlashHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 #[derive(Clone)]
 pub(crate) struct FlashAction {
     pub label: SharedString,
-    on_click: FlashHandler,
+    pub(crate) on_click: FlashHandler,
 }
 
 impl FlashAction {
@@ -323,64 +323,6 @@ impl std::fmt::Debug for FlashAction {
             .field("label", &self.label)
             .finish_non_exhaustive()
     }
-}
-
-/// The confirmation toast: bottom-right, above the status bar, so it does not
-/// fight with the last-exchange summary for the same line.
-pub(crate) fn flash(palette: &Palette, metrics: &Metrics, flash: &Flash) -> AnyElement {
-    // A circle, not a bare glyph: a toast is transient and has no dismiss
-    // button, but `Close` (`×`) next to a message still reads as one.
-    let (icon, accent) = match flash.kind {
-        FlashKind::Success => (IconName::CircleCheck, palette.success),
-        FlashKind::Error => (IconName::CircleAlert, palette.danger),
-    };
-
-    div()
-        .id("workspace-flash")
-        .absolute()
-        .bottom(px(metrics.status_height + 10.))
-        .right(px(14.))
-        // Above the dock, but it must not eat clicks meant for the pane under
-        // it. The message stays inert; only the action button, when the flash
-        // has one, is clickable.
-        .occlude()
-        .child(
-            h_flex()
-                .items_center()
-                .gap(px(metrics.space_sm))
-                .px(px(metrics.space_md))
-                .py(px(metrics.space_1p5))
-                .rounded_md()
-                .bg(palette.tab_bar)
-                .border_1()
-                .border_color(accent)
-                .shadow_md()
-                .child(icons::sized(icon, icons::SMALL).text_color(accent))
-                .child(
-                    div()
-                        .max_w(px(360.))
-                        .truncate()
-                        .text_xs()
-                        .text_color(palette.foreground)
-                        .child(flash.message.clone()),
-                )
-                .children(flash.action.as_ref().map(|action| {
-                    let on_click = action.on_click.clone();
-                    h_flex()
-                        .flex_none()
-                        .items_center()
-                        .gap(px(metrics.space_xs))
-                        .child(div().text_xs().text_color(palette.subtle).child("·"))
-                        .child(
-                            Button::new("workspace-flash-action")
-                                .label(action.label.clone())
-                                .ghost()
-                                .compact()
-                                .on_click(move |_, window, cx| on_click(window, cx)),
-                        )
-                })),
-        )
-        .into_any_element()
 }
 
 /// The window-wide status line.
@@ -537,6 +479,29 @@ mod tests {
         let flash = super::Flash::from_notice(&Notice::Failed("disk on fire".into()));
         assert!(matches!(flash.kind, FlashKind::Error));
         assert_eq!(flash.message.as_ref(), "disk on fire");
+    }
+
+    /// The confirmation is the kit's notification, not ours.
+    ///
+    /// The hand-drawn toast lived in the workspace's own element tree, under
+    /// the dock, so an open dialog covered it — a save reported from behind a
+    /// dialog was invisible. A notification is a window-level layer drawn above
+    /// dialogs, so the invariant is that chrome no longer paints one: if this
+    /// module ever grows a toast renderer again, it competes with the layer
+    /// instead of using it.
+    #[test]
+    fn chrome_does_not_paint_its_own_toast() {
+        let source = include_str!("chrome.rs");
+        // The old toast was a dock-tree element pinned above the status bar.
+        // The notification layer owns drawing now, and a second renderer at
+        // that offset competes with it and cannot rise above a dialog. The
+        // marker is the offset, spelled so this assertion does not match
+        // itself.
+        let toast_offset = ["status_height", " + 10."].concat();
+        assert!(
+            !source.contains(&toast_offset),
+            "the toast moved to the kit's notification layer; do not pin one to the dock",
+        );
     }
 }
 
