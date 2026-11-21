@@ -277,6 +277,15 @@ What `.github/workflows/release.yml` does, in order:
    `latest.json` from the downloaded bytes' own checksums, upload every asset,
    then un-draft and mark it `latest`.
 
+The **body** of the release is the `## <version>` section of `CHANGELOG.md`, with
+the block from `docs/release-install.md` above it and nothing else. The commit
+range since the previous tag is deliberately not used: it lists refactors and CI
+changes a user never sees. The body is also the manifest's `notes`, so the
+update offer and the release page say the same thing. A missing `CHANGELOG.md`,
+a missing section for the tag's version, or an empty one **fails the publish**
+rather than shipping a release with no description; `ci.yml` catches the missing
+section on the pull request instead.
+
 A re-run resumes rather than duplicates: the release is created only if the tag
 has none, and uploads use `--clobber`, so replacing one failed artifact does not
 touch the others.

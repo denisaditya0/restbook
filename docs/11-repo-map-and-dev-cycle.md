@@ -132,6 +132,7 @@ runner. Build commands are `cargo` plus the `scripts/dev.*` wrappers.
 │   ├── package.sh           build dist/ (Windows exe + libcrypto DLL)
 │   └── sample-server.py     local response fixtures for the UI
 ├── docs/                    the numbered documents listed above
+├── CHANGELOG.md             what shipped for the user; the release body
 ├── .github/workflows/
 │   ├── ci.yml               pull requests: fmt, clippy, tests, encrypted store
 │   └── release.yml          tag → build 3 native targets → draft release + manifest
@@ -304,6 +305,7 @@ Documentation is part of the change, not a follow-up. Pick the owner:
 | an unresolved rough edge | `08-qol-backlog.md` (and remove it when fixed) |
 | a deliberate GPUI Kit deviation | `09-gpui-kit-audit.md` |
 | versions, channels, packaging, the manifest | `10-release-and-updates.md` |
+| what shipped, in the user's words | `CHANGELOG.md` |
 | repository shape or the process itself | this file |
 
 Tests are behavior sentences (`rejects_header_injection`), and `07-flows.md`

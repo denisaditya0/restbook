@@ -401,11 +401,9 @@ jobs:
       TAG: ${{ needs.verify.outputs.tag }}
       REPO: ${{ github.repository }}
     steps:
-      # `gh release create --generate-notes --verify-tag` shells out to git for
-      # the tag and the commit range since the previous tag. Without a checkout
-      # there is no repository, and gh fails with
-      # `fatal: not a git repository`. `fetch-depth: 0` is what gives it the
-      # full tag history those notes are built from.
+      # `gh release create --verify-tag` shells out to git for the tag, so the
+      # checkout has to exist; `fetch-depth: 0` is what gives it the tag
+      # history a re-run resumes against.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -421,35 +419,63 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Resolve before `cd release`: the body comes from the checkout, not
+          # from the artifact directory.
+          install_file="$GITHUB_WORKSPACE/docs/release-install.md"
+          changelog="$GITHUB_WORKSPACE/CHANGELOG.md"
+
           cd release
           ls -l
 
-          # One release per tag; a re-run resumes the draft instead of
-          # duplicating it. `--generate-notes` gives the release, and the
-          # manifest's `notes`, the commit range since the previous tag.
-          # An existing release is left in whatever draft/published state it
-          # has: GitHub refuses to turn a published release back into a draft.
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "release $TAG already exists; updating it"
-          else
-            gh release create "$TAG" --draft --verify-tag \
-              --title "restbook $VERSION" --generate-notes
+          # The body says what changed for the user, and the only record of that
+          # is the changelog's own section for this version. The commit range
+          # since the previous tag is deliberately not used: it lists refactors
+          # and CI changes a user never sees.
+          if [ ! -f "$changelog" ]; then
+            echo "::error::CHANGELOG.md not found; a release cannot ship with no description" >&2
+            exit 1
+          fi
+          notes=$(awk -v want="$VERSION" '
+            /^## / {
+              heading = $0
+              sub(/^## */, "", heading)
+              in_section = (heading == want)
+              found = found || in_section
+              next
+            }
+            in_section { print }
+            END { if (!found) exit 3 }
+          ' "$changelog") || {
+            echo "::error::CHANGELOG.md has no '## $VERSION' section" >&2
+            exit 1
+          }
+          notes=$(printf '%s\n' "$notes" | sed '/^[[:space:]]*$/d')
+          if [ -z "${notes//[[:space:]]/}" ]; then
+            echo "::error::CHANGELOG.md's '## $VERSION' section is empty" >&2
+            exit 1
           fi
 
-          notes=$(gh release view "$TAG" --json body --jq .body)
-
-          # Put a per-platform install section above the generated notes. The
+          # Put a per-platform install section above the changelog entry. The
           # block is delimited so a re-run replaces it instead of stacking a
           # second copy, and `<version>` is filled in with this release's tag.
           # Because `notes` becomes the manifest body, the in-app updater shows
           # the same instructions.
-          header_file="$GITHUB_WORKSPACE/docs/release-install.md"
-          if [ -f "$header_file" ]; then
-            header=$(sed "s/<version>/$VERSION/g" "$header_file")
-            generated=$(printf '%s\n' "$notes" \
-              | sed '/<!-- restbook-install -->/,/<!-- \/restbook-install -->/d')
-            notes=$(printf '%s\n\n%s' "$header" "$generated")
+          if [ -f "$install_file" ]; then
+            header=$(sed "s/<version>/$VERSION/g" "$install_file")
+            notes=$(printf '%s\n\n%s' "$header" "$notes")
+          fi
+
+          # One release per tag; a re-run resumes the draft instead of
+          # duplicating it. An existing release is left in whatever
+          # draft/published state it has: GitHub refuses to turn a published
+          # release back into a draft.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists; updating it"
             gh release edit "$TAG" --notes "$notes"
+          else
+            printf '%s\n' "$notes" > body.md
+            gh release create "$TAG" --draft --verify-tag \
+              --title "restbook $VERSION" --notes-file body.md
           fi
 
           # The manifest is derived, never hand-written: the URL follows the
