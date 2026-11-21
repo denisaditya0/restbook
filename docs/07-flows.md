@@ -198,10 +198,11 @@ Only a scope lookup can be unresolved.
 
 ## Overlays and dialogs
 
-The workspace is the only thing that opens a window-level surface. Three of them
-are opened with a deliberate two-step: an event has no `Window`, so it parks the
-request (`pending_save`, `pending_history`, `pending_delete`) and `render`
-consumes it with `window.defer`.
+The workspace is the only thing that opens a window-level surface. Four of them
+are opened with a deliberate two-step: an event or a background task has no
+`Window`, so it parks the request (`pending_save`, `pending_history`,
+`pending_delete`, `pending_update`) and `render` consumes it with
+`window.defer`.
 
 | Surface | Triggered by | Position / size | Source |
 |---|---|---|---|
@@ -209,8 +210,17 @@ consumes it with `window.defer`.
 | Settings | palette `Settings…`, titlebar menu | centered dialog, 880px, category rail | `settings_view::open` |
 | Save request | Save on an unbound tab | centered dialog, 460px | `Workspace::open_save_dialog` |
 | Delete confirmation | a row's trash button (Collections) or Delete (Environment) | centered **alert** dialog, 420px | `Workspace::open_delete_dialog` |
+| Update offer | the launch check finding a newer release that is not skipped | centered dialog, 448px; *Install now* / *Later* / *Skip this version* | `Workspace::open_update_offer_dialog` |
 | History sheet | response clock control | right sheet, 440px | `history_sheet::open` |
 | Flash toast | any `Notice` / `flash`, including the two dock toggles | bottom-right, 2.6s, non-blocking | `chrome::flash` |
+
+The update offer is a plain dialog, not an alert: an alert's confirm/cancel pair
+has nowhere to put a third choice, and nothing here is destructive. *Install
+now* hands the version and asset to `Updates::install_offered`, which is
+`Updates::install` with the status seeded; *Skip this version* writes
+`settings.skipped_update` so the same version is not offered again (`0.1.5`
+still is). Settings › Updates keeps its own check, so nothing is lost if the
+offer is dismissed.
 
 ### Dock-toggle confirmations
 

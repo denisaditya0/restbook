@@ -116,6 +116,21 @@ impl Updates {
         cx.notify();
     }
 
+    /// Adopt an asset the launch offer found, then install it.
+    ///
+    /// [`Self::install`] reads the version out of `Status::Available`, which is
+    /// only set by a check run in this entity. The offer runs its check in the
+    /// workspace's task, so the status is seeded here first and the rest of the
+    /// path — download, verify, hand to the OS — stays the one implementation.
+    pub(crate) fn install_offered(&mut self, latest: String, asset: Asset, cx: &mut Context<Self>) {
+        self.status = Status::Available {
+            latest,
+            notes: None,
+            asset: Some(asset.clone()),
+        };
+        self.install(asset, cx);
+    }
+
     /// Download the asset for this platform, verify it, and hand it to the OS.
     pub(crate) fn install(&mut self, asset: Asset, cx: &mut Context<Self>) {
         let Status::Available { latest, .. } = &self.status else {

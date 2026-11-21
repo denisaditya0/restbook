@@ -46,6 +46,12 @@ pub(crate) struct AppSettings {
     /// works, because that is an explicit request.
     #[serde(default = "default_true")]
     pub(crate) check_updates: bool,
+    /// The version the user chose *Skip this version* for, so a launch check does
+    /// not offer it again. `None` means nothing was skipped; a skipped version
+    /// that is no longer newer is simply never matched, so this never needs
+    /// clearing by hand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) skipped_update: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -58,6 +64,7 @@ impl Default for AppSettings {
             appearance: crate::theme::Appearance::System,
             theme: None,
             check_updates: true,
+            skipped_update: None,
         }
     }
 }

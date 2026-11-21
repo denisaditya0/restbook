@@ -316,8 +316,9 @@ label moves.
   names the manifest URL it reads. It renders its own state inline — one button
   whose meaning follows it (Check now, Download & install, busy), and one sentence
   in the tone the state deserves.
-- `Outcome::Available` with no asset for this platform is still reported as an
-  update, with the platform named: "newer exists, but nothing to install here".
+- `Outcome::Available` with no asset for this platform is still reported in
+  Settings, with the platform named: "newer exists, but nothing to install
+  here". The launch offer skips that case, because it cannot be acted on.
 
 ## Milestones (R1..)
 
