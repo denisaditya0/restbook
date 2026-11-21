@@ -467,15 +467,25 @@ fn zoom_field(settings: &Entity<Settings>) -> SettingField<f64> {
 /// The version row: the compiled version, the check, and the install. Everything
 /// the check learns is rendered here rather than in a floating toast, because the
 /// dialog is open and the page is where the user is looking.
+/// The sentence under the Version row.
+///
+/// It names where an update comes from, not the manifest URL: the URL is a path
+/// inside the repository and says nothing a user can act on. `RESTBOOK_UPDATE_URL`
+/// overrides the address, and a failed check logs the exact one for when the
+/// address is what is wrong.
+///
+/// Split out from [`version_item`] because that reads the process environment;
+/// this is the part worth pinning.
+fn version_description(has_channel: bool) -> String {
+    if has_channel {
+        "Downloads from GitHub releases".to_owned()
+    } else {
+        "This build has no update channel, so it cannot check for releases.".to_owned()
+    }
+}
+
 fn version_item(updates: &Entity<Updates>) -> SettingItem {
-    // The URL names a path inside the repository and says nothing a user can
-    // act on, so the row names the channel instead. `RESTBOOK_UPDATE_URL`
-    // overrides it, and the log line on a failed check carries the exact
-    // address for when the address is what is wrong.
-    let description = match updater::manifest_url() {
-        Some(_) => "Downloads from GitHub releases".to_owned(),
-        None => "This build has no update channel, so it cannot check for releases.".to_owned(),
-    };
+    let description = version_description(updater::manifest_url().is_some());
 
     let updates = updates.clone();
     SettingItem::new(
@@ -852,7 +862,7 @@ fn info_row(label: &str, value: String, palette: &Palette, metrics: &Metrics) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{update_sentence, Tone};
+    use super::{update_sentence, version_description, Tone};
     use crate::updater::{Asset, CURRENT_VERSION};
     use crate::workspace::updates::Status;
     use std::path::PathBuf;
@@ -929,5 +939,24 @@ mod tests {
         let (text, tone) = update_sentence(&Status::Failed("offline".to_owned())).unwrap();
         assert_eq!(text, "offline");
         assert_eq!(tone, Tone::Danger);
+    }
+
+    /// The Updates row names the channel, never the manifest URL.
+    ///
+    /// The address is a path inside the repository; printing it under a setting
+    /// told the user a fact they cannot act on. A failed check logs the exact
+    /// URL instead, which is where it is useful.
+    #[test]
+    fn the_version_row_names_the_channel_not_the_manifest_url() {
+        let with_channel = version_description(true);
+        assert_eq!(with_channel, "Downloads from GitHub releases");
+        assert!(
+            !with_channel.contains("http"),
+            "the row must not print the manifest URL: {with_channel}"
+        );
+
+        // A build with no channel says why, rather than claiming it downloads.
+        let none = version_description(false);
+        assert!(none.contains("no update channel"), "{none}");
     }
 }
