@@ -455,14 +455,20 @@ jobs:
             exit 1
           fi
 
-          # Put a per-platform install section above the changelog entry. The
-          # block is delimited so a re-run replaces it instead of stacking a
-          # second copy, and `<version>` is filled in with this release's tag.
-          # Because `notes` becomes the manifest body, the in-app updater shows
-          # the same instructions.
+          # The body gets a per-platform install section above the changelog
+          # entry: a reader arriving from the release page needs it. The block
+          # is delimited so a re-run replaces it instead of stacking a second
+          # copy, and `<version>` is filled in with this release's tag.
+          #
+          # The manifest is *not* given this block. It is read inside the app,
+          # where being told to download the installer is nonsense, and a
+          # dialog renders it as text: `<!-- ... -->`, `##` and `**` all showed
+          # up literally in 0.1.4. So `notes` above stays the changelog entry —
+          # what changed — and only the release body gets instructions.
+          body=$notes
           if [ -f "$install_file" ]; then
             header=$(sed "s/<version>/$VERSION/g" "$install_file")
-            notes=$(printf '%s\n\n%s' "$header" "$notes")
+            body=$(printf '%s\n\n%s' "$header" "$notes")
           fi
 
           # One release per tag; a re-run resumes the draft instead of
@@ -471,9 +477,9 @@ jobs:
           # release back into a draft.
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "release $TAG already exists; updating it"
-            gh release edit "$TAG" --notes "$notes"
+            gh release edit "$TAG" --notes "$body"
           else
-            printf '%s\n' "$notes" > body.md
+            printf '%s\n' "$body" > body.md
             gh release create "$TAG" --draft --verify-tag \
               --title "restbook $VERSION" --notes-file body.md
           fi
@@ -497,6 +503,7 @@ jobs:
           done
 
           manifest=latest.json
+          # `notes` here is the changelog entry alone, never the install block.
           jq -n --arg version "$VERSION" --arg notes "$notes" --argjson assets "$assets" \
             '{version: $version, notes: $notes, assets: $assets}' > "$manifest"
           cat "$manifest"
