@@ -500,8 +500,8 @@ begins:
 5. **Dock and flash** — `reveal_panel`, `close_panel`, `toggle_sidebar`,
    `toggle_tools`, `dock_showing`, `panel_visible`, and the flash cluster
    (`flash`, `flash_undo`, `set_flash`, `dismiss_flash`, `schedule_flash_clear`)
-   (~320 lines). Last because `flash` is called from about 17 places, so it is
-   the one that has to survive as a free function or small trait rather than a
+   (~320 lines). Last because `flash` is called from 13 places, so it is the
+   one that has to survive as a free function or small trait rather than a
    method on a module.
 
 One step per pull request, not one pull request for all five: a 1,600-line
