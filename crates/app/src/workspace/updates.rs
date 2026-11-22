@@ -8,13 +8,136 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::dialog::DialogFooter;
+use gpui_kit::component::text::TextView;
+use gpui_kit::component::{v_flex, WindowExt as _};
 use gpui_kit::*;
 
+use crate::theme::Metrics;
 use crate::updater::{self, Asset};
+use crate::workspace::settings;
+use crate::workspace::Workspace;
 
 /// How long the app waits before closing after it opens a Windows installer.
 /// Long enough for the dialog to paint the sentence that says it is closing.
 const QUIT_GRACE: Duration = Duration::from_millis(1500);
+
+/// A newer release the launch check found, held until render can open the
+/// dialog offering it. The `Asset` is what [`Updates::install`] downloads, so an
+/// offer with no asset for this platform is never parked.
+pub(crate) struct PendingUpdate {
+    pub(crate) latest: String,
+    pub(crate) notes: Option<String>,
+    pub(crate) asset: Asset,
+}
+
+impl Workspace {
+    /// Ask whether to install a newer release, without sending the user to
+    /// Settings first.
+    ///
+    /// A plain dialog with a composed footer, not an alert: an alert's
+    /// confirm/cancel pair has no room for *Skip this version*, and nothing here
+    /// is destructive. The download, the `sha256` check, and handing the package
+    /// to the OS are [`Updates::install`]'s job; this decides whether to start it.
+    pub(crate) fn open_update_offer_dialog(
+        &mut self,
+        offer: PendingUpdate,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let settings = self.settings.clone();
+        let metrics = Metrics::current(cx);
+        // The download runs in an entity the dialog does not own, so it survives
+        // the dialog closing the moment the button is pressed.
+        let updates = cx.new(|_| Updates::new());
+
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let PendingUpdate {
+                latest,
+                notes,
+                asset,
+            } = &offer;
+
+            let skip = Button::new("update-offer-skip")
+                .label("Skip this version")
+                .ghost()
+                .on_click({
+                    let settings = settings.clone();
+                    let latest = latest.clone();
+                    move |_, window, cx| {
+                        settings.update(cx, |settings, cx| {
+                            let mut next = settings.current().clone();
+                            next.skipped_update = Some(latest.clone());
+                            settings.update(next, cx);
+                        });
+                        window.close_dialog(cx);
+                    }
+                });
+            let later = Button::new("update-offer-later")
+                .label("Later")
+                .ghost()
+                .on_click(|_, window, cx| window.close_dialog(cx));
+            let install = Button::new("update-offer-install")
+                .label("Install now")
+                .primary()
+                .on_click({
+                    let updates = updates.clone();
+                    let latest = latest.clone();
+                    let asset = asset.clone();
+                    move |_, window, cx| {
+                        updates.update(cx, |updates, cx| {
+                            updates.install_offered(latest.clone(), asset.clone(), cx)
+                        });
+                        window.close_dialog(cx);
+                    }
+                });
+
+            let detail = match notes.as_deref().map(str::trim) {
+                Some(notes) if !notes.is_empty() => v_flex()
+                    .gap(px(metrics.space_sm))
+                    .child(
+                        div()
+                            .text_sm()
+                            .child(format!("restbook {latest} is available.")),
+                    )
+                    // The notes are the changelog entry, which is Markdown. A
+                    // plain `div` printed `**` and `##` literally — 0.1.4's
+                    // release page showed the install block's HTML comment in
+                    // the dialog for exactly that reason. A scrollable band
+                    // keeps a long entry from stretching the dialog.
+                    .child(
+                        div().id("update-offer-notes").max_h(px(240.)).child(
+                            TextView::markdown("update-offer-notes-text", notes.to_owned())
+                                .scrollable(true),
+                        ),
+                    ),
+                _ => v_flex().child(
+                    div()
+                        .text_sm()
+                        .child(format!("restbook {latest} is available.")),
+                ),
+            };
+
+            dialog
+                .title("Update available")
+                .w_112()
+                .child(v_flex().py(px(metrics.space_sm)).child(detail))
+                .footer(DialogFooter::new().child(skip).child(later).child(install))
+        });
+    }
+}
+
+/// Whether a found release should be offered to the user.
+///
+/// Two ways a newer version is still not worth interrupting for: the user
+/// already said *Skip this version*, or the manifest publishes no build for
+/// this platform, in which case an offer could not be acted on. The second is
+/// the caller's business — it has the `Option<Asset>` — so this is the skip
+/// rule alone, kept apart from the task so it can be tested without a manifest.
+pub(crate) fn should_offer(current: &settings::AppSettings, latest: &str) -> bool {
+    current.skipped_update.as_deref() != Some(latest)
+}
 
 /// What the page is showing. One value, so the button, the sentence and the
 /// enabled state cannot disagree.
