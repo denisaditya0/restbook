@@ -7,11 +7,10 @@ this click land", and this file owns "what still feels unfinished".
 Every item names the code that makes it true, so an item that gets fixed can be
 checked off without re-deriving it. Items are ordered by user pain, not by size.
 
-**Status:** three items are open: **6.3** (the `restbook-ui` crate split),
-**6.5** (`workspace/mod.rs` is one impl block holding five jobs), and **6.6**
-(two type scales that disagree). All stay deferred. Open work, including those,
-is tracked in [`01-milestones.md`](01-milestones.md). The per-item text below is
-the record of what was wrong and what fixed it.
+**Status:** two items are open: **6.3** (the `restbook-ui` crate split) and
+**6.6** (two type scales that disagree). Both stay deferred. Open work,
+including those, is tracked in [`01-milestones.md`](01-milestones.md). The
+per-item text below is the record of what was wrong and what fixed it.
 
 Priority:
 
@@ -458,104 +457,6 @@ one.
 **Fix:** one short section in `05-ui-guide.md`.
 
 Refs: `docs/05-ui-guide.md` ("Run and verify"), `scripts/dev.sh`.
-
-### 6.5 `workspace/mod.rs` is one impl block holding five jobs — **P3**
-
-**Still open.** Scheduled as `0.1.5`'s whole content — the split is its own
-release, never the tail of a feature lane. That is the correction: inside
-`0.1.4` it was the last item of a release whose visible work kept displacing
-it, and it slipped twice. `test_support.rs` landed in `0.1.4` so the tests have
-a harness to move onto.
-
-At the time of writing it is 4,132 lines, of which 601 are tests: 2,560 lines
-of code in a single `impl Workspace` of 85 methods. That block owns the dock
-layout, tab state, save and delete dialogs, undo, notices, the status line, the
-launch update offer, and persistence. `panels/response.rs` is next at 2,859
-(2,000 code) and `panels/collections.rs` at 2,331 (1,996 code), but those are
-panes whose surface is genuinely large; the canvas is not supposed to be. The
-five steps below take about 1,636 of those lines out, leaving roughly 924.
-
-The cost is not line count by itself. It is that a new feature lands in this
-file by default, so two unrelated changes conflict, and reviewing a change
-directed at tabs means reading save, undo, and layout too. `chrome.rs` holds two
-bars and the flash in 623 lines, which is the size this codebase works well at.
-
-**Fix:** five coherent modules out of the canvas, each a behaviour-neutral
-move and **each its own pull request**, merged in this order before the next
-begins:
-
-1. **Updates** — `check_updates_on_launch`, `open_update_offer_dialog`,
-   `should_offer` (~150 lines). Smallest, newest code, no dependency on the
-   rest of the canvas: it proves the pattern before anything large moves.
-2. **Delete and undo** — `PendingDelete`, `Deleted`, `snapshot_delete`,
-   `deletion_landed`, `undo_delete`, `open_delete_dialog`, `perform_delete`
-   (~290 lines). Self-contained, and its tests already exist.
-3. **Tabs** — `select_tab`, `close_tab`, `move_tab`, `handle_tab_action`,
-   `snapshot_active`, `adopt_active`, `push_tabs` and their neighbours (~413
-   lines, 21 methods). The largest win; `workspace/tabs.rs` already exists.
-4. **Persistence** — `install_layout`, `apply_layout`, `flush_draft`,
-   `persist_draft`, `save_on_close`, `flush_on_quit` (~463 lines). The biggest
-   risk, so it lands after the routine is proven; `workspace/persistence.rs`
-   already owns the layout file.
-5. **Dock and flash** — `reveal_panel`, `close_panel`, `toggle_sidebar`,
-   `toggle_tools`, `dock_showing`, `panel_visible`, and the flash cluster
-   (`flash`, `flash_undo`, `set_flash`, `dismiss_flash`, `schedule_flash_clear`)
-   (~320 lines). Last because `flash` is called from 13 places, so it is the
-   one that has to survive as a free function or small trait rather than a
-   method on a module.
-
-One step per pull request, not one pull request for all five: a 1,600-line
-move shows as 1,600 additions and 1,600 deletions, and no reviewer can tell a
-relocation from a rewrite in that. Five PRs are five independent reverts, and
-five short windows in which `0.1.5` blocks other work instead of one long one.
-Each step ends with the suite green before the next starts.
-
-Steps 3 and 4 extend decisions already made: `workspace/tabs.rs` holds
-`TabId` and `TabState`, and `workspace/persistence.rs` already owns the layout
-file. Steps 1 and 5 were not separate jobs when this item was written; they
-became visible once the update offer landed on the canvas.
-
-**Do not** fold this into a feature lane. It occupies `0.1.5` whole, in a PR
-with nothing else in flight, because it touches the file every other fix
-touches. No user-visible change, so no capture; the suite passing before and
-after is the evidence.
-
-**The tests move with it.** `test_support.rs` (landed in `0.1.4`) gives the
-split a harness: `init_ui` installs the theme before any pane snapshots its
-palette and reduces motion, and `DataDir` points `RESTBOOK_DATA_DIR` at a
-temporary directory so a test can open a real `Workspace` instead of building
-panes by hand. Three private helpers are called from the test module
-(`wrap_index`, `close_needs_confirmation`, `close_tabs_copy` for tabs;
-`snapshot_delete`, `deletion_landed` for delete/undo), so their visibility drops
-to `pub(super)` as they move. `folder_items`, `removed_item` and
-`contains_item` are reached from the live `Deleted::restore` path — they are not
-dead, and a move must carry them.
-
-**A worked precedent.** Zedis (`github.com/vicanso/zedis`), a GPUI Kit desktop
-client of about this size, split its own `src/root.rs` this way and recorded it
-in `docs/agents/refactor-plan.md`. Its root was 1,440 lines and is 946; the tab
-strip moved to `root/tabs.rs`, the action listeners to `root/handlers.rs`, the
-desktop-only fields to a `root/desktop.rs` sub-struct, and the methods stayed
-inherent `impl Zedis` blocks in those files, re-exported from the parent. That
-is this item's shape, arrived at independently — and it confirms the plan is
-mechanical rather than inventive.
-
-The same document is the source of two corrections worth carrying:
-
-- **The field count is a separate, later job.** Their state struct reached 76
-  fields and 282 methods; they split it only after the files, by renaming every
-  field in a copy and letting `cargo check` report each access, then grouping
-  by which methods touch which fields, and keeping public methods as one-line
-  delegates. Our ~30 `Workspace` fields should wait for the same treatment.
-- **A long `render` is fixed by method extraction, not a module.** They took
-  nine render functions of 450–685 lines down to 56–206 by naming the sections
-  they already drew, with no layout change. That is the cheaper fix for
-  `panels/collections.rs`'s 403-line render block, and it does not touch this
-  item.
-
-Refs: `crates/app/src/workspace/mod.rs`, `crates/app/src/workspace/tabs.rs`,
-`crates/app/src/workspace/send.rs` (the `impl Workspace` in a sibling file that
-already proves the mechanism here).
 
 ### 6.6 Two type scales: rem helpers and `Metrics` px disagree — **P2**
 

@@ -100,10 +100,14 @@ runner. Build commands are `cargo` plus the `scripts/dev.*` wrappers.
 │           ├── updater.rs      manifest fetch/compare (phase 1, read-only)
 │           ├── util.rs          shared leaves
 │           ├── workspace/       THE CANVAS
-│           │   ├── mod.rs           dock tree, layout install/save, tab snapshots
+│           │   ├── mod.rs           the struct, wiring, commands, render
 │           │   ├── chrome.rs        titlebar and status bar
+│           │   ├── dock.rs          placement, dock toggles, the flash
+│           │   ├── delete.rs        confirmation, delete, one-step undo
+│           │   ├── tabs.rs          the tab model and every tab verb
 │           │   ├── send.rs          prepare -> transport -> record history
-│           │   ├── persistence.rs   layout.json read/write
+│           │   ├── persistence.rs   layout.json and draft writes
+│           │   ├── updates.rs       the launch update check and its offer
 │           │   ├── storage.rs       data directory + which store
 │           │   ├── settings.rs      settings state
 │           │   ├── settings_view.rs settings dialog

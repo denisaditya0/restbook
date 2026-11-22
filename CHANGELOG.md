@@ -8,6 +8,12 @@ publishes as the release body, so the same text is the manifest's `notes` and
 the update offer. A version with no section fails CI rather than shipping a
 release with no description.
 
+## 0.1.5
+
+- **Nothing looks different.** This release splits the window's one large
+  module into five, so the next feature can land without touching tabs, send,
+  layout and dialogs at once. Behaviour is unchanged.
+
 ## 0.1.4
 
 - **An update offers itself on launch.** When a newer release exists, a dialog
