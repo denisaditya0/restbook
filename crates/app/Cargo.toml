@@ -1,6 +1,6 @@
 [package]
 name = "restbook-app"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 publish = false
 # The resource compiler needs the icon before the crate compiles, and it is the
