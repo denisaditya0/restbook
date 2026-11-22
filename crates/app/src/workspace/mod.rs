@@ -32,7 +32,6 @@ use gpui_kit::component::dock::{
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
-use gpui_kit::component::text::TextView;
 use gpui_kit::component::{h_flex, v_flex, WindowExt as _};
 use gpui_kit::*;
 
@@ -61,7 +60,6 @@ use crate::panels::{
 };
 use crate::theme::{self, Metrics, Palette};
 use crate::variables::Variables;
-use updates::Updates;
 
 /// The dock's identity in the persisted layout. Bump the version when the
 /// meaning of the tree changes, not when a panel is added.
@@ -160,7 +158,7 @@ pub(crate) struct Workspace {
     /// A newer release the launch check found. The check runs in a task with no
     /// window, so the offer is parked here and raised by render, the same way
     /// `pending_save` and `pending_delete` are.
-    pending_update: Option<PendingUpdate>,
+    pending_update: Option<updates::PendingUpdate>,
     /// Set by [`Self::flush`]. A normal close writes in
     /// `on_window_should_close` and the quit observers then fire; the second
     /// write would bump `updated_at` and duplicate the work.
@@ -171,15 +169,6 @@ pub(crate) struct Workspace {
 /// `TypeId`, so one marker replaces the previous workspace notice instead of
 /// stacking a second one under it.
 struct WorkspaceNotice;
-
-/// A newer release the launch check found, held until render can open the
-/// dialog offering it. The `Asset` is what `Updates::install` downloads, so an
-/// offer with no asset for this platform is never parked.
-struct PendingUpdate {
-    latest: String,
-    notes: Option<String>,
-    asset: crate::updater::Asset,
-}
 
 /// A destructive act the sidebar asked for, held until render can open the
 /// alert dialog. The workspace owns the confirmation because it owns window
@@ -938,6 +927,57 @@ impl Workspace {
         self.refresh_theme(window, cx);
     }
 
+    /// Ask the release channel once after launch, when the preference allows it
+    /// and a channel is configured.
+    ///
+    /// A failed check is logged, not shown: an unreachable update server must
+    /// not be the first thing a user sees. A newer version becomes an offer the
+    /// user can act on without visiting Settings, unless that version was
+    /// skipped. The task has no window, so the offer is parked for render.
+    fn check_updates_on_launch(&mut self, cx: &mut Context<Self>) {
+        if !self.settings.read(cx).current().check_updates {
+            return;
+        }
+        let Some(url) = crate::updater::manifest_url() else {
+            return;
+        };
+
+        cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_spawn(async move { crate::updater::check(&url) })
+                .await;
+            this.update(cx, |workspace, cx| match outcome {
+                Ok(crate::updater::Outcome::Available {
+                    latest,
+                    notes,
+                    asset,
+                }) => {
+                    let current = workspace.settings.read(cx).current();
+                    if !updates::should_offer(current, &latest) {
+                        return;
+                    }
+                    // No asset for this platform means newer exists but this
+                    // machine cannot install it, so an offer would be a dead
+                    // end. Settings still names the version.
+                    if let Some(asset) = asset {
+                        workspace.pending_update = Some(updates::PendingUpdate {
+                            latest,
+                            notes,
+                            asset,
+                        });
+                        cx.notify();
+                    }
+                }
+                // Up to date is the normal state and does not deserve a toast on
+                // every launch; a failed check is not the user's problem.
+                Ok(_) => {}
+                Err(error) => log::warn!("update check failed: {error}"),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Install the panes from the saved arrangement when there is one, the default
     /// otherwise.
     ///
@@ -1103,163 +1143,6 @@ impl Workspace {
             split = split.child(self.tabs_layout(&[*name], cx), size_at(ix + 1));
         }
         Some(split)
-    }
-
-    /// Ask the release channel once after launch, when the preference allows it
-    /// and a channel is configured.
-    ///
-    /// A failed check is logged, not shown: an unreachable update server must
-    /// not be the first thing a user sees. A newer version becomes an offer the
-    /// user can act on without visiting Settings, unless that version was
-    /// skipped. The task has no window, so the offer is parked for render.
-    fn check_updates_on_launch(&mut self, cx: &mut Context<Self>) {
-        if !self.settings.read(cx).current().check_updates {
-            return;
-        }
-        let Some(url) = crate::updater::manifest_url() else {
-            return;
-        };
-
-        cx.spawn(async move |this, cx| {
-            let outcome = cx
-                .background_spawn(async move { crate::updater::check(&url) })
-                .await;
-            this.update(cx, |workspace, cx| match outcome {
-                Ok(crate::updater::Outcome::Available {
-                    latest,
-                    notes,
-                    asset,
-                }) => {
-                    let current = workspace.settings.read(cx).current();
-                    if !Self::should_offer(current, &latest) {
-                        return;
-                    }
-                    // No asset for this platform means newer exists but this
-                    // machine cannot install it, so an offer would be a dead
-                    // end. Settings still names the version.
-                    if let Some(asset) = asset {
-                        workspace.pending_update = Some(PendingUpdate {
-                            latest,
-                            notes,
-                            asset,
-                        });
-                        cx.notify();
-                    }
-                }
-                // Up to date is the normal state and does not deserve a toast on
-                // every launch; a failed check is not the user's problem.
-                Ok(_) => {}
-                Err(error) => log::warn!("update check failed: {error}"),
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// Ask whether to install a newer release, without sending the user to
-    /// Settings first.
-    ///
-    /// A plain dialog with a composed footer, not an alert: an alert's
-    /// confirm/cancel pair has no room for *Skip this version*, and nothing here
-    /// is destructive. The download, the `sha256` check, and handing the package
-    /// to the OS are [`Updater::install`]'s job; this decides whether to start it.
-    fn open_update_offer_dialog(
-        &mut self,
-        offer: PendingUpdate,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let settings = self.settings.clone();
-        let metrics = Metrics::current(cx);
-        // The download runs in an entity the dialog does not own, so it survives
-        // the dialog closing the moment the button is pressed.
-        let updates = cx.new(|_| Updates::new());
-
-        window.open_dialog(cx, move |dialog, _window, _cx| {
-            let PendingUpdate {
-                latest,
-                notes,
-                asset,
-            } = &offer;
-
-            let skip = Button::new("update-offer-skip")
-                .label("Skip this version")
-                .ghost()
-                .on_click({
-                    let settings = settings.clone();
-                    let latest = latest.clone();
-                    move |_, window, cx| {
-                        settings.update(cx, |settings, cx| {
-                            let mut next = settings.current().clone();
-                            next.skipped_update = Some(latest.clone());
-                            settings.update(next, cx);
-                        });
-                        window.close_dialog(cx);
-                    }
-                });
-            let later = Button::new("update-offer-later")
-                .label("Later")
-                .ghost()
-                .on_click(|_, window, cx| window.close_dialog(cx));
-            let install = Button::new("update-offer-install")
-                .label("Install now")
-                .primary()
-                .on_click({
-                    let updates = updates.clone();
-                    let latest = latest.clone();
-                    let asset = asset.clone();
-                    move |_, window, cx| {
-                        updates.update(cx, |updates, cx| {
-                            updates.install_offered(latest.clone(), asset.clone(), cx)
-                        });
-                        window.close_dialog(cx);
-                    }
-                });
-
-            let detail = match notes.as_deref().map(str::trim) {
-                Some(notes) if !notes.is_empty() => v_flex()
-                    .gap(px(metrics.space_sm))
-                    .child(
-                        div()
-                            .text_sm()
-                            .child(format!("restbook {latest} is available.")),
-                    )
-                    // The notes are the changelog entry, which is Markdown. A
-                    // plain `div` printed `**` and `##` literally — 0.1.4's
-                    // release page showed the install block's HTML comment in
-                    // the dialog for exactly that reason. A scrollable band
-                    // keeps a long entry from stretching the dialog.
-                    .child(
-                        div().id("update-offer-notes").max_h(px(240.)).child(
-                            TextView::markdown("update-offer-notes-text", notes.to_owned())
-                                .scrollable(true),
-                        ),
-                    ),
-                _ => v_flex().child(
-                    div()
-                        .text_sm()
-                        .child(format!("restbook {latest} is available.")),
-                ),
-            };
-
-            dialog
-                .title("Update available")
-                .w_112()
-                .child(v_flex().py(px(metrics.space_sm)).child(detail))
-                .footer(DialogFooter::new().child(skip).child(later).child(install))
-        });
-    }
-
-    /// Whether a found release should be offered to the user.
-    ///
-    /// Two ways a newer version is still not worth interrupting for: the user
-    /// already said *Skip this version*, or the manifest publishes no build for
-    /// this platform, in which case an offer could not be acted on. The second
-    /// is the caller's business — it has the `Option<Asset>` — so this is the
-    /// skip rule alone, kept apart from the task so it can be tested without a
-    /// manifest.
-    fn should_offer(current: &settings::AppSettings, latest: &str) -> bool {
-        current.skipped_update.as_deref() != Some(latest)
     }
 
     fn schedule_save(&mut self, cx: &mut Context<Self>) {
@@ -3530,7 +3413,8 @@ impl Render for Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::{close_needs_confirmation, close_tabs_copy, wrap_index, Workspace};
+    use super::updates;
+    use super::{close_needs_confirmation, close_tabs_copy, wrap_index};
 
     /// The lane's rule: a skipped version does not offer itself again, but
     /// skipping `0.1.4` must not silence `0.1.5`.
@@ -3539,11 +3423,11 @@ mod tests {
         use super::settings::AppSettings;
 
         let mut settings = AppSettings::default();
-        assert!(Workspace::should_offer(&settings, "0.1.4"));
+        assert!(updates::should_offer(&settings, "0.1.4"));
 
         settings.skipped_update = Some("0.1.4".to_owned());
-        assert!(!Workspace::should_offer(&settings, "0.1.4"));
-        assert!(Workspace::should_offer(&settings, "0.1.5"));
+        assert!(!updates::should_offer(&settings, "0.1.4"));
+        assert!(updates::should_offer(&settings, "0.1.5"));
     }
 
     #[test]
