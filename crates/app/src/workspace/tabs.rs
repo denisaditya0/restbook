@@ -25,7 +25,8 @@ use crate::theme::{Metrics, Palette};
 use super::chrome;
 use super::delete::PendingDelete;
 use super::history_sheet;
-use super::{close_needs_confirmation, wrap_index, RequestStamp, Workspace, CLOSED_TAB_LIMIT};
+use super::persistence::CLOSED_TAB_LIMIT;
+use super::{close_needs_confirmation, wrap_index, RequestStamp, Workspace};
 
 /// A tab's stable identity for the life of the open tab.
 pub(crate) type TabId = u64;
