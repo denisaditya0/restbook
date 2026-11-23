@@ -15,6 +15,7 @@ read the live keymap through `actions::shortcut`, which is why they print
 | `secondary-enter` | Send the request | Anywhere in the request pane, including the URL bar and the body editor |
 | `secondary-s` | Save / Save As | Anywhere in the window |
 | `secondary-l` | Focus the URL field | Anywhere in the window |
+| `secondary-f` | Find in the response body | Anywhere in the window |
 
 `secondary-enter` is handled by the request pane, so the pane must be open and
 must have a tab. A request with an unresolved `{{variable}}` does not send; the
@@ -23,6 +24,10 @@ red band above the editor names what is missing and the Send tooltip repeats it.
 `secondary-s` on a tab that came from a collection overwrites that node. On a
 tab that belongs nowhere yet it opens the Save As dialog, so the request gets a
 name and a destination.
+
+`secondary-f` opens the response body's find row. With the field focused, Enter
+steps to the next match, Shift+Enter to the previous one, and Escape closes the
+row. The arrows beside the count do the same step.
 
 ## Tabs
 

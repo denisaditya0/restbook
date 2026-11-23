@@ -26,6 +26,7 @@ pub(crate) enum Command {
     PreviousTab,
     ReopenClosedTab,
     FocusUrl,
+    FindInResponse,
     PasteCurl,
     ImportFile,
     ExportFile,
@@ -54,6 +55,7 @@ fn commands() -> Vec<(Command, &'static str)> {
         (Command::PreviousTab, "Previous tab"),
         (Command::ReopenClosedTab, "Reopen closed tab"),
         (Command::FocusUrl, "Focus URL"),
+        (Command::FindInResponse, "Find in response"),
         (Command::PasteCurl, "Paste cURL"),
         (Command::ImportFile, "Import…"),
         (Command::ExportFile, "Export…"),
@@ -97,9 +99,9 @@ fn commands() -> Vec<(Command, &'static str)> {
 /// that only live in the palette and have no keybinding of their own.
 fn command_hint(command: Command, window: &Window) -> Option<String> {
     use crate::actions::{
-        CloseTab, CopyCurl, ExportFile, FocusUrl, ImportFile, NewTab, NextTab, OpenSettings,
-        PasteCurl, PreviousTab, ReopenClosedTab, ResetZoom, SendRequest, ShowShortcuts, ZoomIn,
-        ZoomOut,
+        CloseTab, CopyCurl, ExportFile, FindInResponse, FocusUrl, ImportFile, NewTab, NextTab,
+        OpenSettings, PasteCurl, PreviousTab, ReopenClosedTab, ResetZoom, SendRequest,
+        ShowShortcuts, ZoomIn, ZoomOut,
     };
 
     match command {
@@ -110,6 +112,7 @@ fn command_hint(command: Command, window: &Window) -> Option<String> {
         Command::PreviousTab => shortcut(&PreviousTab, window),
         Command::ReopenClosedTab => shortcut(&ReopenClosedTab, window),
         Command::FocusUrl => shortcut(&FocusUrl, window),
+        Command::FindInResponse => shortcut(&FindInResponse, window),
         Command::PasteCurl => shortcut(&PasteCurl, window),
         Command::ImportFile => shortcut(&ImportFile, window),
         Command::ExportFile => shortcut(&ExportFile, window),
@@ -259,6 +262,7 @@ mod tests {
             PreviousTab,
             ReopenClosedTab,
             FocusUrl,
+            FindInResponse,
             PasteCurl,
             ImportFile,
             ExportFile,

@@ -164,6 +164,9 @@ pub(crate) struct ResponsePanel {
     /// stay inside the header band at a narrow pane instead of pushing the
     /// actions beside them out of the window.
     tabs_scroll: ScrollHandle,
+    /// The vertical scroll of the numbered body rows, so stepping to a match can
+    /// bring its row into view.
+    body_scroll: UniformListScrollHandle,
     /// The find query and its field (U56). The row is open while `find_open`,
     /// or while the field still holds a query after a restore.
     find: Entity<InputState>,
@@ -197,15 +200,70 @@ fn mark_runs(
     hits: &[(usize, usize, usize)],
     index: usize,
     style: &HighlightStyle,
+    current: Option<(usize, usize, usize)>,
+    current_style: &HighlightStyle,
 ) -> Vec<(Range<usize>, HighlightStyle)> {
     let width = row.len();
     hits.iter()
         .filter(|(at, _, _)| *at == index)
-        .filter_map(|(_, start, len)| {
+        .filter_map(|hit @ (_, start, len)| {
             let end = (start + len).min(width);
-            (*start < end).then_some((*start..end, *style))
+            (*start < end).then_some((
+                *start..end,
+                if current == Some(*hit) {
+                    *current_style
+                } else {
+                    *style
+                },
+            ))
         })
         .collect()
+}
+
+/// Merge syntax runs and search marks into one sorted, non-overlapping list.
+///
+/// `StyledText::with_highlights` walks ranges in order and assumes they do not
+/// overlap. Appending a mark that sits inside a syntax run put it *after* the
+/// run, so the mark was painted past the end of the text and nothing appeared
+/// at the match. Splitting the run around the mark keeps the token's colour on
+/// either side and gives the mark its background.
+fn merge_highlight_runs(
+    text_len: usize,
+    base: &[(Range<usize>, HighlightStyle)],
+    marks: &[(Range<usize>, HighlightStyle)],
+) -> Vec<(Range<usize>, HighlightStyle)> {
+    let mut boundaries: Vec<usize> = base
+        .iter()
+        .flat_map(|(range, _)| [range.start, range.end])
+        .chain(marks.iter().flat_map(|(range, _)| [range.start, range.end]))
+        .filter(|offset| *offset <= text_len)
+        .collect();
+    boundaries.sort_unstable();
+    boundaries.dedup();
+
+    let mut runs = Vec::new();
+    for pair in boundaries.windows(2) {
+        let (start, end) = (pair[0], pair[1]);
+        if start >= end {
+            continue;
+        }
+        // The mark wins where the two overlap; the syntax run supplies what is
+        // left on either side. A gap between runs is left out, and `StyledText`
+        // paints its default style there.
+        if let Some((_, style)) = marks
+            .iter()
+            .rev()
+            .find(|(range, _)| range.start <= start && end <= range.end)
+        {
+            runs.push((start..end, *style));
+        } else if let Some((_, style)) = base
+            .iter()
+            .find(|(range, _)| range.start <= start && end <= range.end)
+        {
+            runs.push((start..end, *style));
+        }
+    }
+    runs
 }
 
 /// Every match of `query` across `rows`, in reading order.
@@ -785,6 +843,16 @@ impl ResponsePanel {
             cx.notify();
         })
         .detach();
+        // Enter and Shift+Enter are the field's own gestures: the input emits
+        // PressEnter before anything outside it sees the key, so the step is
+        // handled here rather than through a global binding that would fight the
+        // input for it.
+        cx.subscribe(&find, |this, _, event: &InputEvent, cx| {
+            if let InputEvent::PressEnter { shift, .. } = event {
+                this.step_match(!shift, cx);
+            }
+        })
+        .detach();
         let mut panel = Self {
             palette: Palette::new(cx),
             metrics: Metrics::current(cx),
@@ -801,6 +869,7 @@ impl ResponsePanel {
             tab: ResponseTab::Body,
             display: None,
             tabs_scroll: ScrollHandle::new(),
+            body_scroll: UniformListScrollHandle::new(),
             find,
             find_open: false,
             finding: None,
@@ -919,7 +988,7 @@ impl ResponsePanel {
         &mut self,
         response: &ResponseRecord,
         window: &Window,
-        cx: &App,
+        cx: &mut Context<Self>,
     ) -> (SharedString, bool) {
         let body = response.body.as_bytes();
         let key = display_key(body, self.pretty);
@@ -997,6 +1066,9 @@ impl ResponsePanel {
             // cost the badge imposed.
             cookie_count: util::cookies(&response.headers).len(),
         });
+        // A query typed before the body finished decoding was scanned against
+        // nothing. Recompute now that the rows exist; an empty query is a no-op.
+        self.refresh_finding(cx);
         (text, truncated)
     }
 
@@ -1214,6 +1286,29 @@ impl ResponsePanel {
         });
     }
 
+    /// Open the find row and focus it. Used by the toolbar button, the palette,
+    /// and `secondary-f`; unlike the toggle it never closes an already-open row,
+    /// so pressing the shortcut again just returns the caret to the field.
+    pub(crate) fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Nothing to search without a body. Checked before focus so the shortcut
+        // cannot send the caret to a row that is not in the tree.
+        if self.document.read(cx).response.is_none() {
+            return;
+        }
+        // The find lives on the body tab; a shortcut from Headers or Cookies
+        // should land where the matches are, not focus a hidden field.
+        self.tab = ResponseTab::Body;
+        self.find_open = true;
+        // A body decoded after the query was typed may not have been scanned, so
+        // refresh before the row draws; an empty query is a cheap no-op.
+        self.refresh_finding(cx);
+        let find = self.find.clone();
+        cx.notify();
+        window.defer(cx, move |window, cx| {
+            find.update(cx, |state, cx| state.focus_handle(cx).focus(window, cx));
+        });
+    }
+
     /// Open the find row, or close it and clear the query. The row used to be
     /// rendered only once the query was non-empty, so the button focused an
     /// input that was not in the tree and nothing visibly happened.
@@ -1221,17 +1316,9 @@ impl ResponsePanel {
         let open = self.find_open || !self.find.read(cx).value().is_empty();
         if open {
             self.close_find(window, cx);
-            return;
+        } else {
+            self.open_find(window, cx);
         }
-
-        self.find_open = true;
-        let find = self.find.clone();
-        cx.notify();
-        // Focus after the row exists: focusing the same frame it is added is a
-        // no-op, which is what made the old button do nothing.
-        window.defer(cx, move |window, cx| {
-            find.update(cx, |state, cx| state.focus_handle(cx).focus(window, cx));
-        });
     }
 
     fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1261,6 +1348,7 @@ impl ResponsePanel {
         cx: &mut Context<Self>,
     ) -> Option<(usize, usize, usize)> {
         self.refresh_finding(cx);
+        let numbered = self.numbered();
         let finding = self.finding.as_mut()?;
         if finding.hits.is_empty() {
             return None;
@@ -1277,9 +1365,16 @@ impl ResponsePanel {
             (Some(current), true) => (current + 1) % total,
             (Some(current), false) => (current + total - 1) % total,
         };
+        let hit = finding.hits[next];
         finding.current = Some(next);
+        if numbered {
+            // Stepping through a long body has to move the viewport, not only
+            // the count; Centre keeps context above and below the hit.
+            self.body_scroll
+                .scroll_to_item(hit.0, ScrollStrategy::Center);
+        }
         cx.notify();
-        Some(finding.hits[next])
+        Some(hit)
     }
 
     /// The find row under the body toolbar: the query field, the count, and
@@ -1308,6 +1403,11 @@ impl ResponsePanel {
             .border_b_1()
             .border_color(palette.border)
             .debug_selector(|| "response-find-row".to_owned())
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" {
+                    this.close_find(window, cx);
+                }
+            }))
             .child(
                 div()
                     .flex_1()
@@ -1434,7 +1534,12 @@ impl ResponsePanel {
             .into_any_element()
     }
 
-    fn render_body(&mut self, response: &ResponseRecord, window: &Window, cx: &App) -> AnyElement {
+    fn render_body(
+        &mut self,
+        response: &ResponseRecord,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let palette = self.palette.clone();
         let (body, truncated) = self.body_for_display(response, window, cx);
         // The number of rows `body_view` will draw, so the notice names what is
@@ -1492,28 +1597,35 @@ impl ResponsePanel {
                 .unwrap_or_default();
             let styled = StyledText::new(body.clone()).with_highlights(spans.iter().cloned());
             // The raw block is one row, so every hit is on row 0. The marks are
-            // appended after the syntax runs so a highlighted token keeps its
-            // colour.
+            // merged into the syntax runs, not appended after them: `StyledText`
+            // walks ranges in order and a mark inside a run would otherwise be
+            // painted past the end of the text.
             let match_style = HighlightStyle {
                 background_color: Some(self.palette.search_match),
                 ..Default::default()
             };
-            let hits = self
+            let current_style = HighlightStyle {
+                background_color: Some(self.palette.search_match_current),
+                ..Default::default()
+            };
+            let (hits, current) = self
                 .finding
                 .as_ref()
-                .map(|finding| finding.hits.clone())
+                .map(|finding| {
+                    (
+                        finding.hits.clone(),
+                        finding
+                            .current
+                            .and_then(|index| finding.hits.get(index).copied()),
+                    )
+                })
                 .unwrap_or_default();
-            let styled = {
-                let mut all: Vec<(Range<usize>, HighlightStyle)> = spans
-                    .iter()
-                    .map(|(range, style)| (range.clone(), *style))
-                    .collect();
-                all.extend(mark_runs(&body, &hits, 0, &match_style));
-                if all.is_empty() {
-                    styled
-                } else {
-                    styled.with_highlights(all)
-                }
+            let marks = mark_runs(&body, &hits, 0, &match_style, current, &current_style);
+            let all = merge_highlight_runs(body.len(), &spans, &marks);
+            let styled = if all.is_empty() {
+                styled
+            } else {
+                styled.with_highlights(all)
             };
             return div()
                 .id("response-body")
@@ -1580,10 +1692,21 @@ impl ResponsePanel {
             background_color: Some(palette.search_match),
             ..Default::default()
         };
-        let hits_by_row: Rc<Vec<(usize, usize, usize)>> = self
+        let current_style = HighlightStyle {
+            background_color: Some(palette.search_match_current),
+            ..Default::default()
+        };
+        let (hits_by_row, current_hit) = self
             .finding
             .as_ref()
-            .map(|finding| finding.hits.clone())
+            .map(|finding| {
+                (
+                    finding.hits.clone(),
+                    finding
+                        .current
+                        .and_then(|index| finding.hits.get(index).copied()),
+                )
+            })
             .unwrap_or_default();
 
         div()
@@ -1630,17 +1753,23 @@ impl ResponsePanel {
                                                     .map(Vec::as_slice)
                                                     .unwrap_or(&[]);
                                                 let styled = StyledText::new(lines[index].clone());
-                                                // The search mark is appended after the syntax
-                                                // runs, so a highlighted token keeps its colour
-                                                // and only gains a background.
-                                                let mut all: Vec<(Range<usize>, HighlightStyle)> =
-                                                    spans.to_vec();
-                                                all.extend(mark_runs(
+                                                // A match can sit inside a syntax run, so
+                                                // the two sets are merged into one sorted,
+                                                // non-overlapping list before they reach
+                                                // `StyledText`.
+                                                let marks = mark_runs(
                                                     &lines[index],
                                                     &hits_by_row,
                                                     index,
                                                     &match_style,
-                                                ));
+                                                    current_hit,
+                                                    &current_style,
+                                                );
+                                                let all = merge_highlight_runs(
+                                                    lines[index].len(),
+                                                    spans,
+                                                    &marks,
+                                                );
                                                 let styled = if all.is_empty() {
                                                     styled
                                                 } else {
@@ -1665,6 +1794,7 @@ impl ResponsePanel {
                                 })
                                 .collect::<Vec<_>>()
                         })
+                        .track_scroll(&self.body_scroll)
                         .size_full(),
                     ),
             )
@@ -2655,9 +2785,46 @@ mod tests {
     fn a_mark_covers_the_match_on_its_row_only() {
         let hits = vec![(0, 2, 3), (1, 0, 3)];
         let style = HighlightStyle::default();
-        let marks = mark_runs("abcdef", &hits, 0, &style);
+        let marks = mark_runs("abcdef", &hits, 0, &style, None, &style);
         assert_eq!(marks.len(), 1);
         assert_eq!(marks[0].0, 2..5);
+    }
+
+    /// A mark inside a syntax run has to split the run. Appending it instead
+    /// put the mark after the full-line run, where `StyledText` painted it past
+    /// the end of the text and the match stayed unhighlighted.
+    #[test]
+    fn a_match_inside_a_syntax_run_splits_the_run() {
+        use super::merge_highlight_runs;
+
+        let base = vec![(0..6, HighlightStyle::default())];
+        let active = HighlightStyle {
+            background_color: Some(gpui_kit::hsla(0.0, 1.0, 0.5, 1.0)),
+            ..Default::default()
+        };
+        let marks = vec![(2..5, active)];
+        let merged = merge_highlight_runs(6, &base, &marks);
+
+        let ranges: Vec<_> = merged.iter().map(|(range, _)| range.clone()).collect();
+        assert_eq!(ranges, [0..2, 2..5, 5..6]);
+        assert_eq!(merged[1].1.background_color, active.background_color);
+    }
+
+    /// The arrows have to mark the hit they are on differently from the rest,
+    /// otherwise stepping through a list only moves the count.
+    #[test]
+    fn the_current_match_uses_the_stronger_style() {
+        let hits = vec![(0, 1, 2), (0, 4, 2)];
+        let normal = HighlightStyle::default();
+        let active = HighlightStyle {
+            background_color: Some(gpui_kit::hsla(0.0, 1.0, 0.5, 1.0)),
+            ..Default::default()
+        };
+        let marks = mark_runs("abcdef", &hits, 0, &normal, Some((0, 4, 2)), &active);
+
+        assert_eq!(marks.len(), 2);
+        assert_eq!(marks[0].1.background_color, None);
+        assert_eq!(marks[1].1.background_color, active.background_color);
     }
 
     #[test]
@@ -3616,6 +3783,52 @@ mod render_tests {
             cx.debug_bounds("response-find-row").is_some(),
             "clicking Find must render the row it focuses"
         );
+        cx.quit();
+    }
+
+    /// The arrows have to move the current hit, not only the count. This pins
+    /// the first press, the wrap at both ends, and the backward step, which the
+    /// UI shows through the stronger match style and the scroll to the row.
+    #[test]
+    fn stepping_moves_the_current_match_and_wraps() {
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+        let (view, cx) = open(
+            &mut cx,
+            Some(json_response("{\"status\":\"a\",\"message\":\"status b\"}")),
+        );
+        draw(cx);
+
+        cx.update(|window, cx| {
+            view.update(cx, |panel, cx| {
+                panel
+                    .find
+                    .update(cx, |state, cx| state.set_value("status", window, cx));
+                panel.refresh_finding(cx);
+                assert_eq!(
+                    panel.finding.as_ref().map(|finding| finding.hits.len()),
+                    Some(2),
+                    "the pretty-printed body has two matches",
+                );
+
+                assert!(panel.step_match(true, cx).is_some());
+                assert_eq!(panel.finding.as_ref().and_then(|f| f.current), Some(0));
+                panel.step_match(true, cx);
+                assert_eq!(panel.finding.as_ref().and_then(|f| f.current), Some(1));
+                panel.step_match(true, cx);
+                assert_eq!(
+                    panel.finding.as_ref().and_then(|f| f.current),
+                    Some(0),
+                    "next wraps at the end",
+                );
+                panel.step_match(false, cx);
+                assert_eq!(
+                    panel.finding.as_ref().and_then(|f| f.current),
+                    Some(1),
+                    "previous wraps at the start",
+                );
+            });
+        });
         cx.quit();
     }
 

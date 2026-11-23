@@ -35,6 +35,8 @@ actions!(
         SaveRequestAs,
         /// Focus the URL field of the request pane (`secondary-l`).
         FocusUrl,
+        /// Open find in the response body (`secondary-f`).
+        FindInResponse,
         /// Show or hide the command palette (`secondary-shift-p`).
         ToggleCommandPalette,
         /// Show the keyboard shortcuts sheet (`?`).
@@ -83,6 +85,7 @@ pub(crate) fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-pageup", PreviousTab, None),
         KeyBinding::new("secondary-shift-t", ReopenClosedTab, None),
         KeyBinding::new("secondary-l", FocusUrl, None),
+        KeyBinding::new("secondary-f", FindInResponse, None),
         KeyBinding::new("secondary-shift-p", ToggleCommandPalette, None),
         // `?` is a printable key, so it only opens the sheet when focus is not
         // inside an input; otherwise typing a question mark in a body would be
@@ -253,6 +256,34 @@ mod tests {
         assert!(
             binding.predicate().is_some(),
             "a printable key needs a context predicate, or it would eat text input"
+        );
+    }
+
+    /// Find in the response body opens on the conventional `secondary-f`, from
+    /// any pane, so a keyboard user does not have to click into the response
+    /// first.
+    #[test]
+    fn find_in_response_uses_the_conventional_find_key() {
+        use gpui_kit::Action as _;
+        use gpui_kit::AsKeystroke as _;
+
+        use super::FindInResponse;
+
+        let bindings = bindings();
+        let binding = bindings
+            .iter()
+            .find(|b| b.action().name() == FindInResponse::name_for_type())
+            .expect("the find action is bound");
+        let stroke = binding
+            .keystrokes()
+            .first()
+            .expect("the find action has a keystroke")
+            .as_keystroke();
+
+        assert_eq!(stroke.key, "f");
+        assert!(
+            stroke.modifiers.secondary(),
+            "find keeps its cmd/ctrl modifier"
         );
     }
 
