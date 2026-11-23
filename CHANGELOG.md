@@ -24,6 +24,25 @@ Contributors and pull requests are added to the release page by `release.yml`;
 do not write them here.
 -->
 
+## 0.1.7
+
+- **Import a file.** **Import…** — in the titlebar menu, the command palette, and
+  beside *New request* when no tab is open — reads a Postman v2.1 collection, a
+  HAR, an OpenAPI 3 document, a cURL command, or a restbook bundle. A HAR with
+  several hosts lands one collection per host, a file that only partly reads
+  reports every item it skipped and why, and nothing is written until the whole
+  file parses.
+- **Export to a file.** **Export…** writes the selected collection as Postman
+  v2.1, HAR, or a one-collection bundle, or the whole workspace as a bundle —
+  the one format that carries environments. Secrets of every kind are replaced
+  with a visible placeholder unless *Include secrets* is ticked, and that choice
+  starts off every time.
+- **A bundle imports back.** The app's own export, environments included, can
+  now be read by **Import…**; before, it fell through to the cURL parser.
+- **Form and multipart requests save again.** A request with either body kind
+  failed to serialize, so it could not be saved to a collection, kept as a
+  draft, or recorded in history. It now persists.
+
 ## 0.1.6
 
 - **Query parameters and form bodies edit as text.** A **Table / Raw** switch
