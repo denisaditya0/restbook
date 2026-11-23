@@ -1,6 +1,10 @@
 //! A Git-friendly workspace on disk: one `collection.json` per collection under
 //! `collections/<slug>/`, environments under `environments/`, gitignored local
-//! state in `restbook.local.json`, and history in `.restbook/history.jsonl`.
+//! state in `restbook.local.json`, and history in the gitignored `.restbook/`
+//! state directory.
+//!
+//! Which store serves that history is not this crate's decision: the workspace
+//! is handed one and only delegates the trait methods to it.
 //!
 //! Saves are VCS-stable: keys are sorted, secrets become placeholders (real
 //! values stay local), and every write is temp-file plus rename.
@@ -9,7 +13,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use restbook_core::secrets::{self, SecretSlot, REDACTED};
 use restbook_core::store::Draft;
@@ -19,7 +23,7 @@ use restbook_core::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::jsonl::JsonlStore;
+use crate::MemoryStore;
 
 /// The marker file at a workspace root. Its presence is what makes a directory
 /// a workspace rather than just a directory.
@@ -32,9 +36,9 @@ const ENVIRONMENTS_DIR: &str = "environments";
 /// Local-only state, expected to be gitignored.
 const LOCAL_FILE: &str = "restbook.local.json";
 
-/// The per-workspace, gitignored state directory.
-const STATE_DIR: &str = ".restbook";
-const HISTORY_FILE: &str = "history.jsonl";
+/// The per-workspace, gitignored state directory. Public because whoever opens
+/// the workspace scopes its history to this directory.
+pub const STATE_DIR: &str = ".restbook";
 
 /// The file name every collection is stored under, inside its own directory.
 /// A directory rather than `collections/foo.json` so a future format can put a
@@ -93,16 +97,29 @@ pub struct FolderStore {
     state: PathBuf,
     local: Mutex<Local>,
     /// History is not part of the repository: it holds every response body,
-    /// which is exactly the data nobody wants in a shared checkout. It is
-    /// served by the same JSONL store the harness uses, under `.restbook/`.
-    history: JsonlStore,
+    /// which is exactly the data nobody wants in a shared checkout. The caller
+    /// chooses the store (see [`FolderStore::with_history`]); the workspace
+    /// only forwards to it.
+    history: Arc<dyn Store>,
     /// Serializes the read-modify-write of `restbook.local.json`.
     local_lock: Mutex<()>,
 }
 
 impl FolderStore {
-    /// Open (or create) a workspace at `root`.
+    /// Open (or create) a workspace at `root`, with a history that lives only
+    /// in memory.
+    ///
+    /// For callers that never touch history — an import harness, most tests.
+    /// The desktop app opens a workspace through [`with_history`], because it
+    /// is the app, not the store, that decides how history is protected.
+    ///
+    /// [`with_history`]: FolderStore::with_history
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
+        Self::with_history(root, Arc::new(MemoryStore::new()))
+    }
+
+    /// Open (or create) a workspace at `root`, serving history from `history`.
+    pub fn with_history(root: impl AsRef<Path>, history: Arc<dyn Store>) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
         crate::secure::create_dir(&root)?;
         crate::secure::create_dir(&root.join(COLLECTIONS_DIR))?;
@@ -110,11 +127,6 @@ impl FolderStore {
 
         let state = root.join(STATE_DIR);
         crate::secure::create_dir(&state)?;
-
-        // `JsonlStore` renames sources into place and is happy with an empty
-        // directory; history is plaintext here on purpose, because the
-        // workspace root is the user's own checkout, not the app's data dir.
-        let history = JsonlStore::open(state.join(HISTORY_FILE))?;
 
         let local_path = root.join(LOCAL_FILE);
         let local = read_local(&local_path)?;
@@ -941,15 +953,10 @@ mod tests {
         assert_eq!(reopened.active_environment().unwrap(), None);
     }
 
-    #[test]
-    fn history_lives_under_the_gitignored_state_directory() {
-        let dir = temp_dir("history");
-        let store = FolderStore::open(&dir).unwrap();
-        assert_eq!(store.state_dir(), dir.join(STATE_DIR));
-
-        let entry = HistoryEntry {
+    fn sample_entry(url: &str) -> HistoryEntry {
+        HistoryEntry {
             id: 0,
-            request: RequestDef::new(Method::Get, "https://example.com"),
+            request: RequestDef::new(Method::Get, url),
             response: restbook_core::ResponseRecord {
                 status: 200,
                 headers: Vec::new(),
@@ -959,19 +966,100 @@ mod tests {
                 final_url: None,
                 redirects: Vec::new(),
             },
-            url: "https://example.com".to_owned(),
+            url: url.to_owned(),
             origin: Origin::default(),
-        };
-        store.append_history(&entry).unwrap();
+        }
+    }
+
+    /// History is the caller's: the workspace forwards every history method to
+    /// the store it was handed and creates no history file of its own.
+    #[test]
+    fn history_is_served_by_the_injected_store() {
+        let dir = temp_dir("history");
+        let jsonl_path = dir.join(STATE_DIR).join("history.jsonl");
+        fs::create_dir_all(dir.join(STATE_DIR)).unwrap();
+        let jsonl = crate::JsonlStore::open(&jsonl_path).unwrap();
+        let store = FolderStore::with_history(&dir, Arc::new(jsonl)).unwrap();
+        assert_eq!(store.state_dir(), dir.join(STATE_DIR));
+
+        store
+            .append_history(&sample_entry("https://example.com"))
+            .unwrap();
 
         let hits = store
             .search_history("", &HistoryFilter::default(), 10)
             .unwrap();
         assert_eq!(hits.len(), 1);
-        assert!(dir.join(STATE_DIR).join(HISTORY_FILE).is_file());
+        assert!(jsonl_path.is_file());
         // The history file is not at the root, so it cannot be committed by
         // accident.
-        assert!(!dir.join(HISTORY_FILE).exists());
+        assert!(!dir.join("history.jsonl").exists());
+    }
+
+    /// A workspace opened without being handed a history keeps it in memory:
+    /// the store crate does not get to pick a file format for someone else's
+    /// tree, and a caller that never touches history gets no side effect.
+    #[test]
+    fn a_workspace_without_an_injected_history_writes_nothing() {
+        let dir = temp_dir("history-none");
+        let store = FolderStore::open(&dir).unwrap();
+        assert_eq!(
+            store
+                .append_history(&sample_entry("https://example.com"))
+                .unwrap(),
+            1
+        );
+        assert_eq!(fs::read_dir(dir.join(STATE_DIR)).unwrap().count(), 0);
+    }
+
+    /// The workspace exists so a shared tree never holds a readable copy of
+    /// history: with an encrypted store handed in, no file under `.restbook/`
+    /// contains the body that was appended.
+    #[cfg(feature = "sqlcipher")]
+    #[test]
+    fn an_encrypted_workspace_history_leaves_no_readable_body() {
+        const SECRET: &str = "super-secret-body-value";
+
+        let dir = temp_dir("encrypted-history");
+        let state = dir.join(STATE_DIR);
+        fs::create_dir_all(&state).unwrap();
+        let sqlcipher =
+            crate::sqlcipher::SqlcipherStore::open_with_key(state.join("history.db"), &[7u8; 32])
+                .unwrap();
+        let store = FolderStore::with_history(&dir, Arc::new(sqlcipher)).unwrap();
+
+        let mut entry = sample_entry("https://example.com/things");
+        entry.response.body = SECRET.as_bytes().to_vec().into();
+        store.append_history(&entry).unwrap();
+
+        // Every file the store created, including SQLite's journal, must be
+        // unreadable without the key.
+        for path in files_under(&state) {
+            let bytes = fs::read(&path).unwrap();
+            let text = String::from_utf8_lossy(&bytes);
+            assert!(
+                !text.contains(SECRET),
+                "{} contains the body in the clear",
+                path.display()
+            );
+        }
+    }
+
+    #[cfg(feature = "sqlcipher")]
+    fn files_under(dir: &Path) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    files.push(path);
+                }
+            }
+        }
+        files
     }
 
     #[test]

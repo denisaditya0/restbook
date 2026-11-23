@@ -134,7 +134,18 @@ pub(crate) enum HistoryMode {
     /// A plain JSONL file, with the reason encryption did not happen.
     Plaintext(PlaintextReason),
     /// Nothing on disk: this window's history lives in memory.
-    Ephemeral,
+    Ephemeral(EphemeralReason),
+}
+
+/// Why this session's history is not written to disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EphemeralReason {
+    /// The encrypted store could not be opened, and neither could a plaintext
+    /// file in its place.
+    OpenFailed,
+    /// A workspace refuses to write plain text, and encryption was unavailable,
+    /// so the session's history stays in memory rather than in the shared tree.
+    WorkspaceRefusedPlaintext,
 }
 
 /// Why history is written in plain text.
@@ -147,8 +158,17 @@ pub(crate) enum PlaintextReason {
     /// The keyring or the encrypted database could not be opened.
     #[cfg_attr(not(feature = "sqlcipher"), allow(dead_code))]
     EncryptionUnavailable,
-    /// A folder workspace keeps its history in the shared tree.
-    WorkspaceFile,
+}
+
+/// Whether plain text is an acceptable place to put this session's history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HistoryPolicy {
+    /// The per-user data directory: fall back to a JSONL file when encryption
+    /// is unavailable, so a window always has somewhere to write.
+    AllowPlaintext,
+    /// A workspace: refuse the fallback. A workspace is the tree the user
+    /// shares, so history there is either encrypted or not saved at all.
+    NoPlaintext,
 }
 
 /// The store history is served from, and how it is protected.
@@ -165,21 +185,27 @@ pub(crate) struct History {
 /// a shared checkout with private local data.
 pub(crate) fn open_store(state_dir: &Path) -> StoreChoice {
     if let Some(root) = workspace_root() {
-        match FolderStore::open(&root) {
+        // A workspace's history is scoped to its gitignored state directory and
+        // is never allowed to fall back to plain text: this is the tree the
+        // user shares, so a readable body under `.restbook/` would undo the
+        // encryption the rest of the app is built on.
+        let history = open_history(
+            &root.join(restbook_store::STATE_DIR),
+            HistoryPolicy::NoPlaintext,
+        );
+        match FolderStore::with_history(&root, history.store.clone()) {
             Ok(store) => {
                 let name = workspace_name(&root);
                 log::info!(
-                    "workspace {} (collections and environments are files here; history is a plain text file under .restbook)",
-                    root.display()
+                    "workspace {} (collections and environments are files here; history is kept under {} and never in plain text)",
+                    root.display(),
+                    restbook_store::STATE_DIR
                 );
                 return StoreChoice {
                     store: Arc::new(store),
                     name,
                     workspace_root: Some(root),
-                    // `FolderStore` still hardcodes the JSONL store, so a
-                    // workspace's history is readable even in a build that
-                    // could encrypt it.
-                    history: HistoryMode::Plaintext(PlaintextReason::WorkspaceFile),
+                    history: history.mode,
                 };
             }
             Err(error) => {
@@ -200,7 +226,7 @@ pub(crate) fn open_store(state_dir: &Path) -> StoreChoice {
         "using the application data directory {}",
         state_dir.display()
     );
-    let history = open_history(state_dir);
+    let history = open_history(state_dir, HistoryPolicy::AllowPlaintext);
     StoreChoice {
         store: history.store,
         name: APP_NAME.to_owned(),
@@ -293,12 +319,15 @@ fn workspace_name(root: &Path) -> String {
         .unwrap_or_else(|| APP_NAME.to_owned())
 }
 
-/// Open the per-user database, preferring SQLCipher when it was compiled in.
+/// Open a history store at `state_dir`, preferring SQLCipher when it was
+/// compiled in.
 ///
 /// `state_dir` is created on demand; a directory that cannot be created falls
 /// through to the in-memory store, so the app still starts read-only instead of
-/// losing the window.
-pub(crate) fn open_history(state_dir: &Path) -> History {
+/// losing the window. `policy` decides what happens when encryption is
+/// unavailable: a JSONL file in the data directory, or nothing on disk in a
+/// workspace.
+pub(crate) fn open_history(state_dir: &Path, policy: HistoryPolicy) -> History {
     let _ = restbook_store::secure::create_dir(state_dir);
     let jsonl_path = state_dir.join(HISTORY_FILE);
 
@@ -308,7 +337,14 @@ pub(crate) fn open_history(state_dir: &Path) -> History {
         match SqlcipherStore::open(&db_path) {
             Ok(store) => {
                 let store: Arc<dyn Store> = Arc::new(store);
-                import_legacy_jsonl(store.as_ref(), &jsonl_path);
+                match policy {
+                    HistoryPolicy::AllowPlaintext => {
+                        import_legacy_jsonl(store.as_ref(), &jsonl_path)
+                    }
+                    HistoryPolicy::NoPlaintext => {
+                        import_workspace_jsonl(store.as_ref(), &jsonl_path)
+                    }
+                }
                 return History {
                     store,
                     mode: HistoryMode::Encrypted,
@@ -320,11 +356,32 @@ pub(crate) fn open_history(state_dir: &Path) -> History {
         }
     }
 
+    without_encryption(&jsonl_path, policy)
+}
+
+/// What a session gets when no encrypted store could be opened.
+///
+/// Split out from [`open_history`] so the strict-mode rule can be tested without
+/// a keyring: the decision is about the fallback, not about SQLCipher.
+fn without_encryption(jsonl_path: &Path, policy: HistoryPolicy) -> History {
+    if policy == HistoryPolicy::NoPlaintext {
+        // Strict mode: the build cannot encrypt or the keyring refused, and a
+        // workspace must not gain a plaintext file. The window still opens; the
+        // status bar says this session's history will not survive it.
+        log::warn!(
+            "workspace history needs encryption, which is unavailable; history is not saved"
+        );
+        return History {
+            store: Arc::new(MemoryStore::new()),
+            mode: HistoryMode::Ephemeral(EphemeralReason::WorkspaceRefusedPlaintext),
+        };
+    }
+
     // A build without SQLCipher, or one whose keyring/store failed: keep the
     // JSONL file in the same data directory and carry an older history over
     // once, so moving the directory does not look like data loss.
-    migrate_plain_jsonl(&jsonl_path);
-    match JsonlStore::open(&jsonl_path) {
+    migrate_plain_jsonl(jsonl_path);
+    match JsonlStore::open(jsonl_path) {
         Ok(store) => History {
             store: Arc::new(store),
             mode: HistoryMode::Plaintext(plaintext_reason()),
@@ -333,7 +390,7 @@ pub(crate) fn open_history(state_dir: &Path) -> History {
         // status bar says this session's history will not survive it.
         Err(_) => History {
             store: Arc::new(MemoryStore::new()),
-            mode: HistoryMode::Ephemeral,
+            mode: HistoryMode::Ephemeral(EphemeralReason::OpenFailed),
         },
     }
 }
@@ -409,6 +466,35 @@ fn import_legacy_jsonl(store: &dyn Store, new_path: &Path) {
     }
 }
 
+/// Hand a workspace's plaintext history to the encrypted store once, then
+/// delete the file.
+///
+/// Unlike [`import_legacy_jsonl`], which renames the source to mark it imported,
+/// this removes it: a `.jsonl.imported` beside the database would leave a
+/// readable copy of every body in the tree the user shares, which is the leak
+/// this whole mode exists to close. A failed import leaves the file in place so
+/// the next start retries.
+#[cfg(feature = "sqlcipher")]
+fn import_workspace_jsonl(store: &dyn Store, path: &Path) {
+    if !path.exists() {
+        return;
+    }
+    let entries = match restbook_store::read_entries(path) {
+        Ok(entries) => entries,
+        Err(error) => {
+            log::warn!("skipping unreadable history {}: {error}", path.display());
+            return;
+        }
+    };
+    for entry in &entries {
+        if let Err(error) = store.append_history(entry) {
+            log::warn!("history import stopped for {}: {error}", path.display());
+            return;
+        }
+    }
+    let _ = std::fs::remove_file(path);
+}
+
 /// The pre-data-dir histories, in import order.
 ///
 /// The old app wrote `.restbook/history.jsonl` relative to the working directory,
@@ -444,6 +530,114 @@ mod tests {
         assert_eq!(plaintext_reason(), PlaintextReason::EncryptionUnavailable);
         #[cfg(not(feature = "sqlcipher"))]
         assert_eq!(plaintext_reason(), PlaintextReason::NoEncryptionSupport);
+    }
+
+    /// A workspace is the tree the user shares, so a session without an
+    /// encrypted store keeps its history in memory instead of creating a file
+    /// the next commit could pick up.
+    #[test]
+    fn a_workspace_without_encryption_writes_no_history_file() {
+        use super::{without_encryption, EphemeralReason, HistoryMode, HistoryPolicy};
+
+        let dir = std::env::temp_dir().join("restbook-storage-strict-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let jsonl_path = dir.join("history.jsonl");
+
+        let history = without_encryption(&jsonl_path, HistoryPolicy::NoPlaintext);
+
+        assert_eq!(
+            history.mode,
+            HistoryMode::Ephemeral(EphemeralReason::WorkspaceRefusedPlaintext)
+        );
+        assert!(
+            !jsonl_path.exists(),
+            "the strict fallback must write nothing to the workspace"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The per-user data directory keeps the old fallback: a window always has
+    /// somewhere to write, and the status bar names the reason.
+    #[test]
+    fn a_data_directory_without_encryption_falls_back_to_a_plain_file() {
+        use super::{without_encryption, HistoryMode, HistoryPolicy};
+
+        let dir = std::env::temp_dir().join("restbook-storage-plain-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let jsonl_path = dir.join("history.jsonl");
+
+        let history = without_encryption(&jsonl_path, HistoryPolicy::AllowPlaintext);
+
+        assert!(matches!(history.mode, HistoryMode::Plaintext(_)));
+        assert!(jsonl_path.exists(), "the data directory keeps its fallback");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A send big enough to be found if it were written in the clear.
+    #[cfg(feature = "sqlcipher")]
+    fn entry(url: &str) -> restbook_core::HistoryEntry {
+        restbook_core::HistoryEntry {
+            id: 0,
+            request: restbook_core::RequestDef::new(restbook_core::Method::Get, url),
+            response: restbook_core::ResponseRecord {
+                status: 200,
+                headers: Vec::new(),
+                body: b"{}".to_vec().into(),
+                duration_ms: 1,
+                received_at: chrono::Utc::now(),
+                final_url: None,
+                redirects: Vec::new(),
+            },
+            url: url.to_owned(),
+            origin: restbook_core::Origin::default(),
+        }
+    }
+
+    /// A plaintext history left in a workspace is handed to the encrypted store
+    /// once, then removed: leaving a readable copy beside it would keep the leak
+    /// the import closes.
+    #[cfg(feature = "sqlcipher")]
+    #[test]
+    fn an_existing_workspace_history_is_imported_once_and_removed() {
+        use super::import_workspace_jsonl;
+        use restbook_core::{HistoryFilter, Store as _};
+
+        let dir = std::env::temp_dir().join("restbook-storage-import-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let jsonl_path = dir.join("history.jsonl");
+
+        {
+            let jsonl = restbook_store::JsonlStore::open(&jsonl_path).unwrap();
+            jsonl
+                .append_history(&entry("https://example.com/1"))
+                .unwrap();
+            jsonl
+                .append_history(&entry("https://example.com/2"))
+                .unwrap();
+        }
+
+        let store = restbook_store::MemoryStore::new();
+        let hits = |store: &restbook_store::MemoryStore| {
+            store
+                .search_history("", &HistoryFilter::default(), 10)
+                .unwrap()
+                .len()
+        };
+
+        import_workspace_jsonl(&store, &jsonl_path);
+        assert!(!jsonl_path.exists(), "the plaintext file is gone");
+        assert_eq!(hits(&store), 2, "both sends were imported");
+
+        // The deleted file is the marker: a later start has nothing to repeat.
+        import_workspace_jsonl(&store, &jsonl_path);
+        assert_eq!(hits(&store), 2, "the import is not repeated");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

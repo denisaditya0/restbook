@@ -10,7 +10,7 @@ mod jsonl;
 
 pub mod secure;
 
-pub use folder::{FolderStore, MARKER_FILE};
+pub use folder::{FolderStore, MARKER_FILE, STATE_DIR};
 pub use jsonl::{read_entries, JsonlStore};
 
 #[cfg(feature = "sqlcipher")]

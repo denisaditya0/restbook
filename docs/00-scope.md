@@ -82,4 +82,10 @@ The engine's kept-current milestones are B1..B18, with B19..B24 planned, in
 - No OAuth 2.0 authorization-code browser flow yet: the engine builds the
   authorize URL and exchanges a code, and the app fetches client-credentials
   tokens, but the local redirect listener is not wired.
-- `devcli` persists plaintext JSONL by design; only the app path is encrypted.
+- `devcli` persists plaintext JSONL by design; the app's history is encrypted,
+  in the per-user data directory and in a workspace alike.
+- A `restbook.json` workspace keeps its tracked files free of secrets, and its
+  gitignored `.restbook/` history is on the encrypted store like the per-user
+  one. A workspace never falls back to a plaintext history file: without a
+  keyring, that session's history stays in memory, because a workspace is the
+  tree a user shares.

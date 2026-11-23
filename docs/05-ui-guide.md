@@ -484,8 +484,9 @@ fixes the clock and the seed.
 - A **workspace** — a directory with a `restbook.json` marker — wins. It is
   located by `RESTBOOK_WORKSPACE` (explicit, must be marked) or by walking up
   from the current directory (implicit, like `.git`). Collections and
-  environments become files there and can be shared; history stays in
-  `.restbook/history.jsonl` and is never shared.
+  environments become files there and can be shared; history lives in the
+  gitignored `.restbook/`, in the same encrypted store the data directory uses,
+  and is never shared.
 - Otherwise the **per-user SQLCipher database** is opened, as before.
 
 The one rule to keep: the choice is made at startup and never changes mid-run.
@@ -502,8 +503,8 @@ always answer "where did my data go" and "who can read it":
 | the workspace path | workspace | collections/environments are files in that directory |
 | `local database` | data directory | everything is in the per-user database, private to this machine |
 | `Encrypted` | encrypted history | the database is SQLCipher, keyed from the system keyring |
-| `Not encrypted` | plaintext history | a build without SQLCipher, a keyring that failed, or a folder workspace writes a readable JSONL file |
-| `Not saved` | in-memory history | the history file could not be opened; this session is lost on close |
+| `Not encrypted` | plaintext history | a data directory in a build without SQLCipher, or whose keyring failed, writes a readable JSONL file |
+| `Not saved` | in-memory history | the history file could not be opened, or a workspace had no encrypted store and refuses to write plain text; this session is lost on close |
 
 The protection chip's tooltip names the reason, because the bar is one line and
 a warning glyph alone would rely on color to be read. `HistoryMode` in
@@ -977,10 +978,15 @@ stderr, which a GUI user never reads. A legacy `.restbook/history.jsonl` from an
 older working-directory build is imported once — into the database when it is
 new, or copied next to the new JSONL file.
 
-A `restbook.json` workspace wins over that directory (`open_store`), and
-`FolderStore` serves history from `<workspace>/.restbook/history.jsonl` —
-plaintext in every build, unrelated to the encrypted store above, and the hole
-`0.1.9` closes by routing the workspace through `open_history` too.
+A `restbook.json` workspace wins over that directory (`open_store`), and its
+history goes through the same `open_history` with one difference: the workspace
+directory is `<workspace>/.restbook/`, and plain text is not an acceptable
+fallback there. When SQLCipher cannot open, the session's history stays in
+memory and the status bar says `Not saved` — writing a readable file into the
+tree a user shares is the one outcome the encrypted store exists to prevent. A
+plaintext `history.jsonl` left by an older build is imported into the database
+once and then deleted, not renamed: an `.imported` copy beside it would keep the
+leak open.
 
 `workspace/persistence.rs` writes the whole `DockAreaState` to `layout.json` on
 a debounced layout change, and flushes on window close. `Workspace::flush` is

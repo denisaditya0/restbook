@@ -59,9 +59,11 @@ exercised without a window.
 directory. That is a development convenience, unrelated to the app. The app
 writes to a per-user data directory — `%APPDATA%\restbook` on Windows,
 `~/Library/Application Support/restbook` on macOS, `$XDG_DATA_HOME/restbook`
-elsewhere — overridable with `RESTBOOK_DATA_DIR`. `crates/app/src/workspace/storage.rs`
-owns that decision, including a one-time migration of legacy
-`.restbook/history.jsonl` files.
+elsewhere — overridable with `RESTBOOK_DATA_DIR`; a `restbook.json` workspace,
+when one is found, takes precedence and keeps history in its gitignored
+`.restbook/`. Both go through the same encrypted store.
+`crates/app/src/workspace/storage.rs` owns that decision, including a one-time
+migration of legacy `.restbook/history.jsonl` files.
 
 The encrypted store needs an OpenSSL dev tree: `libsqlite3-sys` reads
 `OPENSSL_DIR` and panics without it. The `dev` scripts detect a prefix on this
@@ -78,7 +80,10 @@ sh ../../scripts/dev.sh run          # sqlcipher is a default feature there
 Set `OPENSSL_DIR` yourself to override the detection. The store crate keeps
 `sqlcipher` opt-in so `cargo test` at the root stays light; the app enables it by
 default and falls back to plaintext JSONL (with a stderr warning) when the
-keyring is unavailable, or entirely when built with `--no-default-features`.
+keyring is unavailable, or entirely when built with `--no-default-features`. That
+fallback is for the per-user data directory only: a workspace with no encrypted
+store keeps its history in memory rather than writing plain text into a shared
+tree.
 
 Where a test goes and which seam to use is [Testing](#testing) below; this
 section is about running the commands.
@@ -153,7 +158,7 @@ cargo test -- --nocapture   # keep println!/log output
 | | `import/` | `BulkImport`, `Bundle`, and one module per format (B13) |
 | | `testing.rs` | `FakeTransport`, the offline `Transport` for tests and previews (B16) |
 | `transport` | `lib.rs` | `ReqwestTransport`: one tokio runtime on its own thread, pooled clients, `SharedJar` |
-| `store` | `jsonl.rs`, `folder.rs`, `sqlcipher.rs` | `JsonlStore` (dev/fallback), `FolderStore` (Git workspace), `SqlcipherStore` (app, feature-gated), `MemoryStore` |
+| `store` | `jsonl.rs`, `folder.rs`, `sqlcipher.rs` | `JsonlStore` (dev/fallback), `FolderStore` (Git workspace; history is injected, not chosen), `SqlcipherStore` (app, feature-gated), `MemoryStore` |
 | `devcli` | `main.rs` | the harness; never a product feature |
 
 Dependencies point one way: `devcli` -> `store`/`transport` -> `core`.
@@ -412,10 +417,11 @@ plaintext in an export.
 - Tests are behavior sentences (`rejects_header_injection`), not method names.
 - `core` tests must not need a network or a window. The one exception is the
   `SqlcipherStore` test, which is feature-gated and touches the keyring.
-- JSONL is plaintext. It is the devcli format, the app's *fallback* when the
-  `sqlcipher` feature is off, and a folder workspace's `.restbook/history.jsonl`
-  until `0.1.9`; if you ship a change that touches history, make sure the
-  encrypted path is the one you exercised (`--features sqlcipher`).
+- JSONL is plaintext. It is the devcli format and the app's *fallback* in the
+  per-user data directory when the keyring is unavailable or the `sqlcipher`
+  feature is off; a workspace never writes one. If you ship a change that
+  touches history, make sure the encrypted path is the one you exercised
+  (`--features sqlcipher`).
 - `Body::Multipart` file parts are paths resolved at prepare time; the transport
   opens them. Keep new body kinds on the same pattern.
 - The `sqlcipher` build needs `OPENSSL_DIR`. `scripts/dev.sh` detects it; an

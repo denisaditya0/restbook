@@ -18,7 +18,7 @@ use crate::icons::{self, IconName};
 use crate::notice::Notice;
 use crate::theme::{Metrics, Palette};
 
-use super::storage::{HistoryMode, PlaintextReason};
+use super::storage::{EphemeralReason, HistoryMode, PlaintextReason};
 
 /// One thing the titlebar can show, and its tooltip.
 pub(crate) struct TitlePart {
@@ -486,19 +486,19 @@ fn history_mode_chip(
             palette.warning,
             "The system keyring was unavailable, so history is stored as plain text",
         ),
-        HistoryMode::Plaintext(PlaintextReason::WorkspaceFile) => (
-            "plaintext",
-            IconName::TriangleAlert,
-            "Not encrypted",
-            palette.warning,
-            "A folder workspace keeps history in a plain text file under .restbook",
-        ),
-        HistoryMode::Ephemeral => (
+        HistoryMode::Ephemeral(EphemeralReason::OpenFailed) => (
             "ephemeral",
             IconName::TriangleAlert,
             "Not saved",
             palette.danger,
             "History could not be opened, so this session is kept in memory and is lost when the window closes",
+        ),
+        HistoryMode::Ephemeral(EphemeralReason::WorkspaceRefusedPlaintext) => (
+            "ephemeral",
+            IconName::TriangleAlert,
+            "Not saved",
+            palette.danger,
+            "A folder workspace never keeps a plain text history, and encryption is unavailable, so this session is kept in memory and is lost when the window closes",
         ),
     };
 
@@ -706,7 +706,7 @@ mod render_tests {
     /// encrypted state is the one that shows no warning in its place.
     #[test]
     fn the_status_bar_names_how_history_is_protected() {
-        use super::super::storage::{HistoryMode, PlaintextReason};
+        use super::super::storage::{EphemeralReason, HistoryMode, PlaintextReason};
 
         assert!(
             painted(
@@ -726,9 +726,17 @@ mod render_tests {
             painted(HistoryMode::Encrypted, "status-history-encrypted"),
             "an encrypted history still says so"
         );
-        assert!(
-            painted(HistoryMode::Ephemeral, "status-history-ephemeral"),
-            "history that will not be saved says so"
-        );
+        // A session kept in memory is one state to the user, however it got
+        // there: an unreadable store and a workspace that refused plain text
+        // both mean "this history will not survive the window".
+        for reason in [
+            EphemeralReason::OpenFailed,
+            EphemeralReason::WorkspaceRefusedPlaintext,
+        ] {
+            assert!(
+                painted(HistoryMode::Ephemeral(reason), "status-history-ephemeral"),
+                "history that will not be saved says so ({reason:?})"
+            );
+        }
     }
 }
