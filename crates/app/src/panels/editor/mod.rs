@@ -7,6 +7,7 @@
 mod auth;
 mod body;
 mod headers;
+mod kv_raw;
 mod kv_table;
 mod params;
 mod parts_table;
@@ -119,6 +120,9 @@ pub(crate) struct RequestEditor {
     pub(crate) tab: EditorTab,
     pub(crate) url: Entity<InputState>,
     params: kv_table::Rows,
+    /// The Params tab as wire-form text, when the user chose Raw. `None` is the
+    /// table; the text is parsed back on the way out and at send time.
+    pub(crate) params_raw: Option<kv_raw::RawRows>,
     headers: kv_table::Rows,
     /// Whether the Headers tab shows the generated default headers. Collapsed
     /// by default, like a web client's "hidden headers": they are not part of
@@ -130,6 +134,8 @@ pub(crate) struct RequestEditor {
     /// input whose syntax matters, and only `EditorState` can highlight it.
     pub(crate) raw_text: Entity<EditorState>,
     form: kv_table::Rows,
+    /// The same switch for a `Form` body.
+    pub(crate) form_raw: Option<kv_raw::RawRows>,
     parts: parts_table::PartRows,
     pub(crate) binary_path: Entity<InputState>,
     pub(crate) auth_kind: AuthKind,
@@ -246,12 +252,14 @@ impl RequestEditor {
             tab: EditorTab::Params,
             url,
             params: kv_table::Rows::default(),
+            params_raw: None,
             headers: kv_table::Rows::default(),
             show_default_headers: false,
             body_kind: BodyKind::None,
             raw_mime: MIME_TYPES[0].to_owned(),
             raw_text,
             form: kv_table::Rows::default(),
+            form_raw: None,
             parts: parts_table::PartRows::default(),
             binary_path,
             auth_kind: AuthKind::None,
@@ -366,6 +374,9 @@ impl RequestEditor {
         self.method = method;
         let variables = self.variables.clone();
         self.params.replace(&params, &variables, window, cx);
+        if let Some(raw) = &self.params_raw {
+            raw.write(&self.params.to_kv(cx), window, cx);
+        }
         self.headers.replace(&headers, &variables, window, cx);
 
         match body {
@@ -443,9 +454,59 @@ impl RequestEditor {
         self.follow_redirects = follow_redirects.unwrap_or(true);
         self.insecure = insecure;
 
+        if let Some(raw) = &self.form_raw {
+            raw.write(&self.form.to_kv(cx), window, cx);
+        }
+
         self.url
             .update(cx, |state, cx| state.set_value(url, window, cx));
         cx.notify();
+    }
+
+    /// Switch the Params tab between the table and wire-form text. The text is
+    /// generated from the rows on the way in and parsed back into them on the
+    /// way out, so there is never a second copy of the request.
+    pub(crate) fn toggle_params_raw(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.params_raw.take() {
+            Some(raw) => {
+                let rows = raw.rows(cx);
+                let variables = self.variables.clone();
+                self.params.replace(&rows, &variables, window, cx);
+            }
+            None => {
+                let raw = kv_raw::RawRows::new(window, cx);
+                let rows = self.params.to_kv(cx);
+                raw.write(&rows, window, cx);
+                self.params_raw = Some(raw);
+            }
+        }
+        cx.notify();
+    }
+
+    /// The same switch for a `Form` body.
+    pub(crate) fn toggle_form_raw(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.form_raw.take() {
+            Some(raw) => {
+                let rows = raw.rows(cx);
+                let variables = self.variables.clone();
+                self.form.replace(&rows, &variables, window, cx);
+            }
+            None => {
+                let raw = kv_raw::RawRows::new(window, cx);
+                let rows = self.form.to_kv(cx);
+                raw.write(&rows, window, cx);
+                self.form_raw = Some(raw);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Fold an open Form text view back into its rows before the body kind
+    /// changes, so switching to Multipart does not silently discard edits.
+    pub(crate) fn fold_form_raw(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.form_raw.is_some() {
+            self.toggle_form_raw(window, cx);
+        }
     }
 
     pub(crate) fn methods() -> [Method; 7] {
@@ -495,7 +556,10 @@ impl RequestEditor {
             name: format!("{} {}", self.method, url),
             method: self.method,
             url,
-            params: self.params.to_kv(cx),
+            params: match &self.params_raw {
+                Some(raw) => raw.rows(cx),
+                None => self.params.to_kv(cx),
+            },
             headers: self.headers.to_kv(cx),
             body: self.body(cx),
             auth: self.auth(cx),
@@ -643,6 +707,110 @@ pub(super) fn language_for_mime(mime: &str) -> &'static str {
 /// fails every request instantly.
 pub(crate) fn parse_timeout_ms(text: &str) -> Option<u64> {
     text.trim().parse::<u64>().ok().filter(|ms| *ms > 0)
+}
+
+#[cfg(test)]
+mod raw_tests {
+    use std::sync::Arc;
+
+    use gpui_kit::{
+        div, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render,
+        Styled as _, TestAppContext, VisualTestContext, Window,
+    };
+    use restbook_core::{Body, Kv};
+    use restbook_store::MemoryStore;
+
+    use super::{BodyKind, RequestEditor};
+    use crate::variables::Variables;
+
+    struct Host {
+        editor: Entity<RequestEditor>,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                self.editor
+                    .update(cx, |editor, cx| editor.render_params_tab(cx)),
+            )
+        }
+    }
+
+    fn editor(cx: &mut TestAppContext) -> (Entity<RequestEditor>, &mut VisualTestContext) {
+        let variables =
+            cx.update(|cx| cx.new(|cx| Variables::new(Arc::new(MemoryStore::new()), cx)));
+        let mut built = None;
+        let (_view, cx) = cx.add_window_view(|window, cx| {
+            let editor = cx.new(|cx| RequestEditor::new(variables.clone(), window, cx));
+            built = Some(editor.clone());
+            Host { editor }
+        });
+        (built.expect("the view built the editor"), cx)
+    }
+
+    /// The text is the editable surface while Raw is open, and the table is fed
+    /// from it on the way back — repeated keys and a disabled row included.
+    #[test]
+    fn the_params_text_round_trips_through_the_table() {
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+        let (editor, vcx) = editor(&mut cx);
+
+        vcx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                let variables = editor.variables.clone();
+                editor.params.replace(
+                    &[
+                        Kv::new("keep", "1"),
+                        Kv {
+                            enabled: false,
+                            ..Kv::new("off", "2")
+                        },
+                    ],
+                    &variables,
+                    window,
+                    cx,
+                );
+                editor.toggle_params_raw(window, cx);
+
+                let raw = editor.params_raw.as_ref().expect("the raw view is open");
+                raw.set_text("a=1&a=2\n# off=2", window, cx);
+                assert_eq!(editor.request(cx).params.len(), 3);
+
+                editor.toggle_params_raw(window, cx);
+                let rows = editor.params.to_kv(cx);
+                assert_eq!(
+                    rows.iter().map(|row| row.key.as_str()).collect::<Vec<_>>(),
+                    ["a", "a", "off"]
+                );
+                assert!(!rows[2].enabled);
+            });
+        });
+    }
+
+    #[test]
+    fn the_form_text_round_trips_through_the_table() {
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+        let (editor, vcx) = editor(&mut cx);
+
+        vcx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.body_kind = BodyKind::Form;
+                editor.toggle_form_raw(window, cx);
+
+                let raw = editor.form_raw.as_ref().expect("the raw view is open");
+                raw.set_text("x=1\ny=2", window, cx);
+                match editor.body(cx) {
+                    Body::Form(rows) => assert_eq!(rows.len(), 2),
+                    other => panic!("expected a form body, got {other:?}"),
+                }
+
+                editor.toggle_form_raw(window, cx);
+                assert_eq!(editor.form.len(), 2);
+            });
+        });
+    }
 }
 
 #[cfg(test)]

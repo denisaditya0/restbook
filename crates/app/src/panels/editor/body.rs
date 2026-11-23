@@ -58,7 +58,10 @@ impl RequestEditor {
                     .ghost()
                     .selected(current)
                     .toggled(current)
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if this.body_kind == BodyKind::Form && kind != BodyKind::Form {
+                            this.fold_form_raw(window, cx);
+                        }
                         this.body_kind = kind;
                         cx.notify();
                     }))
@@ -117,16 +120,42 @@ impl RequestEditor {
                     this.form.apply(*action, &variables, window, cx);
                     cx.notify();
                 });
+                let raw = self.form_raw.is_some();
+                let toggle = Button::new("form-view")
+                    .label(if raw { "Table" } else { "Raw" })
+                    .tooltip(if raw {
+                        "Edit as key/value rows"
+                    } else {
+                        "Edit as key=value text"
+                    })
+                    .ghost()
+                    .compact()
+                    .on_click(cx.listener(|this, _, window, cx| this.toggle_form_raw(window, cx)));
+
+                let content = if let Some(raw) = &self.form_raw {
+                    Editor::new(raw.state())
+                        .h(px(metrics.body_row_height * 8.))
+                        .into_any_element()
+                } else {
+                    kv_table::render(&self.form, &self.palette, cx, on_action)
+                };
 
                 v_flex()
                     .gap(px(metrics.space_sm))
                     .child(
-                        div()
-                            .text_xs()
-                            .text_color(self.palette.muted)
-                            .child("Sent as application/x-www-form-urlencoded."),
+                        h_flex()
+                            .gap(px(metrics.space_md))
+                            .items_center()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_xs()
+                                    .text_color(self.palette.muted)
+                                    .child("Sent as application/x-www-form-urlencoded."),
+                            )
+                            .child(toggle),
                     )
-                    .child(kv_table::render(&self.form, &self.palette, cx, on_action))
+                    .child(content)
                     .into_any_element()
             }
             BodyKind::Multipart => {
@@ -205,7 +234,10 @@ impl RequestEditor {
                     text: self.raw_text.read(cx).value().to_string(),
                 }
             }
-            BodyKind::Form => Body::Form(self.form.to_kv(cx)),
+            BodyKind::Form => Body::Form(match &self.form_raw {
+                Some(raw) => raw.rows(cx),
+                None => self.form.to_kv(cx),
+            }),
             BodyKind::Multipart => Body::Multipart(self.parts.to_parts(cx)),
             BodyKind::Binary => Body::Binary {
                 path: self.binary_path.read(cx).value().trim().to_owned(),
