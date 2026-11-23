@@ -354,9 +354,10 @@ fn backtrace_requested() -> bool {
 
 /// `env_logger`, plus the second sink a capture writes to.
 ///
-/// The ordinary logger owns `restbook.log` and keeps its `info` filter, so a
-/// `debug` record can never reach the attachable file. The capture logger
-/// filters at `debug` but its sink drops everything unless a file is open.
+/// The ordinary logger owns `restbook.log` and filters at `info` unless
+/// `RUST_LOG` says otherwise — an explicit filter is the developer asking for
+/// the transcript in that file too. The capture logger filters at `debug` but
+/// its sink drops everything unless a file is open.
 struct Closing {
     normal: env_logger::Logger,
     capture: env_logger::Logger,
@@ -455,19 +456,32 @@ impl Write for Tee {
     }
 }
 
-/// Create the directory and open the file for appending, rotating a full file
-/// to `<name>.1` first. One previous file is the whole history: the ordinary
-/// log is a backstop, and an unbounded set of rotated files is not.
+/// Create the directory and open the file for appending, archiving it first
+/// when it is full or was written by another version. One previous file is the
+/// whole history: the ordinary log is a backstop, and an unbounded set of
+/// rotated files is not.
 fn open(path: &Path) -> Option<File> {
     if let Some(parent) = path.parent() {
         restbook_store::secure::create_dir(parent).ok()?;
     }
-    if fs::metadata(path).map(|meta| meta.len()).unwrap_or(0) > MAX_BYTES {
+    let len = fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
+    if len > MAX_BYTES || (len > 0 && from_another_version(path)) {
         let backup = path.with_extension("log.1");
         let _ = fs::remove_file(&backup);
         let _ = fs::rename(path, backup);
     }
     restbook_store::secure::open_append(path).ok()
+}
+
+/// Whether the file holds no line from this build. The startup line names the
+/// version, so a file without one is an older build's record: an upgrade
+/// archives it instead of appending a new version's lines to that transcript,
+/// which is how a fresh install starts with an empty log.
+fn from_another_version(path: &Path) -> bool {
+    let Ok(text) = fs::read_to_string(path) else {
+        return false;
+    };
+    !text.contains(&format!("restbook {} starting", env!("CARGO_PKG_VERSION")))
 }
 
 #[cfg(test)]
@@ -587,6 +601,53 @@ mod tests {
             MAX_BYTES + 1,
             "the previous file is kept, not deleted"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An upgrade must not append the new build's lines to the old build's
+    /// transcript: the previous file is archived, so an installation of a new
+    /// version starts with a log that describes only that version.
+    #[test]
+    fn a_log_from_another_version_is_archived() {
+        let dir = std::env::temp_dir().join("restbook-log-upgrade-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("restbook.log");
+        std::fs::write(&path, b"[old] INFO  restbook_app] event: titlebar\n").unwrap();
+
+        let mut file = open(&path).expect("a fresh file after the upgrade");
+        file.write_all(b"next run\n").unwrap();
+        drop(file);
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "next run\n");
+        assert_eq!(
+            std::fs::read_to_string(path.with_extension("log.1")).unwrap(),
+            "[old] INFO  restbook_app] event: titlebar\n",
+            "the previous version's log is kept, not deleted"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A restart of the same version appends; the marker in its startup line is
+    /// what tells the two cases apart.
+    #[test]
+    fn a_log_from_this_version_keeps_appending() {
+        let dir = std::env::temp_dir().join("restbook-log-same-version-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("restbook.log");
+        let started = format!("restbook {} starting; log: x\n", env!("CARGO_PKG_VERSION"));
+        std::fs::write(&path, started.as_bytes()).unwrap();
+
+        let mut file = open(&path).expect("the existing file");
+        file.write_all(b"next run\n").unwrap();
+        drop(file);
+
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            format!("{started}next run\n")
+        );
+        assert!(!path.with_extension("log.1").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

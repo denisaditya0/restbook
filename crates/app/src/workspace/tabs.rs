@@ -712,7 +712,7 @@ impl Workspace {
             target: "restbook_app::ui",
             "open draft: {} {} (id {})",
             self.tabs[index].request.method,
-            self.tabs[index].request.url,
+            crate::logging::redact_url(&self.tabs[index].request.url),
             id,
         );
     }

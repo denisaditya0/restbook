@@ -390,7 +390,7 @@ impl Workspace {
                         target: "restbook_app::ui",
                         "history pick: restored {} {}",
                         entry.request.method,
-                        entry.request.url,
+                        crate::logging::redact_url(&entry.request.url),
                     );
                     // The full request goes to the editor, so params, headers,
                     // body, and auth come back — not just method and URL. The
