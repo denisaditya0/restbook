@@ -15,10 +15,13 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::tab::{TabBar, TabVariant};
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Disableable as _, WindowExt as _};
+use gpui_kit::component::{
+    h_flex, v_flex, ActiveTheme as _, Disableable as _, Selectable as _, WindowExt as _,
+};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use restbook_core::{HistoryHit, Origin, ResponseRecord, Store, Transport};
+use restbook_core::{Failure, FailureKind, HistoryHit, Origin, ResponseRecord, Store, Transport};
 
 use std::ops::Range;
 use std::rc::Rc;
@@ -169,6 +172,10 @@ pub(crate) struct ResponsePanel {
     /// decoded body changes rather than per frame. `(row, byte offset in row)`
     /// for each match start, plus the index the arrows are centred on.
     finding: Option<Finding>,
+    /// Whether a failure's Details are disclosed, and the log loaded when they
+    /// were opened. Loaded on demand, not on every paint.
+    failure_details: bool,
+    failure_log: Option<String>,
     focus_handle: FocusHandle,
 }
 
@@ -789,6 +796,8 @@ impl ResponsePanel {
             find,
             find_open: false,
             finding: None,
+            failure_details: false,
+            failure_log: None,
             focus_handle: cx.focus_handle(),
         };
         panel.sync_history(cx);
@@ -1207,6 +1216,16 @@ impl ResponsePanel {
         self.finding = None;
         self.find
             .update(cx, |state, cx| state.set_value("", window, cx));
+        cx.notify();
+    }
+
+    /// Open the technical detail on demand. The ordinary view stays readable;
+    /// the log is read once, when the disclosure first opens.
+    fn toggle_failure_details(&mut self, cx: &mut Context<Self>) {
+        self.failure_details = !self.failure_details;
+        if self.failure_details && self.failure_log.is_none() {
+            self.failure_log = crate::logging::tail(80);
+        }
         cx.notify();
     }
 
@@ -1957,7 +1976,7 @@ impl ResponsePanel {
         let message = match state {
             ResponseState::Fetching { .. } => "Waiting for the response…",
             ResponseState::Canceled { .. } => "The request was canceled.",
-            ResponseState::Error { .. } => "The request failed. The error is shown above.",
+            ResponseState::Error { .. } => "",
             _ => "",
         };
 
@@ -2100,7 +2119,7 @@ impl ResponsePanel {
     fn render_failure(
         &self,
         state: ResponseState,
-        message: Option<&str>,
+        failure: Option<&Failure>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = self.palette.clone();
@@ -2117,25 +2136,29 @@ impl ResponsePanel {
         };
         let shown_url = crate::logging::redact_url(&url);
         let (elapsed, bytes) = state.stats().unwrap_or_default();
-        let raw = message.unwrap_or("The request failed without a message.");
+        let fallback = Failure::other("The request failed without a message.");
+        let failure = failure.unwrap_or(&fallback);
         // Reqwest repeats the URL in its own message, query included. The pane
         // and the copy-for-a-report action must not show more than the log does.
         let detail = if url.is_empty() {
-            raw.to_owned()
+            failure.message.clone()
         } else {
-            raw.replace(&url, &shown_url)
+            failure.message.replace(&url, &shown_url)
         };
-        let failure = classify_failure(&detail, &url);
+        let title = failure.kind.title();
+        let hint = failure_hint(failure.kind, &url);
         let stats = format!(
             "after {} · {} received",
             util::duration(elapsed.as_millis() as u64),
             util::human_bytes(bytes as usize),
         );
         let report = format!(
-            "{}\n{}\n\n{} {}\n{}\n\n{}",
-            failure.title, failure.hint, method, shown_url, stats, detail
+            "{title}\n{hint}\n\n{} {shown_url}\n{stats}\n\n{detail}",
+            method
         );
         let copy_error = report.clone();
+        let details_open = self.failure_details;
+        let log = self.failure_log.clone();
 
         v_flex()
             .size_full()
@@ -2182,123 +2205,188 @@ impl ResponsePanel {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .gap(px(metrics.space_sm))
-                    .p(px(metrics.space_lg))
+                    .px(px(metrics.space_lg))
+                    .py(px(metrics.space_lg))
                     .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(palette.danger)
-                            .child(failure.title),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(palette.foreground)
-                            .debug_selector(|| "response-error-hint".to_owned())
-                            .child(failure.hint),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(palette.muted)
-                            .debug_selector(|| "response-error-attempt".to_owned())
-                            .child(format!("{method} {shown_url}")),
-                    )
-                    .child(div().text_xs().text_color(palette.muted).child(stats))
-                    .child(
-                        div()
-                            .pt(px(metrics.space_xs))
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(palette.muted)
-                            .child("Details"),
-                    )
-                    .child(
-                        div()
-                            .p(px(metrics.space_sm))
-                            .bg(palette.tab_bar)
-                            .border_1()
-                            .border_color(palette.border)
-                            .text_xs()
-                            .text_color(palette.muted)
-                            .debug_selector(|| "response-error-detail".to_owned())
-                            .child(detail.clone()),
-                    )
-                    .child(
-                        h_flex()
-                            .flex_wrap()
-                            .gap(px(metrics.space_xs))
+                        v_flex()
+                            .w_full()
+                            .max_w(px(720.))
+                            .mx_auto()
+                            .gap(px(metrics.space_sm))
                             .child(
-                                Button::new("response-error-retry")
-                                    .label("Retry")
-                                    .outline()
-                                    .debug_selector(|| "response-error-retry".to_owned())
-                                    .tooltip("Send this request again")
-                                    .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::Retry))),
+                                h_flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .gap(px(metrics.space_xs))
+                                    .child(
+                                        icons::sized(IconName::CircleAlert, icons::MEDIUM)
+                                            .text_color(palette.danger),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(palette.danger)
+                                            .child(title),
+                                    ),
                             )
                             .child(
-                                Button::new("response-error-copy")
-                                    .icon(IconName::Copy)
-                                    .label("Copy error")
-                                    .ghost()
-                                    .compact()
-                                    .tooltip("Copy this failure with its details")
-                                    .on_click(cx.listener(move |_, _, _, cx| {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(
-                                            copy_error.clone(),
-                                        ));
-                                    })),
+                                div()
+                                    .text_sm()
+                                    .text_color(palette.foreground)
+                                    .debug_selector(|| "response-error-hint".to_owned())
+                                    .child(hint),
                             )
-                            // The evidence for the failure is in the log, and the
-                            // file is not obvious. Keep both actions where the
-                            // error is.
                             .child(
-                                Button::new("copy-log-on-error")
-                                    .icon(IconName::ClipboardCopy)
-                                    .ghost()
-                                    .compact()
-                                    .tooltip("Copy the recent log, for a bug report")
-                                    .on_click(cx.listener(|_, _, window, cx| {
-                                        match crate::logging::tail(200) {
-                                            Some(text) if !text.is_empty() => {
+                                div()
+                                    .text_xs()
+                                    .text_color(palette.muted)
+                                    .debug_selector(|| "response-error-attempt".to_owned())
+                                    .child(format!("{method} {shown_url}")),
+                            )
+                            .child(div().text_xs().text_color(palette.muted).child(stats))
+                            .child(
+                                h_flex()
+                                    .flex_wrap()
+                                    .gap(px(metrics.space_xs))
+                                    .child(
+                                        Button::new("response-error-retry")
+                                            .label("Retry")
+                                            .outline()
+                                            .debug_selector(|| "response-error-retry".to_owned())
+                                            .tooltip("Send this request again")
+                                            .on_click(
+                                                cx.listener(|_, _, _, cx| cx.emit(Event::Retry)),
+                                            ),
+                                    )
+                                    .child(
+                                        Button::new("response-error-details")
+                                            .icon(if details_open {
+                                                IconName::ChevronUp
+                                            } else {
+                                                IconName::ChevronDown
+                                            })
+                                            .label("Details")
+                                            .ghost()
+                                            .compact()
+                                            .selected(details_open)
+                                            .debug_selector(|| "response-error-details".to_owned())
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.toggle_failure_details(cx);
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("response-error-copy")
+                                            .icon(IconName::Copy)
+                                            .label("Copy error")
+                                            .ghost()
+                                            .compact()
+                                            .tooltip("Copy this failure with its details")
+                                            .on_click(cx.listener(move |_, _, _, cx| {
                                                 cx.write_to_clipboard(ClipboardItem::new_string(
-                                                    text,
+                                                    copy_error.clone(),
                                                 ));
-                                                window.push_notification(
-                                                    Notification::success("Copied the recent log"),
-                                                    cx,
-                                                );
-                                            }
-                                            _ => window.push_notification(
-                                                Notification::error("No log file is being written"),
-                                                cx,
-                                            ),
-                                        }
-                                    })),
+                                            })),
+                                    )
+                                    // The evidence for the failure is in the log, and
+                                    // the file is not obvious. Keep both actions where
+                                    // the error is.
+                                    .child(
+                                        Button::new("copy-log-on-error")
+                                            .icon(IconName::ClipboardCopy)
+                                            .ghost()
+                                            .compact()
+                                            .tooltip("Copy the recent log, for a bug report")
+                                            .on_click(cx.listener(|_, _, window, cx| {
+                                                match crate::logging::tail(200) {
+                                                    Some(text) if !text.is_empty() => {
+                                                        cx.write_to_clipboard(
+                                                            ClipboardItem::new_string(text),
+                                                        );
+                                                        window.push_notification(
+                                                            Notification::success(
+                                                                "Copied the recent log",
+                                                            ),
+                                                            cx,
+                                                        );
+                                                    }
+                                                    _ => window.push_notification(
+                                                        Notification::error(
+                                                            "No log file is being written",
+                                                        ),
+                                                        cx,
+                                                    ),
+                                                }
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("debug-capture-on-error")
+                                            .icon(IconName::Bug)
+                                            .ghost()
+                                            .compact()
+                                            .tooltip(
+                                                "Record detailed logs for 10 minutes, for a report",
+                                            )
+                                            .on_click(cx.listener(|_, _, window, cx| {
+                                                match crate::logging::start_debug_capture() {
+                                                    Ok(path) => window.push_notification(
+                                                        Notification::success(format!(
+                                                            "Debug logs on for 10 minutes: {}",
+                                                            path.display()
+                                                        )),
+                                                        cx,
+                                                    ),
+                                                    Err(message) => window.push_notification(
+                                                        Notification::error(message),
+                                                        cx,
+                                                    ),
+                                                }
+                                            })),
+                                    ),
                             )
-                            .child(
-                                Button::new("debug-capture-on-error")
-                                    .icon(IconName::Bug)
-                                    .ghost()
-                                    .compact()
-                                    .tooltip("Record detailed logs for 10 minutes, for a report")
-                                    .on_click(cx.listener(|_, _, window, cx| {
-                                        match crate::logging::start_debug_capture() {
-                                            Ok(path) => window.push_notification(
-                                                Notification::success(format!(
-                                                    "Debug logs on for 10 minutes: {}",
-                                                    path.display()
-                                                )),
-                                                cx,
-                                            ),
-                                            Err(message) => window.push_notification(
-                                                Notification::error(message),
-                                                cx,
-                                            ),
-                                        }
-                                    })),
-                            ),
+                            .when(details_open, |column| {
+                                column
+                                    .child(
+                                        div()
+                                            .pt(px(metrics.space_xs))
+                                            .text_xs()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(palette.muted)
+                                            .child("Engine detail"),
+                                    )
+                                    .child(
+                                        div()
+                                            .p(px(metrics.space_sm))
+                                            .bg(palette.tab_bar)
+                                            .border_1()
+                                            .border_color(palette.border)
+                                            .text_xs()
+                                            .text_color(palette.muted)
+                                            .debug_selector(|| "response-error-detail".to_owned())
+                                            .child(detail),
+                                    )
+                                    .child(
+                                        div()
+                                            .pt(px(metrics.space_xs))
+                                            .text_xs()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(palette.muted)
+                                            .child("Recent log"),
+                                    )
+                                    .child(
+                                        div()
+                                            .p(px(metrics.space_sm))
+                                            .bg(palette.tab_bar)
+                                            .border_1()
+                                            .border_color(palette.border)
+                                            .text_xs()
+                                            .text_color(palette.muted)
+                                            .debug_selector(|| "response-error-log".to_owned())
+                                            .child(log.unwrap_or_else(|| {
+                                                "No log file is being written.".to_owned()
+                                            })),
+                                    )
+                            }),
                     ),
             )
             .into_any_element()
@@ -2384,100 +2472,41 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     era * 146_097 + day_of_era - 719_468
 }
 
-/// A failure translated for the pane. The engine string stays the technical
-/// detail; the title and hint are what a user can act on.
-struct Failure {
-    title: &'static str,
-    hint: String,
-}
-
-/// Classify an engine error message. It is deliberately string-based: `Error`
-/// carries the transport's cause chain, and the chain is what names DNS, TLS,
-/// timeout, and refused connections.
-fn classify_failure(message: &str, url: &str) -> Failure {
-    let lower = message.to_ascii_lowercase();
-    let (title, hint) = if lower.contains("invalid url") {
-        (
-            "Invalid URL",
-            "Check the scheme and host in the URL bar.".to_owned(),
-        )
-    } else if lower.contains("unknown variable") || lower.contains("unknown generator") {
-        (
-            "Unresolved variable",
+/// The sentence under a failure's title. The kind was decided at the boundary,
+/// so this maps a cause to the next step without parsing the engine's message.
+fn failure_hint(kind: FailureKind, url: &str) -> String {
+    let hint = match kind {
+        FailureKind::InvalidUrl => "Check the scheme and host in the URL bar.",
+        FailureKind::Unresolved => {
             "A `{{…}}` reference has no value for this send. Check the environment \
              or replace the token."
-                .to_owned(),
-        )
-    } else if lower.contains("tls")
-        || lower.contains("certificate")
-        || lower.contains("ssl")
-        || lower.contains("handshake")
-    {
-        (
-            "TLS failed",
+        }
+        FailureKind::Tls => {
             "The secure connection could not be established. Check the server \
-             certificate; if this host is trusted, enable the request's insecure \
-             TLS setting."
-                .to_owned(),
-        )
-    } else if lower.contains("proxy") {
-        (
-            "Proxy failed",
-            "The configured proxy could not be reached or rejected the connection.".to_owned(),
-        )
-    } else if lower.contains("timed out") || lower.contains("timeout") {
-        (
-            "Timed out",
+             certificate; if this host is trusted, enable the request's insecure TLS \
+             setting."
+        }
+        FailureKind::Proxy => {
+            "The configured proxy could not be reached or rejected the connection."
+        }
+        FailureKind::Timeout => {
             "The server did not answer in time. Raise the timeout in the request's \
              Settings tab or Settings › Network."
-                .to_owned(),
-        )
-    } else if lower.contains("dns")
-        || lower.contains("lookup")
-        || lower.contains("resolve")
-        || lower.contains("name or service")
-    {
-        (
-            "Host not found",
-            "The host could not be resolved. Check the URL and your connection or VPN.".to_owned(),
-        )
-    } else if lower.contains("connection refused") {
-        (
-            "Connection refused",
-            "Nothing is accepting connections at that host and port.".to_owned(),
-        )
-    } else if lower.contains("connection reset")
-        || lower.contains("broken pipe")
-        || lower.contains("closed")
-        || lower.contains("eof")
-    {
-        (
-            "Connection closed",
-            "The server closed the connection before answering.".to_owned(),
-        )
-    } else if lower.contains("connect") {
-        (
-            "Could not connect",
-            "The connection failed before a response arrived.".to_owned(),
-        )
-    } else {
-        (
-            "Request failed",
-            "No further cause was reported.".to_owned(),
-        )
+        }
+        FailureKind::Connect => {
+            "The host could not be reached. Check the address, your connection or VPN, \
+             and whether the server is listening."
+        }
+        FailureKind::Other => "The engine did not report a cause this view recognises.",
     };
 
-    // A plain-HTTP host that only speaks HTTPS is the common refusal, and the
-    // fix is one character in the URL bar.
-    let hint = if url.starts_with("http://")
-        && (lower.contains("connect") || lower.contains("refused") || lower.contains("reset"))
-    {
+    // A plain-HTTP host that only speaks HTTPS is the common connect failure,
+    // and the fix is one character in the URL bar.
+    if kind == FailureKind::Connect && url.starts_with("http://") {
         format!("{hint} This address is http://; try https:// if the server enforces TLS.")
     } else {
-        hint
-    };
-
-    Failure { title, hint }
+        hint.to_owned()
+    }
 }
 
 fn empty_state(message: &str, palette: &Palette) -> AnyElement {
@@ -2504,6 +2533,12 @@ impl Render for ResponsePanel {
         let response = self.document.read(cx).response.clone();
         let error = self.document.read(cx).error.clone();
         let palette = self.palette.clone();
+        // A disclosure belongs to one failure; a later success must not inherit
+        // an open Details section.
+        if !matches!(state, ResponseState::Error { .. }) {
+            self.failure_details = false;
+            self.failure_log = None;
+        }
 
         v_flex()
             .size_full()
@@ -2519,9 +2554,7 @@ impl Render for ResponsePanel {
                 }
                 (ResponseState::Idle, _) => self.render_idle(window, cx),
                 // A failure owns the whole pane: cause, attempt, and actions.
-                (ResponseState::Error { .. }, _) => {
-                    self.render_failure(state, error.as_deref(), cx)
-                }
+                (ResponseState::Error { .. }, _) => self.render_failure(state, error.as_ref(), cx),
                 // In flight or cancelled: there is no status or tab to show, so
                 // a summary strip stands in for the header.
                 (state, _) => self.render_status(state, cx),
@@ -2534,10 +2567,11 @@ mod tests {
     // Named imports only: `gpui_kit::*` brings in a `test` macro that shadows
     // `#[test]`, and `use super::*` would drag it in.
     use super::{
-        classify_failure, display_key, find_rows, highlights_by_line, mark_runs, response_language,
+        display_key, failure_hint, find_rows, highlights_by_line, mark_runs, response_language,
         summary_line,
     };
     use gpui_kit::HighlightStyle;
+    use restbook_core::FailureKind;
 
     #[test]
     fn the_summary_copy_string_joins_the_parts_and_styles_every_byte() {
@@ -2647,29 +2681,21 @@ mod tests {
     /// HTTPS” case, so the hint has to name it.
     #[test]
     fn a_refused_http_url_suggests_https() {
-        let failure = classify_failure(
-            "transport error: error sending request: tcp connect error: Connection refused",
-            "http://api.test/items",
-        );
-        assert_eq!(failure.title, "Connection refused");
-        assert!(failure.hint.contains("https://"), "{}", failure.hint);
+        let hint = failure_hint(FailureKind::Connect, "http://api.test/items");
+        assert!(hint.contains("https://"), "{hint}");
     }
 
     #[test]
     fn a_timeout_points_at_the_timeout_setting() {
-        let failure = classify_failure(
-            "transport error: error sending request: operation timed out",
-            "https://api.test/items",
-        );
-        assert_eq!(failure.title, "Timed out");
-        assert!(failure.hint.contains("Settings"), "{}", failure.hint);
+        let hint = failure_hint(FailureKind::Timeout, "https://api.test/items");
+        assert!(hint.contains("Settings"), "{hint}");
     }
 
     #[test]
-    fn an_unrecognised_failure_still_has_a_title() {
-        let failure = classify_failure("something new", "https://api.test/items");
-        assert_eq!(failure.title, "Request failed");
-        assert!(!failure.hint.is_empty());
+    fn the_kind_carries_the_title() {
+        assert_eq!(FailureKind::Other.title(), "Request failed");
+        assert_eq!(FailureKind::Connect.title(), "Couldn't connect");
+        assert!(!failure_hint(FailureKind::Other, "https://api.test").is_empty());
     }
 }
 
@@ -2688,7 +2714,9 @@ mod render_tests {
 
     use gpui_kit::{AppContext as _, Entity, TestAppContext, VisualTestContext};
     use restbook_core::testing::{FakeTransport, Reply};
-    use restbook_core::{HistoryEntry, Method, Origin, RequestDef, ResponseRecord, Store};
+    use restbook_core::{
+        Failure, FailureKind, HistoryEntry, Method, Origin, RequestDef, ResponseRecord, Store,
+    };
     use restbook_store::MemoryStore;
 
     use crate::document::Document;
@@ -3572,11 +3600,11 @@ mod render_tests {
         view.update(cx, |panel, cx| {
             panel.document.update(cx, |document, cx| {
                 document.last_url = Some("http://api.test/items".to_owned());
-                document.error = Some(
+                document.error = Some(Failure::new(
+                    FailureKind::Connect,
                     "transport error: error sending request: tcp connect error: \
-                     Connection refused"
-                        .to_owned(),
-                );
+                     Connection refused",
+                ));
                 cx.notify();
             });
         });
@@ -3588,6 +3616,21 @@ mod render_tests {
             cx.debug_bounds("response-error-retry").is_some(),
             "a failure must offer the way out"
         );
+        assert!(
+            cx.debug_bounds("response-error-detail").is_none(),
+            "the technical detail starts behind Details"
+        );
+
+        let target = cx
+            .debug_bounds("response-error-details")
+            .expect("the Details control is laid out")
+            .center();
+        cx.simulate_mouse_down(target, gpui_kit::MouseButton::Left, Default::default());
+        cx.simulate_mouse_up(target, gpui_kit::MouseButton::Left, Default::default());
+        cx.run_until_parked();
+        draw(cx);
+        assert!(cx.debug_bounds("response-error-detail").is_some());
+        assert!(cx.debug_bounds("response-error-log").is_some());
         cx.quit();
     }
 }

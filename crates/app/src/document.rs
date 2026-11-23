@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use gpui_kit::Context;
 
 use restbook_core::Origin;
-use restbook_core::{CancelToken, Method, ProgressSnapshot, RequestDef, ResponseRecord};
+use restbook_core::{CancelToken, Failure, Method, ProgressSnapshot, RequestDef, ResponseRecord};
 
 pub(crate) struct Document {
     /// The request line mirrored from the editor, with the rest of the request
@@ -18,8 +18,9 @@ pub(crate) struct Document {
     /// body or auth keystroke that has not been mirrored yet is still included.
     pub(crate) request: RequestDef,
     pub(crate) response: Option<ResponseRecord>,
-    /// Engine errors are already human-readable, so they are shown verbatim.
-    pub(crate) error: Option<String>,
+    /// A failure is kept with its kind, not only its sentence, so the pane can
+    /// show and act on it without parsing the engine's message.
+    pub(crate) error: Option<Failure>,
     /// Present while a request is in flight; cancelling flips the token.
     pub(crate) pending: Option<CancelToken>,
     /// Live byte progress while a request is in flight, cleared on completion.
@@ -255,9 +256,9 @@ impl Document {
 
     /// A send that never reached the wire (an unresolved variable, a bad URL).
     /// Any numbers from a previous send must go with it.
-    pub(crate) fn fail_without_sending(&mut self, message: String) {
+    pub(crate) fn fail_without_sending(&mut self, failure: Failure) {
         self.response = None;
-        self.error = Some(message);
+        self.error = Some(failure);
         self.canceled = false;
         self.pending = None;
         self.progress = None;
@@ -390,7 +391,7 @@ mod tests {
         );
         document.finish_send(true);
         // A later, different failure must not be reported as a cancel.
-        document.error = Some("boom".to_owned());
+        document.error = Some(restbook_core::Failure::other("boom"));
         assert!(matches!(
             document.response_state(),
             ResponseState::Error { .. }

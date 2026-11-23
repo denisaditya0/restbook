@@ -62,7 +62,7 @@ pub(crate) struct Tab {
     pub(crate) id: TabId,
     pub(crate) request: RequestDef,
     pub(crate) response: Option<ResponseRecord>,
-    pub(crate) error: Option<String>,
+    pub(crate) error: Option<restbook_core::Failure>,
     pub(crate) last_url: Option<String>,
     /// The request as it was when it was saved to a collection, if it ever
     /// was. Compared against the live request to mark the tab unsaved: a

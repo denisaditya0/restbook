@@ -106,7 +106,7 @@ impl Workspace {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.document.update(cx, |document, cx| {
-                    document.fail_without_sending(error.to_string());
+                    document.fail_without_sending(error.failure());
                     cx.notify();
                 });
                 return;
@@ -213,10 +213,10 @@ impl Workspace {
                             crate::logging::redact_url(&sent_url)
                         );
                     }
-                    let message = if canceled {
+                    let failure = if canceled {
                         None
                     } else {
-                        Some(error.to_string())
+                        Some(error.failure())
                     };
                     this.update(cx, |this, cx| {
                         // The transfer is over, whichever tab is on screen.
@@ -229,7 +229,7 @@ impl Workspace {
                                 // that did arrive before the request was
                                 // cancelled or died.
                                 document.finish_send(canceled);
-                                document.error = message;
+                                document.error = failure;
                                 cx.notify();
                             });
                         } else {
@@ -240,7 +240,7 @@ impl Workspace {
                                 // state untouched. `last_url` still names the
                                 // attempt that failed, matching what the tab
                                 // would have shown had it stayed on screen.
-                                tab.error = message;
+                                tab.error = failure;
                                 tab.last_url = Some(sent_url.clone());
                             }
                             // The visible tab only inherited the sender's

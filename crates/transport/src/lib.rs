@@ -649,7 +649,29 @@ fn refuses_downgrade(from: &url::Url, to: &url::Url, insecure: bool) -> bool {
 }
 
 fn transport_error(error: reqwest::Error) -> Error {
-    Error::Transport(describe(&error))
+    let message = describe(&error);
+    let lower = message.to_ascii_lowercase();
+
+    // The kind is decided here, once, by the boundary that has reqwest's own
+    // predicates. Nothing above this has to match English text again.
+    if error.is_timeout() || lower.contains("timed out") || lower.contains("timeout") {
+        Error::Timeout(message)
+    } else if lower.contains("certificate")
+        || lower.contains("tls")
+        || lower.contains("ssl")
+        || lower.contains("handshake")
+    {
+        Error::Tls(message)
+    } else if error.is_connect()
+        || lower.contains("connect")
+        || lower.contains("dns")
+        || lower.contains("lookup")
+        || lower.contains("resolve")
+    {
+        Error::Connect(message)
+    } else {
+        Error::Transport(message)
+    }
 }
 
 /// A reqwest error's `Display` is the same generic sentence for DNS, connect,

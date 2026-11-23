@@ -417,7 +417,7 @@ impl Workspace {
                 Err(error) => {
                     log::error!(target: "restbook_app::ui", "history pick: id={id} failed: {error}");
                     this.document.update(cx, |document, cx| {
-                        document.error = Some(error.to_string());
+                        document.error = Some(error.failure());
                         cx.notify();
                     });
                 }
@@ -895,7 +895,7 @@ impl Workspace {
         if let Some(error) = &document.error {
             return chrome::Status {
                 url: document.last_url.clone().map(SharedString::from),
-                message: Some(SharedString::from(error.clone())),
+                message: Some(SharedString::from(error.kind.title())),
             };
         }
 

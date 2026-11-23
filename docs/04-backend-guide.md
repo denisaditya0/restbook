@@ -272,12 +272,13 @@ Progress is optional: if you can report it, override `execute_with_progress` and
 bump the `Progress` sink as bytes move; if not, implement only `execute`, which is
 what the default `execute_with_progress` calls.
 
-An error must keep its cause chain. `reqwest::Error`'s `Display` is the same
-generic sentence for DNS, connect, TLS, and timeout failures; the detail is in
-`source()`. `ReqwestTransport::describe` walks it so `Error::Transport` reads
-`…: tcp connect error: Connection refused`, which is what the response pane
-classifies and what a log needs to be useful. A transport that drops the chain
-leaves the UI with nothing to say beyond “request failed”.
+An error must keep its cause chain and its kind. `reqwest::Error`'s `Display` is
+the same generic sentence for DNS, connect, TLS, and timeout failures; the detail
+is in `source()`. `ReqwestTransport::describe` walks it, and `transport_error`
+maps reqwest's own predicates to `Error::Timeout`/`Connect`/`Tls`, so
+`Error::failure_kind()` names the cause once and the response pane never matches
+English text to decide what to show. A transport that drops the chain leaves the
+UI with nothing to say beyond “request failed”.
 
 ### Test the pipeline without a network
 
