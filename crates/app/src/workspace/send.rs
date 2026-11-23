@@ -10,8 +10,8 @@ use std::sync::Arc;
 use gpui_kit::*;
 
 use restbook_core::{
-    prepare, CancelToken, Error, HistoryEntry, OAuthConfig, OAuthGrant, OAuthTransport, Progress,
-    Store, Transport,
+    prepare, CancelToken, Error, Failure, HistoryEntry, OAuthConfig, OAuthGrant, OAuthTransport,
+    Progress, Store, Transport,
 };
 
 use crate::workspace::Workspace;
@@ -106,7 +106,7 @@ impl Workspace {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.document.update(cx, |document, cx| {
-                    document.fail_without_sending(error.failure());
+                    document.fail_without_sending(scrub_failure(error.failure()));
                     cx.notify();
                 });
                 return;
@@ -120,7 +120,7 @@ impl Workspace {
             target: "restbook_app::send",
             "{} {} (environment: {})",
             request.method,
-            sent_url,
+            crate::logging::redact_url(&sent_url),
             self.variables
                 .read(cx)
                 .active()
@@ -208,8 +208,15 @@ impl Workspace {
                     let failure = if canceled {
                         None
                     } else {
-                        Some(error.failure())
+                        Some(scrub_failure(error.failure()))
                     };
+                    // The failure is moved into the document below, so keep the
+                    // text the log needs now. It is the same scrubbed message
+                    // the Details disclosure shows.
+                    let failure_detail = failure
+                        .as_ref()
+                        .map(|failure| failure.message.clone())
+                        .unwrap_or_default();
                     // Paint first. The log sink writes synchronously to stderr
                     // and a file, and doing that before the document update
                     // puts a slow console between the failure and the view.
@@ -269,12 +276,12 @@ impl Workspace {
                         if canceled {
                             log::debug!(
                                 target: "restbook_app::send",
-                                "cancelled after {elapsed}ms: {sent_url}"
+                                "cancelled after {elapsed}ms: {shown_url}"
                             );
                         } else {
                             log::error!(
                                 target: "restbook_app::send",
-                                "failed after {elapsed}ms: {shown_url}: {error}"
+                                "failed after {elapsed}ms: {shown_url}: {failure_detail}"
                             );
                         }
                     })
@@ -377,6 +384,13 @@ impl Workspace {
     }
 }
 
+/// A failure's message can quote the URL `reqwest` was given, so its URLs are
+/// reduced before the text reaches the log or the Details disclosure.
+fn scrub_failure(mut failure: Failure) -> Failure {
+    failure.message = crate::logging::redact_urls(&failure.message);
+    failure
+}
+
 /// A single-line, bounded preview of a response body for the log. Binary
 /// payloads are named rather than mangled, and newlines/tabs collapse to spaces
 /// so the preview cannot turn one log line into a hundred.
@@ -406,7 +420,8 @@ fn body_preview(body: &[u8], max: usize) -> String {
 #[cfg(test)]
 mod tests {
     // Named import: `use super::*` would pull in GPUI's `#[test]` macro.
-    use super::body_preview;
+    use super::{body_preview, scrub_failure};
+    use restbook_core::{Failure, FailureKind};
 
     #[test]
     fn an_empty_body_is_named() {
@@ -426,5 +441,21 @@ mod tests {
     #[test]
     fn a_binary_body_is_named_not_dumped() {
         assert_eq!(body_preview(b"a\0b", 100), "<binary, 3 bytes>");
+    }
+
+    #[test]
+    fn a_failure_message_loses_its_url_secrets() {
+        let failure = scrub_failure(Failure::new(
+            FailureKind::Connect,
+            "error sending request for url (https://alice:secret@api.test/v1/items?token=abc): \
+             tcp connect error: refused",
+        ));
+
+        assert!(!failure.message.contains("alice"));
+        assert!(!failure.message.contains("secret"));
+        assert!(!failure.message.contains("token=abc"));
+        assert!(failure.message.contains("https://api.test/v1/items"));
+        assert!(failure.message.contains("refused"));
+        assert_eq!(failure.kind, FailureKind::Connect);
     }
 }

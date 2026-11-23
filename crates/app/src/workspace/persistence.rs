@@ -45,9 +45,9 @@ pub(crate) fn save(path: &Path, state: &DockAreaState) {
         return;
     };
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        let _ = restbook_store::secure::create_dir(parent);
     }
-    let _ = std::fs::write(path, json);
+    let _ = restbook_store::secure::write(path, json);
 }
 
 /// Load a previously saved layout, or `None` when there is nothing usable.
@@ -459,5 +459,27 @@ fn collect_names(state: &PanelState, names: &mut Vec<PanelName>) {
         for child in &state.children {
             collect_names(child, names);
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::{load, save};
+    use gpui_kit::component::dock::DockAreaState;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    /// `layout.json` is app-owned; it is `0600` where the platform has a mode.
+    #[test]
+    fn a_saved_layout_file_is_private() {
+        let dir = std::env::temp_dir().join("restbook-layout-private-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("nested").join("layout.json");
+
+        save(&path, &DockAreaState::default());
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "layout.json should be private");
+        assert!(load(&path).is_some(), "the saved file still parses");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

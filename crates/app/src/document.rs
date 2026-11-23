@@ -205,6 +205,21 @@ impl Document {
         ResponseState::Idle
     }
 
+    /// What the response pane paints, as one comparable value: the state it
+    /// renders and the failure text it shows.
+    ///
+    /// A send that resolves without a response leaves the URL and the response
+    /// stamp untouched — there is nothing to stamp — so a pane keyed on those
+    /// alone keeps painting the in-flight strip after the failure has landed.
+    /// Keying the paint on this value is what puts the failure view on the next
+    /// frame instead of leaving it for the next unrelated repaint.
+    pub(crate) fn paint_key(&self) -> (ResponseState, Option<String>) {
+        (
+            self.response_state(),
+            self.error.as_ref().map(|failure| failure.message.clone()),
+        )
+    }
+
     /// Mark a send as in flight. The workspace calls this before the transport
     /// runs, so the summary can tick from the first frame.
     pub(crate) fn begin_send(
@@ -446,6 +461,33 @@ mod tests {
             }
             .label(),
             "Error"
+        );
+    }
+
+    /// The response pane redraws when this key changes, and a failed send adds
+    /// no response and touches no URL. If the key did not move with the
+    /// failure, the pane would keep the "Fetching" strip it was painting when
+    /// the request was still on the wire.
+    #[test]
+    fn a_failed_send_changes_the_paint_key_without_a_response() {
+        let mut document = Document::new();
+        document.begin_send(
+            CancelToken::new(),
+            ProgressSnapshot::default(),
+            "http://api.test/items".to_owned(),
+        );
+        let in_flight = document.paint_key();
+
+        document.finish_send(false);
+        document.error = Some(Failure::new(
+            restbook_core::FailureKind::Connect,
+            "tcp connect error: refused",
+        ));
+
+        assert_ne!(document.paint_key(), in_flight);
+        assert_eq!(
+            document.paint_key().1.as_deref(),
+            Some("tcp connect error: refused")
         );
     }
 }

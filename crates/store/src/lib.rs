@@ -8,6 +8,8 @@
 mod folder;
 mod jsonl;
 
+pub mod secure;
+
 pub use folder::{FolderStore, MARKER_FILE};
 pub use jsonl::{read_entries, JsonlStore};
 

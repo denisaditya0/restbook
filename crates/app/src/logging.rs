@@ -11,7 +11,7 @@
 //! A capture is never written into `restbook.log`, so expiring it cannot erase
 //! the ordinary record.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -158,7 +158,7 @@ pub(crate) fn start_debug_capture() -> Result<PathBuf, &'static str> {
     }
 
     let dir = log_dir();
-    fs::create_dir_all(&dir).map_err(|_| "could not create the log directory")?;
+    restbook_store::secure::create_dir(&dir).map_err(|_| "could not create the log directory")?;
 
     // One capture at a time. Drop the old handle before pruning, or Windows
     // refuses to remove the file that is still open.
@@ -176,12 +176,8 @@ pub(crate) fn start_debug_capture() -> Result<PathBuf, &'static str> {
         "{DEBUG_PREFIX}{}.log",
         chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
     ));
-    let file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&path)
-        .map_err(|_| "could not create the debug log")?;
+    let file =
+        restbook_store::secure::create(&path).map_err(|_| "could not create the debug log")?;
 
     {
         let mut capture = DEBUG
@@ -265,6 +261,33 @@ pub(crate) fn redact_url(url: &str) -> String {
         }
         None => without_query.to_owned(),
     }
+}
+
+/// [`redact_url`] for a whole message. `reqwest` quotes the URL it was given —
+/// userinfo, query, and all — in a transport error's text, and that text reaches
+/// both the log and the failure Details. Each URL in the message is reduced to
+/// scheme, host, and path; the cause chain around it is kept.
+pub(crate) fn redact_urls(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("://") {
+        let scheme_start = rest[..at]
+            .rfind(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.')))
+            .map_or(0, |index| index + 1);
+        out.push_str(&rest[..scheme_start]);
+
+        let url = &rest[scheme_start..];
+        let end = url
+            .find(|ch: char| {
+                ch.is_whitespace() || matches!(ch, ')' | ']' | '}' | '"' | '\'' | '<' | '>' | '`')
+            })
+            .unwrap_or(url.len());
+        let (head, tail) = url.split_at(end);
+        out.push_str(&redact_url(head));
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
 }
 
 fn now_millis() -> u64 {
@@ -439,7 +462,7 @@ impl Write for Tee {
 /// rotated files is not.
 fn open(path: &Path) -> Option<File> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).ok()?;
+        restbook_store::secure::create_dir(parent).ok()?;
     }
     let len = fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
     if len > MAX_BYTES || (len > 0 && from_another_version(path)) {
@@ -447,7 +470,7 @@ fn open(path: &Path) -> Option<File> {
         let _ = fs::remove_file(&backup);
         let _ = fs::rename(path, backup);
     }
-    OpenOptions::new().create(true).append(true).open(path).ok()
+    restbook_store::secure::open_append(path).ok()
 }
 
 /// Whether the file holds no line from this build. The startup line names the
@@ -464,8 +487,8 @@ fn from_another_version(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        debug_window_open, install_panic_hook, open, prune_debug_files, redact_url, teardown_noise,
-        Tee, MAX_BYTES,
+        debug_window_open, install_panic_hook, open, prune_debug_files, redact_url, redact_urls,
+        teardown_noise, Tee, MAX_BYTES,
     };
     use std::io::Write as _;
 
@@ -533,6 +556,24 @@ mod tests {
             std::fs::read_to_string(&path).unwrap(),
             "hello from the tee\n"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The log carries redacted URLs but still enough detail to be worth
+    /// keeping private: `0600` where the platform has a mode.
+    #[cfg(unix)]
+    #[test]
+    fn the_log_file_is_private() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = std::env::temp_dir().join("restbook-log-private-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("nested").join("restbook.log");
+
+        drop(open(&path).expect("a fresh log file"));
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "the log should be private");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -665,5 +706,21 @@ mod tests {
             "http://127.0.0.1:8787/path"
         );
         assert_eq!(redact_url("not a url?q=1"), "not a url");
+    }
+
+    /// `reqwest` quotes the URL it was handed inside a transport error's text, so
+    /// redacting a message has to reach every URL in it and leave the cause chain
+    /// around them readable.
+    #[test]
+    fn a_message_loses_every_url_secret_but_keeps_its_cause_chain() {
+        assert_eq!(
+            redact_urls(
+                "error sending request for url (https://alice:secret@api.test/v1/items?token=abc): \
+                 tcp connect error: refused; retry http://127.0.0.1:8787/path?q=1"
+            ),
+            "error sending request for url (https://api.test/v1/items): \
+             tcp connect error: refused; retry http://127.0.0.1:8787/path"
+        );
+        assert_eq!(redact_urls("no url here"), "no url here");
     }
 }
