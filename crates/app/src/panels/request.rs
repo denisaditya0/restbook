@@ -20,7 +20,9 @@ use gpui_kit::*;
 
 use restbook_core::{Method, OAuthConfig, RequestDef};
 
-use crate::actions::{shortcut, CopyCurl, FocusUrl, NewTab, PasteCurl, SaveRequest, SendRequest};
+use crate::actions::{
+    shortcut, CopyCurl, FocusUrl, ImportFile, NewTab, PasteCurl, SaveRequest, SendRequest,
+};
 use crate::completion::Autocomplete;
 use crate::document::Document;
 use crate::icons::{self, IconName};
@@ -909,7 +911,7 @@ impl RequestPanel {
     }
 
     /// What the pane shows when every tab was closed: a line naming the state
-    /// and the one action that leaves it.
+    /// and the two actions that leave it without opening a blank tab first.
     fn render_empty(&self, cx: &mut Context<Self>) -> AnyElement {
         v_flex()
             .size_full()
@@ -924,10 +926,22 @@ impl RequestPanel {
                     .child("No request open"),
             )
             .child(
-                Button::new("new-request-empty")
-                    .label("New request")
-                    .icon(IconName::Plus)
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::NewTab))),
+                h_flex()
+                    .gap(px(self.metrics.space_sm))
+                    .child(
+                        Button::new("new-request-empty")
+                            .label("New request")
+                            .icon(IconName::Plus)
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::NewTab))),
+                    )
+                    .child(
+                        Button::new("import-file-empty")
+                            .label("Import…")
+                            .icon(IconName::Upload)
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(ImportFile), cx);
+                            }),
+                    ),
             )
             .into_any_element()
     }

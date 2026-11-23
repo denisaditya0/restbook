@@ -36,6 +36,14 @@ pub fn parse(format: ImportFormat, text: &str, options: Options<'_>) -> crate::R
             options.har_limit.unwrap_or(har::DEFAULT_LIMIT),
         ),
         ImportFormat::OpenApi => openapi::parse(text, options.fallback_name),
+        ImportFormat::Bundle => {
+            let bundle = Bundle::from_json(text)?;
+            Ok(BulkImport {
+                collections: bundle.collections,
+                environments: bundle.environments,
+                ..BulkImport::default()
+            })
+        }
     }
 }
 
@@ -228,6 +236,8 @@ pub enum ImportFormat {
     Har,
     /// An OpenAPI 3 document.
     OpenApi,
+    /// This app's own bundle: every collection and environment.
+    Bundle,
 }
 
 impl ImportFormat {
@@ -268,6 +278,11 @@ impl ImportFormat {
         }
         if text.contains("\"openapi\"") || text.contains("\"swagger\"") {
             return Self::OpenApi;
+        }
+        // Checked after the other JSON envelopes: a bundle carries both keys
+        // this app writes and nothing another format claims.
+        if text.contains("\"collections\"") && text.contains("\"version\"") {
+            return Self::Bundle;
         }
         Self::Curl
     }
@@ -377,6 +392,29 @@ mod tests {
         assert_eq!(loaded.version, 1);
         assert_eq!(loaded.collections.len(), 1);
         assert_eq!(loaded.collections[0].items.len(), 2);
+    }
+
+    /// The app's own export must be importable, or *Everything* is a backup
+    /// nothing can restore.
+    #[test]
+    fn a_bundle_is_detected_and_parsed_back() {
+        let environments = vec![Environment {
+            name: "dev".into(),
+            vars: Vec::new(),
+        }];
+        let json = export(
+            ExportFormat::Bundle,
+            &[collection_with("a", 2)],
+            &environments,
+            ExportOptions::default(),
+        )
+        .unwrap();
+
+        assert_eq!(ImportFormat::detect(&json), ImportFormat::Bundle);
+        let import = parse(ImportFormat::Bundle, &json, Options::default()).unwrap();
+        assert_eq!(import.collections.len(), 1);
+        assert_eq!(import.request_count(), 2);
+        assert_eq!(import.environments.len(), 1);
     }
 
     #[test]

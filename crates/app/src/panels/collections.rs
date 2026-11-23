@@ -407,9 +407,9 @@ impl CollectionsPanel {
         self.metrics = Metrics::current(cx);
     }
 
-    /// Read the collections back from the store. Called after a save or delete
-    /// so the pane shows what is actually persisted.
-    fn reload(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
+    /// Read the collections back from the store. Called after a save, a delete,
+    /// or an import, so the pane shows what is actually persisted.
+    pub(crate) fn reload(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
         match self.store.collections() {
             Ok(collections) => {
                 self.collections = collections;

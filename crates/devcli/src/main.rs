@@ -71,7 +71,7 @@ enum Command {
         /// The file to read. `-` reads standard input.
         file: PathBuf,
 
-        /// Override format detection: curl, postman, har, or openapi.
+        /// Override format detection: curl, postman, har, openapi, or bundle.
         #[arg(long)]
         format: Option<String>,
 
@@ -92,7 +92,7 @@ enum Command {
         #[arg(long, value_name = "DIR")]
         workspace: PathBuf,
 
-        /// Override format detection: curl, postman, har, or openapi.
+        /// Override format detection: curl, postman, har, openapi, or bundle.
         #[arg(long)]
         format: Option<String>,
     },
@@ -276,6 +276,7 @@ fn read_import(file: &std::path::Path, format: Option<&str>) -> Result<Parsed> {
             "postman" => ImportFormat::Postman,
             "har" => ImportFormat::Har,
             "openapi" => ImportFormat::OpenApi,
+            "bundle" => ImportFormat::Bundle,
             other => return Err(Error::Other(format!("unknown format `{other}`"))),
         },
         None => ImportFormat::from_file_name(name).unwrap_or_else(|| ImportFormat::detect(&text)),
