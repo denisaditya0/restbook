@@ -405,6 +405,7 @@ Already scheduled or shipped, so no longer a candidate here: `U34` is in `0.2.6`
 | B16 | Offline test seam: `FakeTransport` + transport integration tests | done |
 | B17 | `FolderStore`: a Git-friendly workspace on disk | done |
 | B18 | Streamed response bodies to disk (large downloads, resume) | step 1 done: `ResponseBody::{Memory, File}` enum; transport still memory-only |
+| B27 | Redirect credential stripping | done: a hop that changes host or scheme drops `Authorization`, `Cookie`, and `Proxy-Authorization`, and an `https → http` downgrade is refused unless the request is `insecure` |
 
 ### Planned (B19..)
 
@@ -422,7 +423,6 @@ socket). A UI half, where one exists, is named.
 | B24 | `FolderStore` external-change detection | A folder workspace is plain files on disk, so another editor can change them while the app holds a snapshot. The app has no Git integration of its own; a user's checkout is the same hazard. Detecting a changed file (mtime/hash) before a write is the difference between a merge and silent clobbering |
 | B25 | Exchange timings | `ResponseRecord` gains a timings value and `RedirectHop` gains its elapsed time, both `#[serde(default)]` so a history row from before the field still parses; the transport marks the boundaries it already has — before `send()`, after headers, after the body — once per hop. DNS, connect, and TLS timings are not available from `reqwest`/`hyper`, so the timeline is send → TTFB → body, not a browser waterfall. UI half: U38 in `0.2.2` |
 | B26 | Collection-level auth and header inheritance | `Collection` gains `auth` and `headers`, both `#[serde(default)]`; `prepare` takes an explicit inherited context so `core` stays pure; the send path resolves `Auth::Inherit` by walking the saved request's collection, and default headers merge by name unless the request sets the same name. UI half: the Auth tab shows the inherit state and what it resolves to; the Headers tab lists inherited rows read-only. Import and export carry the fields |
-| B27 | Redirect credential stripping | The transport follows redirects by hand (`Policy::none()`), so it inherits none of `reqwest`'s protections: `Authorization`, `Cookie`, and `Proxy-Authorization` currently survive a hop to another host. Strip them when the host or scheme changes, and refuse an `https → http` downgrade unless the request is `insecure`. UI half: none; rider on `0.1.6` |
 | B28 | Export redaction | `import::export` writes `Environment.vars` and collection values verbatim, including `secret: true` entries, while `FolderStore` redacts. Redact secret values by default and make “include secrets” an explicit, warned choice. UI half: the export picker's checkbox, in `0.1.7` |
 
 ### Network settings (B11 + B12)
@@ -444,7 +444,10 @@ Redirects are followed **by hand** (`redirect::Policy::none`) so each hop is
 recorded. `ResponseRecord` gained `final_url` and `redirects: Vec<RedirectHop>`,
 which is what lets the UI show `301 → 302 → 200` instead of only the destination.
 A 303, and a 301/302 in reply to anything but GET/HEAD, drop the body and the
-entity headers on the way through.
+entity headers on the way through. Because the redirect is hand-rolled, none of
+`reqwest`'s protections come with it: the transport drops `Authorization`,
+`Cookie`, and `Proxy-Authorization` when a hop changes host or scheme, and
+refuses an `https → http` downgrade unless the request is `insecure`.
 
 Cookies live in one `SharedJar` per transport, a `cookie_store::CookieStore`
 behind reqwest's `CookieStore` trait. reqwest's own `Jar` cannot be read,

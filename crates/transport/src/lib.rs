@@ -482,6 +482,16 @@ async fn run(
                         "too many redirects (stopped after {MAX_REDIRECTS})"
                     )));
                 }
+                // A downgrade would send credentials the user protected with TLS
+                // over the wire in the clear. The request has to say it accepts
+                // that (`insecure`) before the hop is taken.
+                if refuses_downgrade(&url, &next, request.insecure) {
+                    return Err(Error::Transport(format!(
+                        "refused the redirect from {} to {}; enable insecure TLS for this request to follow it",
+                        url.scheme(),
+                        next.scheme()
+                    )));
+                }
                 redirects.push(RedirectHop {
                     status,
                     location: next.to_string(),
@@ -496,6 +506,13 @@ async fn run(
                 if to_get {
                     body_dropped = true;
                     headers.retain(|(key, _)| !is_entity_header(key));
+                }
+
+                // Credentials belong to the origin that issued them. The jar
+                // still sends what it holds for the new host; only the headers
+                // the user wrote are dropped here.
+                if crosses_origin(&url, &next) {
+                    headers.retain(|(key, _)| !is_credential_header(key));
                 }
 
                 url = next;
@@ -605,6 +622,29 @@ fn is_entity_header(key: &str) -> bool {
         key.to_ascii_lowercase().as_str(),
         "content-type" | "content-length" | "content-encoding" | "transfer-encoding"
     )
+}
+
+/// Whether a redirect leaves the origin that issued the credentials.
+///
+/// The port is deliberately ignored: the rule is the one `B27` states, host or
+/// scheme, and a port change alone is the same host.
+fn crosses_origin(from: &url::Url, to: &url::Url) -> bool {
+    from.scheme() != to.scheme() || from.host_str() != to.host_str()
+}
+
+/// Credentials that belong to one origin and must not follow a redirect away
+/// from it.
+fn is_credential_header(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "authorization" | "cookie" | "proxy-authorization"
+    )
+}
+
+/// Whether `to` is a TLS downgrade the request does not accept. `run` refuses
+/// the hop rather than sending the request in the clear.
+fn refuses_downgrade(from: &url::Url, to: &url::Url, insecure: bool) -> bool {
+    !insecure && from.scheme() == "https" && to.scheme() == "http"
 }
 
 fn transport_error(error: reqwest::Error) -> Error {
@@ -1008,5 +1048,131 @@ mod tests {
         assert_eq!(&*sid.path, "/");
         drop(store);
         assert!(!jar.set_value(&url, "missing", "x"));
+    }
+
+    /// Serve `responses` in order on one listener and return the head of every
+    /// request, in order. A two-entry sequence is one redirect chain.
+    async fn serve_sequence(
+        responses: Vec<String>,
+    ) -> (std::net::SocketAddr, tokio::task::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+
+        let handle = tokio::spawn(async move {
+            let mut captured = Vec::new();
+            for response in responses {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut raw = Vec::new();
+                let mut buffer = [0u8; 1024];
+                loop {
+                    let read = stream.read(&mut buffer).await.unwrap();
+                    if read == 0 {
+                        break;
+                    }
+                    raw.extend_from_slice(&buffer[..read]);
+                    if raw.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                captured.push(String::from_utf8_lossy(&raw).into_owned());
+                stream.write_all(response.as_bytes()).await.unwrap();
+                stream.shutdown().await.unwrap();
+            }
+            captured
+        });
+
+        (address, handle)
+    }
+
+    fn has_header(head: &str, name: &str) -> bool {
+        head.lines().any(|line| {
+            line.split_once(':')
+                .is_some_and(|(key, _)| key.eq_ignore_ascii_case(name))
+        })
+    }
+
+    fn with_credentials(url: &str) -> PreparedRequest {
+        let mut request = RequestDef::new(Method::Get, url);
+        for (key, value) in [
+            ("authorization", "Bearer secret"),
+            ("cookie", "sid=abc"),
+            ("proxy-authorization", "Basic cHJveHk="),
+            ("x-keep", "yes"),
+        ] {
+            request.headers.push(restbook_core::Kv::new(key, value));
+        }
+        restbook_core::prepare(&request, &VarContext::new()).unwrap()
+    }
+
+    /// The user's credentials belong to the origin that issued them, so a hop
+    /// that changes host or scheme must not carry `Authorization`, `Cookie`, or
+    /// `Proxy-Authorization`. Other headers survive.
+    #[tokio::test]
+    async fn a_redirect_to_another_host_drops_the_credentials() {
+        let (target, target_handle) = serve_sequence(vec![
+            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned(),
+        ])
+        .await;
+        let (first, first_handle) = serve_sequence(vec![format!(
+            "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{}/next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            target.port()
+        )])
+        .await;
+
+        let transport = ReqwestTransport::default();
+        transport
+            .execute(
+                with_credentials(&format!("http://localhost:{}/start", first.port())),
+                CancelToken::new(),
+            )
+            .await
+            .unwrap();
+
+        let second = target_handle.await.unwrap().remove(0);
+        assert!(!has_header(&second, "authorization"));
+        assert!(!has_header(&second, "cookie"));
+        assert!(!has_header(&second, "proxy-authorization"));
+        assert!(has_header(&second, "x-keep"));
+
+        first_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_same_host_redirect_keeps_the_credentials() {
+        let (address, handle) = serve_sequence(vec![
+            "HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .to_owned(),
+            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned(),
+        ])
+        .await;
+
+        let transport = ReqwestTransport::default();
+        transport
+            .execute(
+                with_credentials(&format!("http://{address}/start")),
+                CancelToken::new(),
+            )
+            .await
+            .unwrap();
+
+        let captured = handle.await.unwrap();
+        let second = &captured[1];
+        assert!(has_header(second, "authorization"));
+        assert!(has_header(second, "cookie"));
+        assert!(has_header(second, "proxy-authorization"));
+    }
+
+    #[test]
+    fn a_tls_downgrade_is_refused_unless_the_request_is_insecure() {
+        let https = url::Url::parse("https://example.com/a").unwrap();
+        let other = url::Url::parse("https://example.com/b").unwrap();
+        let http = url::Url::parse("http://example.com/a").unwrap();
+
+        assert!(refuses_downgrade(&https, &http, false));
+        assert!(!refuses_downgrade(&https, &http, true));
+        assert!(!refuses_downgrade(&http, &https, false));
+        assert!(!refuses_downgrade(&https, &other, false));
     }
 }
