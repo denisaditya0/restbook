@@ -120,13 +120,14 @@ runner. Build commands are `cargo` plus the `scripts/dev.*` wrappers.
 │               ├── collections.rs   saved requests
 │               ├── environment.rs   variable sets
 │               ├── command_palette.rs
-│               └── editor/          the four tab bodies
+│               └── editor/          the tab bodies and their widgets
 │                   ├── mod.rs
 │                   ├── params.rs
 │                   ├── headers.rs
 │                   ├── body.rs
 │                   ├── auth.rs
 │                   ├── kv_table.rs
+│                   ├── kv_raw.rs
 │                   ├── parts_table.rs
 │                   └── settings.rs
 ├── scripts/

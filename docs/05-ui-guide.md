@@ -369,6 +369,7 @@ src/panels/
     mod.rs               RequestEditor: one RequestDef, five tab bodies
     params.rs headers.rs body.rs auth.rs settings.rs
     kv_table.rs          the shared enabled key/value row widget
+    kv_raw.rs            one Kv list as wire-form text, for the Table/Raw switch
     parts_table.rs       multipart rows: name, value-or-file, mime, enabled
 src/document.rs          one observable request/response value
 src/icons.rs             the glyph vocabulary: IconName, the two sizes, and the

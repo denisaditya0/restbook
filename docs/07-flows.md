@@ -142,7 +142,6 @@ This is the "intent as event" rule in action.
 
 | Trigger | Event | Effect | POV | Source |
 |---|---|---|---|---|
-| History row click | `HistoryEvent::Picked { id }` | load the full entry, adopt the request **and** show the stored response | Center | `Workspace::listen` |
 | Collections: request row click | `CollectionsEvent::Open { node, request }` | select the tab already holding `node`, else open the request in its own tab (taking over only the lone pristine placeholder), bind the tab to the node, delete any stale draft | Center | `Workspace::open_saved` |
 | Collections: draft row click | `CollectionsEvent::OpenDraft { id }` | select the tab holding that draft, or open it | Center | `Workspace::open_draft` |
 | Collections: any mutation | `CollectionsEvent::Notice(_)` | report a notification (create/delete/rename/save) | Overlay (notification) | `Workspace::notice` |
@@ -191,7 +190,8 @@ offered a copy of payload the current tab does not show.
 |---|---|---|
 | `All` / `This request` | scope the list to every send, or to the owner of the request on screen (URL fallback for a `Standalone` one); the request scope follows a tab switch | Right dock |
 | Search box | filter the scoped list by URL text | Right dock |
-| Row click / trash | restore the stored request and response, or delete the send (alert dialog) | Right dock |
+| Row click | `HistoryEvent::Picked { id }`: load the full entry, adopt the request **and** show the stored response | Right dock → Center |
+| Row trash | `HistoryEvent::Delete { id }`: delete the send (alert dialog) | Right dock |
 
 ### Request editor tabs (in-pane)
 
