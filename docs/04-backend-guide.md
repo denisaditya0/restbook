@@ -203,6 +203,22 @@ cargo test -p restbook-core
 cargo run -p restbook-devcli -- send ... # against httpbin for the real thing
 ```
 
+### Read and write a `Kv` list as text
+
+`kv_text::parse` and `kv_text::render` are the round trip a raw editor uses for
+`Form` bodies and query parameters. The text is the wire form — one pair per
+line, `&` also accepted — so a value that was decoded by `parse` is not encoded
+twice when the transport sends it.
+
+- A line beginning with `#` is a disabled row; a literal leading `#` in a key is
+  written `%23`. Without the marker, toggling a table to raw text and back would
+  silently enable rows the user had switched off.
+- `+` and `%XX` decode; an incomplete escape stays literal. `render` keeps
+  `A-Za-z0-9-._~`, writes a space as `%20`, and escapes every other byte.
+- Blank rows and empty keys drop, the same rows a send skips. Repeated keys stay
+  as separate rows, which is why the round trip lives here and not in the table.
+- `secret` has no wire form; request parameters and form fields never carry it.
+
 ### Add a store
 
 Implement three methods:

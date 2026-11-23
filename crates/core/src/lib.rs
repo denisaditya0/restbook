@@ -7,6 +7,7 @@
 pub mod error;
 pub mod generator;
 pub mod import;
+pub mod kv_text;
 pub mod model;
 pub mod net;
 pub mod oauth;
