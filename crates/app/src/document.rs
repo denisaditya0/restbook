@@ -46,7 +46,7 @@ pub(crate) struct Document {
     pub(crate) origin: Origin,
     /// Bumped whenever history is removed behind the response pane. That pane
     /// otherwise reloads only on a new query or send, so a delete made in the
-    /// sidebar or the history sheet would leave its "Earlier sends" count stale.
+    /// sidebar or the History pane would leave its "Earlier sends" count stale.
     pub(crate) history_revision: u64,
 }
 

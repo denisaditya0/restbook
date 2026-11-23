@@ -17,7 +17,7 @@ use crate::panels::collections as collections_panel;
 use crate::panels::request as request_panel;
 use crate::workspace::Workspace;
 
-use super::{close_tabs_copy, Origin, TabId};
+use super::{close_tabs_copy, TabId};
 /// A destructive act the sidebar asked for, held until render can open the
 /// A destructive act the sidebar asked for, held until render can open the
 /// alert dialog. The workspace owns the confirmation because it owns window
@@ -32,8 +32,6 @@ pub(crate) enum PendingDelete {
     HistorySend(i64),
     /// Every stored send, across every request.
     AllHistory,
-    /// Every send owned by one request or draft.
-    HistoryOwner(Origin),
     /// The open tab with this id, when closing it would lose unsaved work.
     Tab(TabId),
     /// A bulk close, with the number of target tabs that would lose work, so
@@ -233,7 +231,6 @@ pub(super) fn snapshot_delete(target: &PendingDelete, store: &dyn Store) -> Opti
         // recovery path here.
         PendingDelete::HistorySend(_)
         | PendingDelete::AllHistory
-        | PendingDelete::HistoryOwner(_)
         | PendingDelete::Tab(_)
         | PendingDelete::Tabs { .. } => None,
     }
@@ -365,11 +362,6 @@ impl Workspace {
                 "Delete every stored send? This cannot be undone.".to_owned(),
                 "Clear history".to_owned(),
             ),
-            PendingDelete::HistoryOwner(_) => (
-                "Clear this request's history".to_owned(),
-                "Delete every stored send for this request? This cannot be undone.".to_owned(),
-                "Clear history".to_owned(),
-            ),
             PendingDelete::Tab(id) => {
                 // The active tab's snapshot is stale by design, so name it from
                 // the document, which the pane keeps in step with the editor.
@@ -470,23 +462,6 @@ impl Workspace {
                     );
                 }
             },
-            PendingDelete::HistoryOwner(origin) => {
-                match self.store.delete_history_for_origin(&origin) {
-                    Ok(_) => self.history_changed(cx),
-                    Err(error) => {
-                        log::error!(
-                            target: "restbook_app::ui",
-                            "history clear for owner failed: {error}"
-                        );
-                        self.notice(
-                            &Notice::Failed(
-                                format!("Couldn't clear this request's history. {error}").into(),
-                            ),
-                            cx,
-                        );
-                    }
-                }
-            }
             PendingDelete::Tab(id) => self.close_tab(id, cx),
             PendingDelete::Tabs { ids, .. } => {
                 for id in ids {

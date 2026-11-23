@@ -10,12 +10,13 @@ use std::sync::Arc;
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
-use gpui_kit::component::{h_flex, v_flex};
+use gpui_kit::component::{h_flex, v_flex, Selectable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use restbook_core::{HistoryHit, Store};
+use restbook_core::{HistoryHit, Origin, Store};
 
+use crate::document::Document;
 use crate::icons::{self, IconName};
 use crate::panels::history_row::{self, HistoryRow};
 use crate::theme::{Metrics, Palette};
@@ -43,10 +44,27 @@ impl Event {
     }
 }
 
+/// Which sends the list shows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum Scope {
+    /// Every send this store holds.
+    #[default]
+    All,
+    /// Only the sends of the request on screen.
+    Request,
+}
+
 pub(crate) struct HistoryPanel {
     palette: Palette,
     metrics: Metrics,
     store: Arc<dyn Store>,
+    /// The request on screen, so *This request* knows which one that is.
+    document: Entity<Document>,
+    /// Which rows the list shows.
+    scope: Scope,
+    /// `(origin, url, revision)` the scoped list was read at, so a document
+    /// tick that changes nothing does not run the store query again.
+    scope_key: (Origin, String, u64),
     /// The shared preferences, read for the search limit on every reload. As a
     /// handle, not a copied number, so a change in the settings dialog reaches
     /// the next search without the pane being rebuilt.
@@ -150,6 +168,7 @@ impl Focusable for HistoryPanel {
 impl HistoryPanel {
     pub(crate) fn new(
         store: Arc<dyn Store>,
+        document: Entity<Document>,
         settings: Entity<Settings>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -163,13 +182,28 @@ impl HistoryPanel {
         // what is already on screen.
         cx.observe(&settings, |this, _, cx| this.reload(cx))
             .detach();
+        // A different request changes what *This request* means. Progress ticks
+        // notify the document many times per second, so the scope key filters
+        // those out before the store is read.
+        cx.observe(&document, |this, _, cx| this.sync_scope(cx))
+            .detach();
 
         let limit = settings.read(cx).current().history_limit;
-        let (hits, error) = search(store.as_ref(), "", limit);
+        let (hits, error) = search(
+            store.as_ref(),
+            Scope::All,
+            &Origin::default(),
+            "",
+            "",
+            limit,
+        );
         Self {
             palette: Palette::new(cx),
             metrics: Metrics::current(cx),
             store,
+            document,
+            scope: Scope::All,
+            scope_key: (Origin::default(), String::new(), 0),
             settings,
             hits,
             error,
@@ -198,10 +232,15 @@ impl HistoryPanel {
         let query = self.query.read(cx).value().to_string();
         let limit = self.settings.read(cx).current().history_limit;
         let store = self.store.clone();
+        let scope = self.scope;
+        let key = self.current_scope_key(cx);
+        self.scope_key = key.clone();
 
         cx.spawn(async move |this, cx| {
             let (hits, error) = cx
-                .background_spawn(async move { search(store.as_ref(), &query, limit) })
+                .background_spawn(async move {
+                    search(store.as_ref(), scope, &key.0, &key.1, &query, limit)
+                })
                 .await;
             this.update(cx, |panel, cx| {
                 if panel.reload_epoch == epoch {
@@ -215,10 +254,69 @@ impl HistoryPanel {
         .detach();
     }
 
+    /// Show only the sends of the request on screen. Called when the response
+    /// pane asks for its earlier sends: the pane is already open, so the scope
+    /// is the whole answer.
+    pub(crate) fn scope_to_request(&mut self, cx: &mut Context<Self>) {
+        self.scope = Scope::Request;
+        self.reload(cx);
+        cx.notify();
+    }
+
+    /// What *This request* is scoped to, plus the revision that invalidates it.
+    fn current_scope_key(&self, cx: &App) -> (Origin, String, u64) {
+        let document = self.document.read(cx);
+        (
+            document.origin.clone(),
+            document.url(),
+            document.history_revision,
+        )
+    }
+
+    /// A document notify is not always a different request; only re-read when
+    /// the scope key says it is.
+    fn sync_scope(&mut self, cx: &mut Context<Self>) {
+        if self.scope != Scope::Request {
+            return;
+        }
+        let key = self.current_scope_key(cx);
+        if key != self.scope_key {
+            self.scope_key = key;
+            self.reload(cx);
+        }
+    }
+
     /// The list, virtualized: `history_limit` can reach a thousand rows and
     /// every row is one line, so only the visible slice is built. `uniform_list`
     /// needs a `'static` render closure, so the hits are flattened into rows
     /// here and the per-row clicks reach the panel through an entity handle.
+    /// One half of the scope control. Selected styling and the toggle state come
+    /// from the button, so it reads as one choice, not two commands.
+    fn scope_button(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        scope: Scope,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let current = self.scope == scope;
+        Button::new(id)
+            .label(label)
+            .compact()
+            .ghost()
+            .selected(current)
+            .toggled(current)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if this.scope == scope {
+                    return;
+                }
+                this.scope = scope;
+                this.reload(cx);
+                cx.notify();
+            }))
+            .into_any_element()
+    }
+
     fn render_hits(&self, cx: &mut Context<Self>) -> AnyElement {
         let palette = &self.palette;
 
@@ -235,12 +333,17 @@ impl HistoryPanel {
         }
 
         if self.hits.is_empty() {
+            let message = match self.scope {
+                Scope::All => "Nothing sent yet.",
+                Scope::Request if self.document.read(cx).url().is_empty() => "No request open.",
+                Scope::Request => "Nothing sent for this request.",
+            };
             return div()
                 .px(px(self.metrics.space_md))
                 .py(px(self.metrics.space_sm))
                 .text_sm()
                 .text_color(palette.subtle)
-                .child("Nothing sent yet.")
+                .child(message)
                 .into_any_element();
         }
 
@@ -300,14 +403,63 @@ impl HistoryPanel {
 /// to know whether an empty list means "no sends" or "the read failed". The
 /// log line stays for a bug report; the returned message is what the list
 /// shows in the empty state's place.
-fn search(store: &dyn Store, query: &str, limit: u32) -> (Vec<HistoryHit>, Option<SharedString>) {
-    match store.search_history(query, limit) {
+fn search(
+    store: &dyn Store,
+    scope: Scope,
+    origin: &Origin,
+    url: &str,
+    query: &str,
+    limit: u32,
+) -> (Vec<HistoryHit>, Option<SharedString>) {
+    let result = match scope {
+        Scope::All => store.search_history(query, limit),
+        // The owner's rows are the request's sends; the query box still filters
+        // those rows, but it cannot widen the list past the owner.
+        Scope::Request => scoped_rows(store, origin, url, limit).map(|hits| filter(hits, query)),
+    };
+    match result {
         Ok(hits) => (hits, None),
         Err(error) => {
             log::error!("failed to search history: {error}");
             (Vec::new(), Some(error.to_string().into()))
         }
     }
+}
+
+/// The rows that belong to one request.
+///
+/// A saved request or a draft owns its rows, so it is asked for by owner: two
+/// requests with the same URL (a copy, or the same endpoint filed twice) must
+/// not share a send log. `Standalone` has no owner, so the URL is the best
+/// scope available; a backend that cannot answer by owner (`None`) gets the
+/// same fallback. One implementation, so the History pane and the response
+/// pane's “Earlier sends” count cannot disagree.
+pub(crate) fn scoped_rows(
+    store: &dyn Store,
+    origin: &Origin,
+    url: &str,
+    limit: u32,
+) -> restbook_core::Result<Vec<HistoryHit>> {
+    let scoped = if *origin == Origin::Standalone {
+        None
+    } else {
+        store.history_for_origin(origin, limit)?
+    };
+    match scoped {
+        Some(hits) => Ok(hits),
+        None if url.is_empty() => Ok(Vec::new()),
+        None => store.search_history(url, limit),
+    }
+}
+
+fn filter(hits: Vec<HistoryHit>, query: &str) -> Vec<HistoryHit> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return hits;
+    }
+    hits.into_iter()
+        .filter(|hit| hit.url.to_lowercase().contains(&query))
+        .collect()
 }
 
 impl Render for HistoryPanel {
@@ -361,8 +513,9 @@ impl Render for HistoryPanel {
                     }),
             )
             .child(
-                h_flex()
+                v_flex()
                     .flex_none()
+                    .gap(px(self.metrics.space_xs))
                     .px(px(self.metrics.space_sm))
                     .py(px(self.metrics.space_xs))
                     .child(
@@ -370,6 +523,17 @@ impl Render for HistoryPanel {
                             .id("history-search")
                             .flex_1()
                             .prefix(icons::quiet(IconName::Search, icons::SMALL, &palette)),
+                    )
+                    .child(
+                        h_flex()
+                            .gap(px(self.metrics.space_xs))
+                            .child(self.scope_button("history-scope-all", "All", Scope::All, cx))
+                            .child(self.scope_button(
+                                "history-scope-request",
+                                "This request",
+                                Scope::Request,
+                                cx,
+                            )),
                     ),
             )
             .child(
@@ -383,5 +547,70 @@ impl Render for HistoryPanel {
                     .py(px(self.metrics.space_xs))
                     .child(self.render_hits(cx)),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use restbook_core::{HistoryEntry, Method, Origin, RequestDef, ResponseRecord, Store};
+    use restbook_store::MemoryStore;
+
+    use super::scoped_rows;
+
+    fn seed(store: &MemoryStore, url: &str, origin: Origin) {
+        store
+            .append_history(&HistoryEntry {
+                id: 0,
+                request: RequestDef::new(Method::Get, url),
+                response: ResponseRecord {
+                    status: 200,
+                    headers: Vec::new(),
+                    body: Vec::new().into(),
+                    duration_ms: 0,
+                    received_at: Default::default(),
+                    final_url: None,
+                    redirects: Vec::new(),
+                },
+                url: url.to_owned(),
+                origin,
+            })
+            .expect("the in-memory store accepts history");
+    }
+
+    /// Two requests with the same URL — a copy, or the same endpoint filed
+    /// twice — must not share a send log. The owner is the key, not the URL.
+    #[test]
+    fn the_request_scope_lists_only_the_owners_sends() {
+        let store = MemoryStore::new();
+        let owner = Origin::Saved {
+            node: "node-a".to_owned(),
+        };
+        seed(&store, "https://example.com/a", owner.clone());
+        seed(&store, "https://example.com/a", owner.clone());
+        seed(
+            &store,
+            "https://example.com/a",
+            Origin::Saved {
+                node: "node-b".to_owned(),
+            },
+        );
+
+        let rows = scoped_rows(&store, &owner, "https://example.com/a", 20).unwrap();
+        assert_eq!(rows.len(), 2);
+    }
+
+    /// A standalone request has no owner, so the URL is the best scope; no URL
+    /// at all means there is nothing to scope to.
+    #[test]
+    fn a_standalone_request_falls_back_to_its_url() {
+        let store = MemoryStore::new();
+        seed(&store, "https://example.com/a", Origin::Standalone);
+        seed(&store, "https://example.com/b", Origin::Standalone);
+
+        let rows = scoped_rows(&store, &Origin::Standalone, "https://example.com/a", 20).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(scoped_rows(&store, &Origin::Standalone, "", 20)
+            .unwrap()
+            .is_empty());
     }
 }

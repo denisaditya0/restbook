@@ -111,7 +111,7 @@ runner. Build commands are `cargo` plus the `scripts/dev.*` wrappers.
 │           │   ├── storage.rs       data directory + which store
 │           │   ├── settings.rs      settings state
 │           │   ├── settings_view.rs settings dialog
-│           │   └── history_sheet.rs history overlay
+│           │   └── updates.rs       the launch update check and its offer
 │           └── panels/          ONE MODULE PER PANE
 │               ├── mod.rs           pane exports
 │               ├── request.rs       request tabs, URL bar, editor tabs

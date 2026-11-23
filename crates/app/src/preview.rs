@@ -476,7 +476,13 @@ fn build_pane(
 ) -> Result<PaneView, String> {
     Ok(match pane {
         Pane::History => PaneView::History(cx.new(|cx| {
-            HistoryPanel::new(fixture.store.clone(), fixture.settings.clone(), window, cx)
+            HistoryPanel::new(
+                fixture.store.clone(),
+                fixture.document.clone(),
+                fixture.settings.clone(),
+                window,
+                cx,
+            )
         })),
         Pane::Request => PaneView::Request(cx.new(|cx| {
             RequestPanel::new(
