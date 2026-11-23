@@ -1126,6 +1126,12 @@ mod tests {
             enabled: true,
             secret: true,
         }];
+        saved.request.body = restbook_core::Body::Form(vec![Kv {
+            key: "password".to_owned(),
+            value: "form-secret".to_owned(),
+            enabled: true,
+            secret: true,
+        }]);
 
         {
             let store = FolderStore::open(&dir).unwrap();
@@ -1139,6 +1145,7 @@ mod tests {
         let on_disk = fs::read_to_string(&file).unwrap();
         assert!(!on_disk.contains("header-secret"), "leaked:\n{on_disk}");
         assert!(!on_disk.contains("param-secret"), "leaked:\n{on_disk}");
+        assert!(!on_disk.contains("form-secret"), "leaked:\n{on_disk}");
         assert!(on_disk.contains("application/json"), "a plain row is kept");
 
         let reopened = FolderStore::open(&dir).unwrap();
@@ -1151,6 +1158,10 @@ mod tests {
         };
         assert_eq!(saved.request.headers[1].value, "header-secret");
         assert_eq!(saved.request.params[0].value, "param-secret");
+        let restbook_core::Body::Form(rows) = &saved.request.body else {
+            unreachable!();
+        };
+        assert_eq!(rows[0].value, "form-secret");
     }
 
     #[test]

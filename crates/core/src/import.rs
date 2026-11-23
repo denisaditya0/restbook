@@ -473,6 +473,7 @@ mod tests {
         };
         login.headers.push(secret("header-value", "X-Api-Key"));
         login.params.push(secret("param-value", "token"));
+        login.body = crate::Body::Form(vec![secret("form-value", "password")]);
 
         let environments = vec![Environment {
             name: "dev".to_owned(),
@@ -486,7 +487,13 @@ mod tests {
             ExportOptions::default(),
         )
         .unwrap();
-        for leaked in ["bearer-token", "header-value", "param-value", "env-value"] {
+        for leaked in [
+            "bearer-token",
+            "header-value",
+            "param-value",
+            "form-value",
+            "env-value",
+        ] {
             assert!(!bundle.contains(leaked), "`{leaked}` leaked:\n{bundle}");
         }
         assert!(bundle.contains(crate::secrets::REDACTED));

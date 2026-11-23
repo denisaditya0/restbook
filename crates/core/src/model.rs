@@ -3,7 +3,7 @@
 //! These types are the on-the-wire shape for import/export as well, so they are
 //! `serde`-derived and avoid implementation detail.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 fn default_true() -> bool {
     true
@@ -78,8 +78,7 @@ impl Kv {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Debug, Clone, Default)]
 pub enum Body {
     #[default]
     None,
@@ -92,6 +91,60 @@ pub enum Body {
     Binary {
         path: String,
     },
+}
+
+// `Form` and `Multipart` hold a sequence, and a `serde` internally tagged enum
+// cannot serialize a newtype variant containing one. These mirrors keep the
+// stored shape (`{"type": "raw", "mime": …, "text": …}`) and give the row
+// lists a name of their own (`rows`, `parts`).
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum BodyFields<'a> {
+    None,
+    Raw { mime: &'a str, text: &'a str },
+    Form { rows: &'a [Kv] },
+    Multipart { parts: &'a [FormPart] },
+    Binary { path: &'a str },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum OwnedBodyFields {
+    None,
+    Raw { mime: String, text: String },
+    Form { rows: Vec<Kv> },
+    Multipart { parts: Vec<FormPart> },
+    Binary { path: String },
+}
+
+impl Serialize for Body {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let fields = match self {
+            Body::None => BodyFields::None,
+            Body::Raw { mime, text } => BodyFields::Raw {
+                mime: mime.as_str(),
+                text: text.as_str(),
+            },
+            Body::Form(rows) => BodyFields::Form { rows },
+            Body::Multipart(parts) => BodyFields::Multipart { parts },
+            Body::Binary { path } => BodyFields::Binary {
+                path: path.as_str(),
+            },
+        };
+        fields.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Body {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match OwnedBodyFields::deserialize(deserializer)? {
+            OwnedBodyFields::None => Body::None,
+            OwnedBodyFields::Raw { mime, text } => Body::Raw { mime, text },
+            OwnedBodyFields::Form { rows } => Body::Form(rows),
+            OwnedBodyFields::Multipart { parts } => Body::Multipart(parts),
+            OwnedBodyFields::Binary { path } => Body::Binary { path },
+        })
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -422,5 +475,70 @@ mod tests {
         assert_eq!(back.len(), 5_000, "len is the file's full size");
         assert_eq!(back.as_bytes(), b"head", "the preview is what renders");
         assert!(back.is_file());
+    }
+
+    /// A form or multipart body holds a sequence, which an internally tagged
+    /// enum cannot write as a newtype variant. Before the mirrors below, a
+    /// request with either body failed to serialize, so it could not be saved
+    /// to a collection, a draft, or history at all.
+    #[test]
+    fn every_request_body_kind_roundtrips_through_json() {
+        let bodies = [
+            Body::None,
+            Body::Raw {
+                mime: "application/json".to_owned(),
+                text: "{}".to_owned(),
+            },
+            Body::Form(vec![Kv::new("grant_type", "password")]),
+            Body::Multipart(vec![FormPart {
+                name: "file".to_owned(),
+                file: Some("/tmp/a.txt".to_owned()),
+                ..FormPart::default()
+            }]),
+            Body::Binary {
+                path: "/tmp/a.bin".to_owned(),
+            },
+        ];
+
+        for body in bodies {
+            let json = serde_json::to_string(&body).unwrap();
+            let back: Body = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                serde_json::to_string(&back).unwrap(),
+                json,
+                "a body kind did not survive {json}"
+            );
+        }
+    }
+
+    /// The mirrors must not drift from the shape stored files already use.
+    #[test]
+    fn a_body_keeps_the_stored_shape() {
+        assert_eq!(
+            serde_json::to_value(Body::None).unwrap(),
+            serde_json::json!({ "type": "none" })
+        );
+        assert_eq!(
+            serde_json::to_value(Body::Raw {
+                mime: "text/plain".to_owned(),
+                text: "hi".to_owned(),
+            })
+            .unwrap(),
+            serde_json::json!({ "type": "raw", "mime": "text/plain", "text": "hi" })
+        );
+        assert_eq!(
+            serde_json::to_value(Body::Binary {
+                path: "a.bin".to_owned(),
+            })
+            .unwrap(),
+            serde_json::json!({ "type": "binary", "path": "a.bin" })
+        );
+        assert_eq!(
+            serde_json::to_value(Body::Form(vec![Kv::new("a", "1")])).unwrap(),
+            serde_json::json!({
+                "type": "form",
+                "rows": [{ "key": "a", "value": "1", "enabled": true, "secret": false }]
+            })
+        );
     }
 }
