@@ -45,9 +45,9 @@ pub(crate) fn save(path: &Path, state: &DockAreaState) {
         return;
     };
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        let _ = restbook_store::secure::create_dir(parent);
     }
-    let _ = std::fs::write(path, json);
+    let _ = restbook_store::secure::write(path, json);
 }
 
 /// Load a previously saved layout, or `None` when there is nothing usable.
@@ -321,7 +321,14 @@ impl Workspace {
         // close before the background had bound it would otherwise insert the
         // same draft a second time.
         if existing.is_none() {
-            match self.store.save_draft(&draft) {
+            let started = std::time::Instant::now();
+            let result = self.store.save_draft(&draft);
+            log::debug!(
+                target: "restbook_app::perf",
+                "first draft save took {}ms",
+                started.elapsed().as_millis(),
+            );
+            match result {
                 Ok(id) => {
                     self.tabs[index].draft = Some(id);
                     self.refresh_drafts(cx);

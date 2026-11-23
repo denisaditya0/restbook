@@ -429,7 +429,13 @@ impl CollectionsPanel {
     /// Re-read the drafts without touching the tree. Called by the workspace
     /// when it writes or clears a draft, since the tabs live there, not here.
     pub(crate) fn refresh_drafts(&mut self, cx: &mut Context<Self>) {
+        let started = std::time::Instant::now();
         self.drafts = self.store.drafts().unwrap_or_default();
+        log::debug!(
+            target: "restbook_app::perf",
+            "drafts reload took {}ms",
+            started.elapsed().as_millis(),
+        );
         cx.notify();
     }
 
