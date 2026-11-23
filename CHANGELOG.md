@@ -8,6 +8,26 @@ publishes as the release body, so the same text is the manifest's `notes` and
 the update offer. A version with no section fails CI rather than shipping a
 release with no description.
 
+## 0.1.6
+
+- **Query parameters and form bodies edit as text.** A **Table / Raw** switch
+  on the Params tab and on a Form body shows the same rows as `key=value`
+  lines, so a query string can be pasted in and edited as a whole. Repeated
+  keys, percent-encoding, and a disabled row (written `# key=value`) survive
+  switching back.
+- **One cookie at a time.** The Cookies tab lists the cookies the session would
+  send to the request's URL, with an inline value edit and a per-row delete,
+  instead of replacing the whole session from Settings. A response restored
+  from history keeps its own rows, read-only.
+- **Earlier sends moved into the History pane.** The slide-in sheet is gone:
+  the clock control reveals the right-dock History pane already scoped to the
+  request, and the pane gains an **All / This request** switch beside its
+  search box.
+- **Redirects no longer carry credentials to another host.** A hop that changes
+  host or scheme drops `Authorization`, `Cookie`, and `Proxy-Authorization`,
+  and an `https → http` downgrade is refused unless the request allows
+  insecure TLS.
+
 ## 0.1.5
 
 - **Nothing looks different.** This release splits the window's one large
