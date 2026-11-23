@@ -153,7 +153,7 @@ This is the "intent as event" rule in action.
 
 | Trigger | Event | Effect | POV | Source |
 |---|---|---|---|---|
-| History clock control | `ResponseEvent::ShowHistory { hits }` | park the hits, open the history sheet from render | Overlay (right sheet, 440px) | `history_sheet::open` |
+| History clock control | `ResponseEvent::ShowHistory` | scope the History pane to this request, then reveal and focus it | Right dock | `Workspace::show_history_pane` |
 | Cookies: edit a value | `ResponseEvent::UpdateCookie { name, value }` | write the value into the shared jar, then redraw the tab | Center (Response, Cookies tab) | `Workspace::update_cookie` |
 | Cookies: delete a row | `ResponseEvent::DeleteCookie { name }` | remove that cookie from the shared jar, leaving the rest | Center (Response, Cookies tab) | `Workspace::delete_cookie` |
 | Body / Headers / Cookies tab | (local) | switch the response view | Center (Response) | `response.rs` |
@@ -185,15 +185,23 @@ offered a copy of payload the current tab does not show.
 | Per-row: enabled / key / value / secret / reveal / `x` | edit the variable rows | Left dock |
 | Inspector | read-only: which scope won each `{{name}}`, or `unresolved`; a `{{$generator}}` is never unresolved (it renders at send time) | Left dock |
 
+### History pane (in-pane)
+
+| Trigger | Effect | POV |
+|---|---|---|
+| `All` / `This request` | scope the list to every send, or to the owner of the request on screen (URL fallback for a `Standalone` one); the request scope follows a tab switch | Right dock |
+| Search box | filter the scoped list by URL text | Right dock |
+| Row click / trash | restore the stored request and response, or delete the send (alert dialog) | Right dock |
+
 ### Request editor tabs (in-pane)
 
 Five tabs, from the `EditorTab` enum: **Params, Headers, Body, Auth, Settings**.
 
 | Tab | Controls |
 |---|---|
-| Params | key/value table (enabled toggle, remove, Add), `{{…}}` completion |
+| Params | key/value table (enabled toggle, remove, Add), `{{…}}` completion; a Table/Raw switch turns the rows into wire-form text |
 | Headers | key/value table |
-| Body | kind strip: None / Raw / Form / Multipart / Binary; Raw has mime buttons + a code editor; Multipart has a parts table with Choose… |
+| Body | kind strip: None / Raw / Form / Multipart / Binary; Raw has mime buttons + a code editor; Form has a Table/Raw switch; Multipart has a parts table with Choose… |
 | Auth | kind strip: None / Basic / Bearer / API key; API key has a "query string" checkbox |
 | Settings | timeout, follow-redirects, insecure TLS |
 
@@ -217,7 +225,6 @@ are opened with a deliberate two-step: an event or a background task has no
 | Save request | Save on an unbound tab | centered dialog, 460px | `Workspace::open_save_dialog` |
 | Delete confirmation | a row's trash button (Collections) or Delete (Environment) | centered **alert** dialog, 420px | `Workspace::open_delete_dialog` |
 | Update offer | the launch check finding a newer release that is not skipped | centered dialog, 448px; *Install now* / *Later* / *Skip this version* | `Workspace::open_update_offer_dialog` |
-| History sheet | response clock control | right sheet, 440px | `history_sheet::open` |
 | Flash toast | any `Notice` / `flash`, including the two dock toggles | park in `pending_notice`, then a kit notification above dialogs | `Workspace::issue_notice` |
 
 The update offer is a plain dialog, not an alert: an alert's confirm/cancel pair

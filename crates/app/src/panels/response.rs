@@ -39,17 +39,18 @@ use crate::workspace::settings::Settings;
 /// plain block instead.
 const MAX_NUMBERED_LINES: usize = 3000;
 
-/// How many prior sends of the current request the history sheet lists.
+/// How many prior sends of the current request the Earlier sends control lists.
 const HISTORY_ROWS: u32 = 20;
 
 /// What the pane asks the workspace to do for it.
 ///
 /// The per-request history is a window-level overlay, and a pane is not allowed
-/// to place one — that is the canvas's call. So the pane hands over the rows it
-/// already searched and the workspace opens the sheet.
+/// to place one — that is the canvas's call. So the pane reports the intent and
+/// the workspace reveals the History pane, scoped to this request.
 pub(crate) enum Event {
-    /// Show the prior sends of the request on screen.
-    ShowHistory { hits: Vec<HistoryHit> },
+    /// Show the prior sends of the request on screen: the workspace scopes the
+    /// History pane to this request and reveals it.
+    ShowHistory,
     /// Forget one cookie in the shared jar.
     DeleteCookie { name: String },
     /// Replace one cookie's value in the shared jar.
@@ -61,9 +62,7 @@ pub(crate) enum Event {
 impl Event {
     pub(crate) fn summary(&self) -> String {
         match self {
-            Event::ShowHistory { hits } => {
-                format!("event: response history with {} rows", hits.len())
-            }
+            Event::ShowHistory => "event: response history".to_owned(),
             Event::DeleteCookie { name } => format!("event: response cookie delete {name}"),
             Event::UpdateCookie { name, .. } => {
                 format!("event: response cookie update {name}")
@@ -684,7 +683,7 @@ impl gpui_kit::component::dock::Panel for ResponsePanel {
         let body = response
             .as_ref()
             .map(|response| self.body_for_display(response, window, cx).0);
-        let hits = self.history.clone();
+        let has_history = !self.history.is_empty();
 
         let copy_body = panel.clone();
         let mut menu = menu.item(
@@ -719,11 +718,9 @@ impl gpui_kit::component::dock::Panel for ResponsePanel {
         menu.item(
             PopupMenuItem::new("Earlier sends\u{2026}")
                 .icon(IconName::Clock)
-                .disabled(hits.is_empty())
+                .disabled(!has_history)
                 .on_click(move |_, _, cx| {
-                    history.update(cx, |_, cx| {
-                        cx.emit(Event::ShowHistory { hits: hits.clone() })
-                    });
+                    history.update(cx, |_, cx| cx.emit(Event::ShowHistory));
                 }),
         )
     }
@@ -744,9 +741,8 @@ impl ResponsePanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        // Any change to the document — a finished send, an error, a cancel —
-        // is a reason to redraw, and a new response or URL is also the moment
-        // the history sheet may need new rows.
+        // A new response or URL is also the moment the Earlier sends count may
+        // change.
         cx.observe(&document, |this, _, cx| this.sync_history(cx))
             .detach();
         // The pane's pretty-print start state is an app-level preference. It is
@@ -849,29 +845,16 @@ impl ResponsePanel {
 
     /// Re-read the rows for the current request.
     ///
-    /// A saved request or a draft owns its rows, so it is asked for by owner:
-    /// two requests with the same URL (a copy, or the same endpoint filed
-    /// twice) must not share a send log. `Standalone` has no owner, and a
-    /// backend that cannot answer by owner returns `None` (the encrypted store
-    /// until origins are persisted), so both fall back to the URL search. An
-    /// empty query there means there is no request to scope to at all.
+    /// Re-read the rows for the current request, through the same scope the
+    /// History pane uses.
     fn reload_history(&mut self) {
-        let scoped = if self.history_origin == Origin::Standalone {
-            None
-        } else {
-            self.store
-                .history_for_origin(&self.history_origin, HISTORY_ROWS)
-                .unwrap_or(None)
-        };
-
-        self.history = match scoped {
-            Some(hits) => hits,
-            None if self.history_query.is_empty() => Vec::new(),
-            None => self
-                .store
-                .search_history(&self.history_query, HISTORY_ROWS)
-                .unwrap_or_default(),
-        };
+        self.history = crate::panels::history::scoped_rows(
+            self.store.as_ref(),
+            &self.history_origin,
+            &self.history_query,
+            HISTORY_ROWS,
+        )
+        .unwrap_or_default();
     }
 
     /// What kind of text the payload is, for the format dropdown. Only the
@@ -1033,15 +1016,13 @@ impl ResponsePanel {
     }
 
     /// The history control: the relative time of the newest send of this
-    /// request. Clicking it asks the workspace for a sheet listing the prior
-    /// sends; a dropdown would be clipped at the window edge, and the rows need
-    /// the full height to be readable. Absent when the request has no history,
+    /// request. Clicking it asks the workspace to reveal the History pane
+    /// already scoped to this request. Absent when the request has no history,
     /// so an unsent request keeps the header short.
     fn render_history(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let newest = self.history.first()?;
         let label = relative_time(&newest.at);
         let palette = self.palette.clone();
-        let hits = self.history.clone();
 
         Some(
             h_flex()
@@ -1057,7 +1038,7 @@ impl ResponsePanel {
                         .compact()
                         .tooltip("Show earlier responses for this request")
                         .on_click(cx.listener(move |_, _, _, cx| {
-                            cx.emit(Event::ShowHistory { hits: hits.clone() });
+                            cx.emit(Event::ShowHistory);
                         })),
                 )
                 .into_any_element(),
@@ -2054,7 +2035,6 @@ impl ResponsePanel {
             util::status_text(newest.status),
             relative_time(&newest.at),
         );
-        let hits = self.history.clone();
 
         Some(
             div()
@@ -2069,7 +2049,7 @@ impl ResponsePanel {
                         .compact()
                         .tooltip("Show earlier responses for this request")
                         .on_click(cx.listener(move |_, _, _, cx| {
-                            cx.emit(Event::ShowHistory { hits: hits.clone() });
+                            cx.emit(Event::ShowHistory);
                         })),
                 )
                 .into_any_element(),
@@ -3106,7 +3086,7 @@ mod render_tests {
         cx.quit();
     }
 
-    /// A delete made outside this pane (the sidebar, the history sheet) bumps
+    /// A delete made outside this pane (the sidebar, the History pane) bumps
     /// the document's history revision. Without that signal the pane keeps its
     /// cached rows and shows a send that no longer exists until the next send.
     #[test]

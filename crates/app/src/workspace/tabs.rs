@@ -24,7 +24,6 @@ use crate::theme::{Metrics, Palette};
 
 use super::chrome;
 use super::delete::PendingDelete;
-use super::history_sheet;
 use super::persistence::CLOSED_TAB_LIMIT;
 use super::{close_needs_confirmation, wrap_index, RequestStamp, Workspace};
 
@@ -590,33 +589,6 @@ impl Workspace {
         });
     }
 
-    /// Open the per-request history as a slide-in sheet. The response pane
-    /// searched the rows; the sheet only draws them and restores a pick, which
-    /// is a document write. Called from render once `pending_history` is set.
-    pub(crate) fn open_history_sheet(
-        &mut self,
-        hits: Vec<restbook_core::HistoryHit>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        log::info!(
-            target: "restbook_app::ui",
-            "opening response history sheet ({} rows)",
-            hits.len(),
-        );
-        let origin = self.document.read(cx).origin.clone();
-        let workspace = cx.entity().downgrade();
-        history_sheet::open(
-            hits,
-            origin,
-            self.document.clone(),
-            self.store.clone(),
-            workspace,
-            window,
-            cx,
-        );
-    }
-
     /// A history mutation landed in the store. The caller already wrote it, so
     /// this only tells every view that cached a list of it to re-read: the
     /// response pane keys its scoped list on the document revision, and the
@@ -627,24 +599,6 @@ impl Workspace {
             cx.notify();
         });
         self.panes.history.update(cx, |panel, cx| panel.reload(cx));
-    }
-
-    /// Park a request to delete one send so the next render can open the alert
-    /// dialog. The history sheet has a window but no `Context<Workspace>` of its
-    /// own, so it asks through the workspace, the way the panes do.
-    pub(crate) fn confirm_history_send(&mut self, id: i64, cx: &mut Context<Self>) {
-        self.pending_delete = Some(PendingDelete::HistorySend(id));
-        cx.notify();
-    }
-
-    /// Park a request to clear one owner's sends for the alert dialog.
-    pub(crate) fn confirm_clear_history_for_origin(
-        &mut self,
-        origin: Origin,
-        cx: &mut Context<Self>,
-    ) {
-        self.pending_delete = Some(PendingDelete::HistoryOwner(origin));
-        cx.notify();
     }
 
     /// Open a saved request from the sidebar.

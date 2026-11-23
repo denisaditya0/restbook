@@ -1027,10 +1027,10 @@ default arrangement changes; the user gets the new default and a fresh file.
 - `window.open_dialog` wants to run after the frame is built, and event handlers
   (`cx.subscribe`, `RequestEvent`) have no `Window`. Set a `pending_*` flag in
   the handler, then `window.defer` the open from `render` — see
-  [Ask before an action](#ask-before-an-action-a-dialog). A sheet takes the same
-  route: `ResponsePanel` emits `Event::ShowHistory { hits }`, the workspace parks
-  them in `pending_history`, and `render` defers `history_sheet::open`. A pane
-  never places an overlay itself; it reports the intent.
+  [Ask before an action](#ask-before-an-action-a-dialog). The update offer takes
+  the same route: the launch check has no window, so it parks `pending_update`
+  and `render` defers the dialog. A pane never places an overlay itself; it
+  reports the intent.
 - The tab list can be **empty**. `active_tab` is only a valid index when
   `!tabs.is_empty()`, so every read is a `get` (or `ensure_active_tab` when an
   action needs to revive the editor). Closing the last tab calls `adopt_active`

@@ -295,8 +295,6 @@ selection is pointer-only:
 - `collections.rs:919-929` (drafts), `:1098-1105` (collection name),
   `:1273-1278` (folder), `:1423-1429` (request).
 - `panels/history.rs:189-256` (row and its per-row delete `:239-251`).
-- `workspace/history_sheet.rs:53-69` (clear), `:137-166` (restore),
-  `:168-178` (delete).
 
 **Fix:** the icon commands become `Button::new(...).icon(...).ghost().compact()
 .tooltip(...)` — that alone fixes the missing accessible name and keyboard
@@ -306,8 +304,8 @@ full `List`/`VirtualList` migration is only worth it with §8.
 
 ### 4.5 `.cursor_pointer()` on non-links
 
-13 sites: `collections.rs:927,1104,1277,1428`, `kv_table.rs:351`,
-`history.rs:196,244`, `request.rs:543,589,837`, `history_sheet.rs:58,144,174`.
+10 sites: `collections.rs:927,1104,1277,1428`, `kv_table.rs:351`,
+`history.rs:196,244`, `request.rs:543,589,837`.
 
 **Fix:** delete the calls. The guide reserves the pointing hand for links;
 `Link` itself is correctly unused in this app.
@@ -523,9 +521,9 @@ Checked and deliberately left alone:
   `scroll_to_item(index)` to be re-derived from bounds. The gap that mattered —
   no accessible close — is closed with a real `Button` and a tooltip.
 - **§4.5 `cursor_pointer` removal — held back.** The ten remaining sites
-  (`collections.rs`, `kv_table.rs`, `history.rs`, `request.rs`,
-  `history_sheet.rs`) are all selectable rows, so the pointing hand goes with the
-  row-to-`List` migration in §4.4's second pass, not before it.
+  (`collections.rs`, `kv_table.rs`, `history.rs`, `request.rs`) are all selectable
+  rows, so the pointing hand goes with the row-to-`List` migration in §4.4's
+  second pass, not before it.
 - **§4.6 `parts_table` `.ghost()` — held back.** It is a one-word deletion, but
   it changes what a form's Add looks like, so it belongs with the same pass that
   settles §4.4.

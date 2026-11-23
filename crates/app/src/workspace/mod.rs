@@ -8,7 +8,6 @@
 mod chrome;
 mod delete;
 mod dock;
-mod history_sheet;
 mod persistence;
 mod send;
 pub(crate) mod settings;
@@ -31,7 +30,7 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{h_flex, v_flex, WindowExt as _};
 use gpui_kit::*;
 
-use restbook_core::{Origin, RequestDef, Store};
+use restbook_core::{RequestDef, Store};
 use restbook_transport::ReqwestTransport;
 
 use crate::actions::{
@@ -125,10 +124,10 @@ pub(crate) struct Workspace {
     /// A draft asked to be saved, but the dialog needs a window and the event the
     /// request arrived on had none. The next render opens the dialog.
     pending_save: bool,
-    /// Rows the response pane wants shown as a history sheet. Set by its event
-    /// and consumed by render, which is the only place with a window to open a
-    /// sheet on.
-    pending_history: Option<Vec<restbook_core::HistoryHit>>,
+    /// Whether the response pane asked for its earlier sends. Set by its event
+    /// and consumed by render, because the event carries no window and reveal
+    /// needs one.
+    pending_history: bool,
     /// What a sidebar pane asked to delete, waiting for render to raise the
     /// confirmation dialog. Events carry no window, so the ask is parked here
     /// and consumed the same way `pending_save` and `pending_history` are.
@@ -286,7 +285,15 @@ impl Workspace {
         );
         apply_appearance(window, cx);
         let panes = Panes {
-            history: cx.new(|cx| HistoryPanel::new(store.clone(), settings.clone(), window, cx)),
+            history: cx.new(|cx| {
+                HistoryPanel::new(
+                    store.clone(),
+                    document.clone(),
+                    settings.clone(),
+                    window,
+                    cx,
+                )
+            }),
             request: cx
                 .new(|cx| RequestPanel::new(document.clone(), variables.clone(), window, cx)),
             response: cx.new(|cx| {
@@ -328,7 +335,7 @@ impl Workspace {
             focus_handle: cx.focus_handle(),
             save_name,
             pending_save: false,
-            pending_history: None,
+            pending_history: false,
             pending_delete: None,
             pending_update: None,
             flushed: false,
@@ -411,11 +418,11 @@ impl Workspace {
             |this, _, event: &ResponseEvent, cx| {
                 log::info!(target: "restbook_app::ui", "{}", event.summary());
                 match event {
-                    // The pane reports the history request instead of opening a
-                    // sheet itself: where an overlay sits is the canvas's decision.
-                    // Render opens it, because this event carries no window.
-                    ResponseEvent::ShowHistory { hits } => {
-                        this.pending_history = Some(hits.clone());
+                    // The pane reports the intent; where the result appears is
+                    // the canvas's decision. Render defers the reveal, because
+                    // this event carries no window.
+                    ResponseEvent::ShowHistory => {
+                        this.pending_history = true;
                         cx.notify();
                     }
                     ResponseEvent::DeleteCookie { name } => this.delete_cookie(name, cx),
@@ -650,6 +657,17 @@ impl Workspace {
         // lives in the Settings dialog, and a window-level layer is the only
         // thing drawn above an open dialog.
         window.push_notification(Notification::success("Cookies cleared."), cx);
+    }
+
+    /// Show the earlier sends of the request on screen: scope the History pane
+    /// to it, reveal the tools dock, and focus the list. The pane is the same
+    /// one the status bar toggle opens; no overlay is involved.
+    pub(crate) fn show_history_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.panes
+            .history
+            .update(cx, |panel, cx| panel.scope_to_request(cx));
+        self.reveal_panel(PanelName::History, window, cx);
+        self.focus_panel(PanelName::History, window, cx);
     }
 
     /// Forget one cookie in the shared jar, on the response pane's behalf. The
@@ -912,13 +930,13 @@ impl Render for Workspace {
             });
         }
 
-        // Same deferral as the save dialog: a sheet is a window-level overlay,
-        // and its layer is built after this element returns.
-        if let Some(hits) = self.pending_history.take() {
+        // Same deferral as the save dialog: the History pane has to be revealed,
+        // and a dock change needs the frame to settle first.
+        if std::mem::take(&mut self.pending_history) {
             let this = cx.entity();
             window.defer(cx, move |window, cx| {
                 this.update(cx, |workspace, cx| {
-                    workspace.open_history_sheet(hits, window, cx);
+                    workspace.show_history_pane(window, cx);
                 });
             });
         }
@@ -1657,8 +1675,9 @@ mod tests {
             let (dock, _skin) = DockSkin::dock_area("status-test", None, window, cx);
             let settings =
                 cx.new(|_| settings::Settings::new(std::env::temp_dir().join("status-test.json")));
-            let history = cx.new(|cx| HistoryPanel::new(store.clone(), settings, window, cx));
             let document = cx.new(|_| super::super::Document::new());
+            let history = cx
+                .new(|cx| HistoryPanel::new(store.clone(), document.clone(), settings, window, cx));
             let collections = cx.new(|cx| CollectionsPanel::new(store, document, window, cx));
             dock.update(cx, |dock, cx| {
                 let layout = DockLayout::tabs()
@@ -1772,8 +1791,9 @@ mod tests {
             let (dock, _skin) = DockSkin::dock_area("test-dock", None, window, cx);
             let settings =
                 cx.new(|_| settings::Settings::new(std::env::temp_dir().join("docks-test.json")));
-            let history = cx.new(|cx| HistoryPanel::new(store.clone(), settings, window, cx));
             let document = cx.new(|_| Document::new());
+            let history = cx
+                .new(|cx| HistoryPanel::new(store.clone(), document.clone(), settings, window, cx));
             let variables = cx.new(|cx| Variables::new(store, cx));
             let environment = cx.new(|cx| EnvironmentPanel::new(variables, document, window, cx));
             Docks {

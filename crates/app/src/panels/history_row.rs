@@ -1,10 +1,8 @@
-//! One stored send, rendered the same way in the History pane and in the
-//! response history sheet.
+//! One stored send, rendered the way the History pane draws it.
 //!
-//! Both lists describe the same object, so they share the row container, its
-//! spacing, and the field order: identity on the first line, when it happened
-//! on the second. A caller supplies only the trailing action and what a click
-//! means.
+//! The row container, its spacing, and the field order are shared by every
+//! caller: identity on the first line, when it happened on the second. A caller
+//! supplies only the trailing action and what a click means.
 
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -45,18 +43,16 @@ const LINE_HEIGHT: f32 = 1.5;
 
 /// The height of one two-line row: the identity line above the time line, with
 /// the scale's `sm` step as padding top and bottom and its `xs` step between the
-/// lines. Every state draws exactly this height, so the sidebar's `uniform_list`
-/// and the sheet's list cannot drift apart.
+/// lines. Every state draws exactly this height.
 pub(crate) fn row_height(metrics: &Metrics) -> f32 {
     let text = (metrics.font_body + metrics.font_xs) * LINE_HEIGHT;
     metrics.space_sm * 2.0 + metrics.space_xs + text
 }
 
-/// One row, complete but for its action and click. Both lists draw exactly
-/// this, so their spacing cannot drift apart again.
+/// One row, complete but for its action and click. Every list that draws a send
+/// uses this, so their spacing cannot drift apart again.
 ///
-/// `selected` is the sidebar's picked row; the sheet has no selection and
-/// passes `false`.
+/// `selected` is the picked row's id; a list with no selection passes `false`.
 pub(crate) fn row(
     id: impl Into<ElementId>,
     history: &HistoryRow,
