@@ -346,6 +346,27 @@ that the pinned Windows GNU toolchain drops the `.rsrc` section (see
 `crates/app/build.rs`), so such an artifact carries neither the icon nor the
 version block; only the MSVC build in the R2 matrix has them.
 
+## Security before a release
+
+Most of this is code that either exists or fails, so the list stays short:
+
+- **Dependencies.** `cargo audit` is clean in both workspaces. A vulnerable
+  transitive crate is the one release risk the existing CI does not catch.
+- **Redirects.** No `Authorization`, `Cookie`, or `Proxy-Authorization` crosses a
+  host change, and an `https → http` downgrade is refused unless the request is
+  `insecure` (`B27`, a rider on `0.1.6`).
+- **Logs.** No secret reaches `restbook.log` at `info`: the sent URL is elided
+  and the response-body preview is `debug` only. The file is offered for bug
+  reports, so it has to be safe to attach (`0.2.7`).
+- **Exports.** The export dialog redacts secret values by default; “include
+  secrets” is an explicit, warned choice (`B28`).
+- **Storage mode.** The release notes name the history mode the build uses. A
+  build without SQLCipher, or one whose keyring failed, runs plaintext JSONL and
+  says so on stderr and in the status bar; an install that silently changed mode
+  is a support incident.
+- **Files.** The plaintext history and the local workspace file are created
+  `0600` where the platform supports it (`0.2.7`).
+
 ## Not done yet
 
 - No notarized or signed install: Windows SmartScreen warns, and an unsigned

@@ -314,6 +314,7 @@ of a shared request as tracked content.
 - `docs/10-release-and-updates.md` — versioning, channels, artifact matrix, release flow, update manifest
 - `docs/11-repo-map-and-dev-cycle.md` — repository map, crate ownership, and the development loop
 - `docs/12-keyboard-shortcuts.md` — every binding, platform spelling, and what to check when one does not fire
+- [`SECURITY.md`](SECURITY.md) — what is protected, what is not, and how to report a vulnerability
 
 ## Windows setup (this machine)
 
