@@ -24,6 +24,31 @@ Contributors and pull requests are added to the release page by `release.yml`;
 do not write them here.
 -->
 
+## 0.1.8
+
+- **Filter the history.** A filter button beside the History search box narrows
+the list by method, status class, or how recently it was sent. The menu shows
+which choices are active and offers *Clear filters*; the filter works in both
+the *All* and *This request* scopes.
+- **Failures say what failed.** A failed send now fills the response pane with
+the cause instead of a generic sentence: a title such as *Certificate not
+trusted*, *Request timed out*, or *Couldn't connect*, one sentence about what to
+try, the request that was attempted, and a Retry button. The engine message and
+the recent log sit behind **Details**, and an `http://` connect failure suggests
+trying `https://`.
+- **Find in the response works again.** Clicking the Find button opens and
+focuses the find row; it has a close control and keeps the match count and
+next/previous arrows.
+- **Import Bruno request files.** A single-request `.yml` exported from Bruno
+imports as one request, including its headers, query rows (disabled rows stay
+disabled), body, timeout, and redirect choice. An inherited login is reported
+so it can be set again rather than silently dropped.
+- **A quieter log, with a capture when it is needed.** `restbook.log` now keeps
+only startup facts, warnings and errors, and one line per send, and it rotates
+at 1 MiB. Settings › Storage, or the button on a failed send, records ten
+minutes of detailed logs in a separate timestamped file for a bug report; that
+file is removed on the next launch.
+
 ## 0.1.7
 
 - **Import a file.** **Import…** — in the titlebar menu, the command palette, and
