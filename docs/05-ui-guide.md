@@ -955,6 +955,11 @@ is unavailable (announced on stderr). A legacy `.restbook/history.jsonl` from an
 older working-directory build is imported once — into the database when it is
 new, or copied next to the new JSONL file.
 
+A `restbook.json` workspace wins over that directory (`open_store`), and
+`FolderStore` serves history from `<workspace>/.restbook/history.jsonl` —
+plaintext in every build, unrelated to the encrypted store above, and the hole
+`0.1.9` closes by routing the workspace through `open_history` too.
+
 `workspace/persistence.rs` writes the whole `DockAreaState` to `layout.json` on
 a debounced layout change, and flushes on window close. `Workspace::flush` is
 the single close path: it runs before the platform destroys the window (and

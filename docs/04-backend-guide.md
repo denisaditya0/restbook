@@ -272,6 +272,13 @@ Progress is optional: if you can report it, override `execute_with_progress` and
 bump the `Progress` sink as bytes move; if not, implement only `execute`, which is
 what the default `execute_with_progress` calls.
 
+An error must keep its cause chain. `reqwest::Error`'s `Display` is the same
+generic sentence for DNS, connect, TLS, and timeout failures; the detail is in
+`source()`. `ReqwestTransport::describe` walks it so `Error::Transport` reads
+`…: tcp connect error: Connection refused`, which is what the response pane
+classifies and what a log needs to be useful. A transport that drops the chain
+leaves the UI with nothing to say beyond “request failed”.
+
 ### Test the pipeline without a network
 
 `core::testing::FakeTransport` is the offline half of the `Transport` seam. Give
@@ -404,9 +411,10 @@ plaintext in an export.
 - Tests are behavior sentences (`rejects_header_injection`), not method names.
 - `core` tests must not need a network or a window. The one exception is the
   `SqlcipherStore` test, which is feature-gated and touches the keyring.
-- JSONL is plaintext. It is the devcli format and the app's *fallback* when the
-  `sqlcipher` feature is off; if you ship a change that touches history, make
-  sure the encrypted path is the one you exercised (`--features sqlcipher`).
+- JSONL is plaintext. It is the devcli format, the app's *fallback* when the
+  `sqlcipher` feature is off, and a folder workspace's `.restbook/history.jsonl`
+  until `0.1.9`; if you ship a change that touches history, make sure the
+  encrypted path is the one you exercised (`--features sqlcipher`).
 - `Body::Multipart` file parts are paths resolved at prepare time; the transport
   opens them. Keep new body kinds on the same pattern.
 - The `sqlcipher` build needs `OPENSSL_DIR`. `scripts/dev.sh` detects it; an

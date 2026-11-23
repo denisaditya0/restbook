@@ -162,7 +162,8 @@ This is the "intent as event" rule in action.
 | Body / Headers / Cookies tab | (local) | switch the response view | Center (Response) | `response.rs` |
 | Body toolbar: find | (local) | open or close the find row, then focus it; the row reports the match count and next/previous | Center (Response) | `ResponsePanel::toggle_find` |
 | Body toolbar: format switch, copy body, copy summary | (local) | pretty/raw, or write the body or the status line to the clipboard | Center (Response) | `ResponsePanel::render_body_toolbar` |
-| Error banner: capture debug | (local) | start a ten-minute `restbook-debug-<timestamp>.log` capture and name its path in a notification | Overlay (notification) | `logging::start_debug_capture` |
+| Error view: capture debug | (local) | start a ten-minute `restbook-debug-<timestamp>.log` capture and name its path in a notification | Overlay (notification) | `logging::start_debug_capture` |
+| Error view: Retry | `ResponseEvent::Retry` | send the same request again through `Workspace::send`, so the unresolved-variable and pending guards still apply | Center → wire | `ResponsePanel::render_failure` |
 
 The Cookies tab draws the session jar for the request's URL, because those are
 the cookies a send would carry. A response restored from history has no jar
