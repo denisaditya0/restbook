@@ -196,9 +196,9 @@ impl AppSettings {
             return;
         };
         if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            let _ = restbook_store::secure::create_dir(parent);
         }
-        let _ = std::fs::write(path, json);
+        let _ = restbook_store::secure::write(path, json);
     }
 }
 
@@ -345,6 +345,23 @@ mod tests {
         assert_eq!(loaded.history_limit, 200);
         assert_eq!(loaded.history_max_entries, 2_000);
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `settings.json` is app-owned; it is `0600` where the platform has a mode.
+    #[cfg(unix)]
+    #[test]
+    fn a_saved_settings_file_is_private() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = std::env::temp_dir().join("restbook-settings-private-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("nested").join("settings.json");
+
+        AppSettings::default().save(&path);
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "settings.json should be private");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
