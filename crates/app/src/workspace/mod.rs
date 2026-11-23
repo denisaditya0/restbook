@@ -39,9 +39,9 @@ use restbook_core::{RequestDef, Store};
 use restbook_transport::ReqwestTransport;
 
 use crate::actions::{
-    self as actions, CloseTab, CopyCurl, ExportFile, ImportFile, NewTab, NextTab, OpenSettings,
-    PreviousTab, ReopenClosedTab, ResetZoom, SaveRequestAs, ShowShortcuts, ToggleCommandPalette,
-    ToggleSidebar, ToggleTools, ZoomIn, ZoomOut,
+    self as actions, CloseTab, CopyCurl, ExportFile, FindInResponse, ImportFile, NewTab, NextTab,
+    OpenSettings, PreviousTab, ReopenClosedTab, ResetZoom, SaveRequestAs, ShowShortcuts,
+    ToggleCommandPalette, ToggleSidebar, ToggleTools, ZoomIn, ZoomOut,
 };
 use crate::document::Document;
 use crate::icons::IconName;
@@ -829,6 +829,12 @@ impl Workspace {
                 .panes
                 .request
                 .update(cx, |panel, cx| panel.focus_url(window, cx)),
+            Command::FindInResponse => {
+                self.reveal_panel(PanelName::Response, window, cx);
+                self.panes
+                    .response
+                    .update(cx, |panel, cx| panel.open_find(window, cx))
+            }
             Command::PasteCurl => self
                 .panes
                 .request
@@ -1376,6 +1382,12 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &FindInResponse, window, cx| {
+                this.reveal_panel(PanelName::Response, window, cx);
+                this.panes
+                    .response
+                    .update(cx, |panel, cx| panel.open_find(window, cx))
+            }))
             .on_action(
                 cx.listener(|this, _: &ShowShortcuts, window, cx| this.open_shortcuts(window, cx)),
             )

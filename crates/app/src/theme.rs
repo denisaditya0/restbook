@@ -222,6 +222,10 @@ pub(crate) struct Palette {
     /// a found substring reads as the same class of "look here" as every other
     /// warning without adding a token a theme file has to define.
     pub search_match: Hsla,
+    /// The stronger wash behind the match the arrows are currently on, so
+    /// stepping through a list moves something visible rather than only the
+    /// count beside the field.
+    pub search_match_current: Hsla,
     pub success: Hsla,
     pub warning: Hsla,
     pub info: Hsla,
@@ -571,6 +575,7 @@ impl Palette {
             selected: pick(&colors.selected, theme.secondary_active),
             selection: theme.selection,
             search_match: theme.warning.opacity(0.32),
+            search_match_current: theme.warning.opacity(0.62),
             success: pick(&colors.success, theme.success),
             warning: pick(&colors.warning, theme.warning),
             info: pick(&colors.info, theme.info),
