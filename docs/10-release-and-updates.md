@@ -284,14 +284,29 @@ What `.github/workflows/release.yml` does, in order:
    `latest.json` from the downloaded bytes' own checksums, upload every asset,
    then un-draft and mark it `latest`.
 
-The **body** of the release is the `## <version>` section of `CHANGELOG.md`, with
-the block from `docs/release-install.md` above it and nothing else. The commit
-range since the previous tag is deliberately not used: it lists refactors and CI
-changes a user never sees. The body is also the manifest's `notes`, so the
-update offer and the release page say the same thing. A missing `CHANGELOG.md`,
-a missing section for the tag's version, or an empty one **fails the publish**
-rather than shipping a release with no description; `ci.yml` catches the missing
-section on the pull request instead.
+The **release page** is a `## What's New` list with one line per pull request
+merged since the previous tag:
+
+```
+- <detail> (<kind>) by @<author> #<pr>
+```
+
+The detail and kind come from the PR title. A conventional title splits —
+`fix(transport): strip credentials` becomes `Strip credentials (fix)`; a
+branch-shaped title (`Feat/environment chip titlebar`) splits at the slash; a
+title with neither is listed as `(change)`. Lines run in PR order. With no
+previous tag, or no merged PRs, the page falls back to the changelog entry.
+
+The **manifest's `notes`** is the `## <version>` section of `CHANGELOG.md`, which
+is also what the update dialog shows. It stays in the user's words rather than
+PR titles, because it is read inside the app and not on the releases page. A
+missing `CHANGELOG.md`, a missing section for the tag's version, or an empty one
+**fails the publish** rather than shipping an update with no description;
+`ci.yml` catches the missing section on the pull request instead.
+
+`CHANGELOG.md`'s header holds the template every entry follows: one bullet per
+user-visible change, led by a bold sentence and followed by plain prose. A test
+in `crates/app/tests/changelog.rs` rejects a section that drifts from it.
 
 A re-run resumes rather than duplicates: the release is created only if the tag
 has none, and uploads use `--clobber`, so replacing one failed artifact does not

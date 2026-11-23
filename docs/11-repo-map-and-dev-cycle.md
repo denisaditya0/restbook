@@ -137,7 +137,7 @@ runner. Build commands are `cargo` plus the `scripts/dev.*` wrappers.
 │   ├── package.sh           build dist/ (Windows exe + libcrypto DLL)
 │   └── sample-server.py     local response fixtures for the UI
 ├── docs/                    the numbered documents listed above
-├── CHANGELOG.md             what shipped for the user; the release body
+├── CHANGELOG.md             what shipped for the user; the manifest's notes
 ├── .github/workflows/
 │   ├── ci.yml               pull requests: fmt, clippy, tests, encrypted store
 │   └── release.yml          tag → build 3 native targets → draft release + manifest

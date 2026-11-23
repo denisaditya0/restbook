@@ -421,16 +421,15 @@ jobs:
 
           # Resolve before `cd release`: the body comes from the checkout, not
           # from the artifact directory.
-          install_file="$GITHUB_WORKSPACE/docs/release-install.md"
           changelog="$GITHUB_WORKSPACE/CHANGELOG.md"
 
           cd release
           ls -l
 
           # The body says what changed for the user, and the only record of that
-          # is the changelog's own section for this version. The commit range
-          # since the previous tag is deliberately not used: it lists refactors
-          # and CI changes a user never sees.
+          # is the changelog's own section for this version. The commit range is
+          # used below for who and which pull requests, never for the changes
+          # themselves: it lists refactors and CI work a user never sees.
           if [ ! -f "$changelog" ]; then
             echo "::error::CHANGELOG.md not found; a release cannot ship with no description" >&2
             exit 1
@@ -455,20 +454,38 @@ jobs:
             exit 1
           fi
 
-          # The body gets a per-platform install section above the changelog
-          # entry: a reader arriving from the release page needs it. The block
-          # is delimited so a re-run replaces it instead of stacking a second
-          # copy, and `<version>` is filled in with this release's tag.
-          #
-          # The manifest is *not* given this block. It is read inside the app,
-          # where being told to download the installer is nonsense, and a
-          # dialog renders it as text: `<!-- ... -->`, `##` and `**` all showed
-          # up literally in 0.1.4. So `notes` above stays the changelog entry —
-          # what changed — and only the release body gets instructions.
+          # The page lists one line per pull request merged since the previous
+          # tag: what changed, its kind, who sent it, and the PR number. With no
+          # previous tag there is no range to summarise, so the page falls back
+          # to the changelog entry.
           body=$notes
-          if [ -f "$install_file" ]; then
-            header=$(sed "s/<version>/$VERSION/g" "$install_file")
-            body=$(printf '%s\n\n%s' "$header" "$notes")
+          previous=$(git describe --tags --abbrev=0 --exclude "$TAG" "refs/tags/$TAG" 2>/dev/null || true)
+          if [ -n "$previous" ]; then
+            range="refs/tags/$previous..refs/tags/$TAG"
+            items=""
+            for n in $(git log "$range" --merges --format='%s' \
+              | sed -n 's/^Merge pull request #\([0-9][0-9]*\).*/\1/p' | sort -n); do
+              title=$(gh pr view "$n" --json title -q .title 2>/dev/null) || continue
+              author=$(gh pr view "$n" --json author -q .author.login 2>/dev/null) || continue
+
+              kind=change
+              detail=$title
+              conventional='^([A-Za-z]+)(\([^)]*\))?:[[:space:]]*(.*)$'
+              branchy='^([A-Za-z]+)/(.*)$'
+              if [[ $title =~ $conventional ]]; then
+                kind=${BASH_REMATCH[1],,}
+                detail=${BASH_REMATCH[3]}
+              elif [[ $title =~ $branchy ]]; then
+                kind=${BASH_REMATCH[1],,}
+                detail=${BASH_REMATCH[2]}
+              fi
+              detail="${detail^}"
+              items+="- $detail ($kind) by @$author #$n"$'\n'
+            done
+
+            if [ -n "$items" ]; then
+              body=$(printf "## What's New\n\n%s" "$items")
+            fi
           fi
 
           # One release per tag; a re-run resumes the draft instead of
@@ -486,7 +503,8 @@ jobs:
 
           # The manifest is derived, never hand-written: the URL follows the
           # repository and tag, and the checksum is computed from the bytes
-          # about to be uploaded.
+          # about to be uploaded. Its `notes` is the changelog entry alone — the
+          # update dialog is not the place for a contributor list or PR links.
           assets='{}'
           for file in *; do
             [ -f "$file" ] || continue
@@ -503,7 +521,9 @@ jobs:
           done
 
           manifest=latest.json
-          # `notes` here is the changelog entry alone, never the install block.
+          # `notes` here is the changelog entry alone: the in-app update dialog
+          # says what changed in the user's words, while the release page lists
+          # the pull requests.
           jq -n --arg version "$VERSION" --arg notes "$notes" --argjson assets "$assets" \
             '{version: $version, notes: $notes, assets: $assets}' > "$manifest"
           cat "$manifest"

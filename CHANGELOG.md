@@ -3,10 +3,26 @@
 What changed for the person using the app. `docs/01-milestones.md` owns which
 lane an item belongs to; this file only records what shipped.
 
-The section headed by the current `Cargo.toml` version is what `release.yml`
-publishes as the release body, so the same text is the manifest's `notes` and
-the update offer. A version with no section fails CI rather than shipping a
-release with no description.
+The section headed by the current `Cargo.toml` version is the manifest's `notes`
+and the update offer — what the app shows when a newer version exists. The
+release page itself is generated from the merged pull requests; this file stays
+the record written in the user's words. A version with no section fails CI
+rather than shipping an update with no description.
+
+<!--
+Template — every version reads the same way:
+
+Heading: `## <version>`
+
+- **<What changed, in the user's words.>** <What the user now sees or can do,
+  in one to three plain sentences.>
+
+Newest version first. The heading is the bare version (`0.1.7`, no `v`). One
+bullet per user-visible change. Plain Markdown prose only: no code fences,
+tables, images, or HTML comments, because the update dialog renders this text.
+Contributors and pull requests are added to the release page by `release.yml`;
+do not write them here.
+-->
 
 ## 0.1.6
 
@@ -56,12 +72,12 @@ release with no description.
 
 ## 0.1.3
 
-- Settings › Updates downloads, verifies, and opens the update, published from a
-  single stable channel.
-- Settings › Storage picks a folder as a workspace instead of asking you to add
-  a `restbook.json` marker by hand.
-- The environment chip moved to the titlebar, and stops truncating to
+- **Settings › Updates installs from one stable channel.** It downloads,
+  verifies, and opens the update.
+- **Settings › Storage picks a folder as a workspace**, instead of asking you to
+  add a `restbook.json` marker by hand.
+- **The environment chip moved to the titlebar** and stops truncating to
   `No enviro…`.
-- The response copy controls moved from the header strip into the body.
-- The titlebar menu was trimmed to its commands; the View rows duplicated the
-  edge toggles in the status bar.
+- **The response copy controls moved into the body**, out of the header strip.
+- **The titlebar menu is shorter.** The View rows duplicated the edge toggles in
+  the status bar, so they are gone.
