@@ -6,12 +6,13 @@
 //! are followed by hand so each hop can be recorded for `ResponseRecord`.
 
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use cookie_store::CookieStore;
+use cookie_store::{CookieStore, RawCookie};
 use futures::channel::oneshot;
 use reqwest::header::{HeaderValue, LOCATION};
 use reqwest::redirect::Policy;
@@ -134,6 +135,14 @@ impl Transport for ReqwestTransport {
     fn clear_cookies(&self) {
         self.clients.clear();
     }
+
+    fn delete_cookie(&self, url: &str, name: &str) -> bool {
+        self.clients.delete_cookie(url, name)
+    }
+
+    fn update_cookie(&self, url: &str, name: &str, value: &str) -> bool {
+        self.clients.update_cookie(url, name, value)
+    }
 }
 
 #[async_trait]
@@ -222,6 +231,48 @@ impl SharedJar {
             jar.clear();
         }
     }
+
+    fn delete_named(&self, url: &url::Url, name: &str) -> bool {
+        let Ok(mut jar) = self.0.lock() else {
+            return false;
+        };
+        let Some((domain, path, _)) = named_cookie(&jar, url, name) else {
+            return false;
+        };
+        jar.remove(&domain, &path, name).is_some()
+    }
+
+    fn set_value(&self, url: &url::Url, name: &str, value: &str) -> bool {
+        let Ok(mut jar) = self.0.lock() else {
+            return false;
+        };
+        let Some((_, _, mut raw)) = named_cookie(&jar, url, name) else {
+            return false;
+        };
+        // Re-inserting under the same name replaces the row, so the cookie's
+        // path, domain, and flags survive the edit. A failed insert leaves the
+        // original in place.
+        raw.set_value(value.to_owned());
+        jar.insert_raw(&raw, url).is_ok()
+    }
+}
+
+/// The first cookie `name` the jar would send to `url`, as its store key
+/// (domain, path) plus a raw copy to edit.
+fn named_cookie(
+    jar: &CookieStore,
+    url: &url::Url,
+    name: &str,
+) -> Option<(String, String, RawCookie<'static>)> {
+    let cookie = jar
+        .matches(url)
+        .into_iter()
+        .find(|each| each.name() == name)?;
+    Some((
+        String::from(&cookie.domain),
+        String::from(&cookie.path),
+        cookie.deref().clone(),
+    ))
 }
 
 impl reqwest::cookie::CookieStore for SharedJar {
@@ -295,6 +346,20 @@ impl ClientCache {
 
     fn clear(&self) {
         self.jar.clear();
+    }
+
+    fn delete_cookie(&self, url: &str, name: &str) -> bool {
+        let Ok(url) = url::Url::parse(url) else {
+            return false;
+        };
+        self.jar.delete_named(&url, name)
+    }
+
+    fn update_cookie(&self, url: &str, name: &str, value: &str) -> bool {
+        let Ok(url) = url::Url::parse(url) else {
+            return false;
+        };
+        self.jar.set_value(&url, name, value)
     }
 }
 
@@ -893,5 +958,55 @@ mod tests {
         let cache = ClientCache::default();
         cache.set_config(NetworkConfig::default());
         assert_eq!(cache.generation.load(Ordering::SeqCst), 0);
+    }
+
+    /// A jar holding the cookies in `headers`, parsed for `url` the way a send
+    /// stores them.
+    fn jar(url: &str, headers: &[&str]) -> (url::Url, SharedJar) {
+        let url = url::Url::parse(url).unwrap();
+        let jar = SharedJar::default();
+        {
+            let mut store = jar.0.lock().unwrap();
+            for header in headers {
+                store.parse(header, &url).unwrap();
+            }
+        }
+        (url, jar)
+    }
+
+    #[test]
+    fn deleting_one_cookie_leaves_the_others() {
+        let (url, jar) = jar(
+            "https://example.com/app",
+            &["sid=abc; Path=/", "theme=dark; Path=/"],
+        );
+        assert_eq!(jar.cookie_pairs(&url).len(), 2);
+
+        assert!(jar.delete_named(&url, "sid"));
+        assert_eq!(jar.cookie_pairs(&url), ["theme=dark"]);
+        assert!(!jar.delete_named(&url, "sid"));
+    }
+
+    #[test]
+    fn updating_one_cookie_keeps_its_attributes_and_the_others() {
+        let (url, jar) = jar(
+            "https://example.com/app",
+            &["sid=abc; Path=/; HttpOnly", "theme=dark; Path=/"],
+        );
+
+        assert!(jar.set_value(&url, "sid", "xyz"));
+        assert!(jar.cookie_pairs(&url).contains(&"sid=xyz".to_owned()));
+        assert!(jar.cookie_pairs(&url).contains(&"theme=dark".to_owned()));
+
+        let store = jar.0.lock().unwrap();
+        let sid = store
+            .matches(&url)
+            .into_iter()
+            .find(|cookie| cookie.name() == "sid")
+            .unwrap();
+        assert_eq!(sid.http_only(), Some(true));
+        assert_eq!(&*sid.path, "/");
+        drop(store);
+        assert!(!jar.set_value(&url, "missing", "x"));
     }
 }

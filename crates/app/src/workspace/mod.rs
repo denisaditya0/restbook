@@ -290,9 +290,11 @@ impl Workspace {
             request: cx
                 .new(|cx| RequestPanel::new(document.clone(), variables.clone(), window, cx)),
             response: cx.new(|cx| {
+                let transport: Arc<dyn restbook_core::Transport> = transport.clone();
                 ResponsePanel::new(
                     document.clone(),
                     store.clone(),
+                    transport,
                     settings.clone(),
                     window,
                     cx,
@@ -415,6 +417,10 @@ impl Workspace {
                     ResponseEvent::ShowHistory { hits } => {
                         this.pending_history = Some(hits.clone());
                         cx.notify();
+                    }
+                    ResponseEvent::DeleteCookie { name } => this.delete_cookie(name, cx),
+                    ResponseEvent::UpdateCookie { name, value } => {
+                        this.update_cookie(name, value, cx)
                     }
                 }
             },
@@ -644,6 +650,49 @@ impl Workspace {
         // lives in the Settings dialog, and a window-level layer is the only
         // thing drawn above an open dialog.
         window.push_notification(Notification::success("Cookies cleared."), cx);
+    }
+
+    /// Forget one cookie in the shared jar, on the response pane's behalf. The
+    /// pane reads the jar to draw the Cookies tab, but only the canvas mutates
+    /// it, which is also the only side that can report the outcome.
+    fn delete_cookie(&mut self, name: &str, cx: &mut Context<Self>) {
+        let url = self.document.read(cx).url();
+        let removed = restbook_core::Transport::delete_cookie(self.transport.as_ref(), &url, name);
+        self.panes.response.update(cx, |_, cx| cx.notify());
+        if removed {
+            self.flash(
+                chrome::FlashKind::Success,
+                format!("Deleted cookie {name}."),
+                cx,
+            );
+        } else {
+            self.flash(
+                chrome::FlashKind::Error,
+                format!("Cookie {name} is not in the session."),
+                cx,
+            );
+        }
+    }
+
+    /// Replace one cookie's value in the shared jar.
+    fn update_cookie(&mut self, name: &str, value: &str, cx: &mut Context<Self>) {
+        let url = self.document.read(cx).url();
+        let updated =
+            restbook_core::Transport::update_cookie(self.transport.as_ref(), &url, name, value);
+        self.panes.response.update(cx, |_, cx| cx.notify());
+        if updated {
+            self.flash(
+                chrome::FlashKind::Success,
+                format!("Updated cookie {name}."),
+                cx,
+            );
+        } else {
+            self.flash(
+                chrome::FlashKind::Error,
+                format!("Cookie {name} is not in the session."),
+                cx,
+            );
+        }
     }
 
     /// Open the command palette, routing every command back here.

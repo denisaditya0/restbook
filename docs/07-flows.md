@@ -154,8 +154,14 @@ This is the "intent as event" rule in action.
 | Trigger | Event | Effect | POV | Source |
 |---|---|---|---|---|
 | History clock control | `ResponseEvent::ShowHistory { hits }` | park the hits, open the history sheet from render | Overlay (right sheet, 440px) | `history_sheet::open` |
+| Cookies: edit a value | `ResponseEvent::UpdateCookie { name, value }` | write the value into the shared jar, then redraw the tab | Center (Response, Cookies tab) | `Workspace::update_cookie` |
+| Cookies: delete a row | `ResponseEvent::DeleteCookie { name }` | remove that cookie from the shared jar, leaving the rest | Center (Response, Cookies tab) | `Workspace::delete_cookie` |
 | Body / Headers / Cookies tab | (local) | switch the response view | Center (Response) | `response.rs` |
 | Body toolbar: format switch, copy body, copy summary | (local) | pretty/raw, or write the body or the status line to the clipboard | Center (Response) | `ResponsePanel::render_body_toolbar` |
+
+The Cookies tab draws the session jar for the request's URL, because those are
+the cookies a send would carry. A response restored from history has no jar
+entries, so it lists its own `Set-Cookie` rows instead, read-only.
 
 The copy controls sit in the body's toolbar rather than in the header strip: the
 header also draws for the Headers and Cookies tabs, so a copy button there

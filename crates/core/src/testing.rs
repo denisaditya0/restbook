@@ -62,6 +62,9 @@ pub struct FakeTransport {
     /// Every request passed to `execute`, in order. A test asserts on these to
     /// check what `prepare()` actually handed to the wire.
     sent: Mutex<Vec<PreparedRequest>>,
+    /// A flat session jar: no domains or paths, every cookie matches every
+    /// URL. Enough for a pane that lists what a send left behind.
+    cookies: Mutex<Vec<(String, String)>>,
 }
 
 impl FakeTransport {
@@ -83,7 +86,15 @@ impl FakeTransport {
         Arc::new(Self {
             handler: Arc::new(handler),
             sent: Mutex::new(Vec::new()),
+            cookies: Mutex::new(Vec::new()),
         })
+    }
+
+    /// Seed the fake session's jar, replacing what was there.
+    pub fn set_cookies(&self, cookies: impl IntoIterator<Item = (String, String)>) {
+        if let Ok(mut jar) = self.cookies.lock() {
+            *jar = cookies.into_iter().collect();
+        }
     }
 
     /// Everything this transport was asked to send.
@@ -133,6 +144,46 @@ impl Transport for FakeTransport {
         progress.set_received_total(Some(len));
         progress.received(len, record.duration_ms);
         Ok(record)
+    }
+
+    fn cookies(&self, _url: &str) -> Vec<String> {
+        self.cookies
+            .lock()
+            .map(|cookies| {
+                cookies
+                    .iter()
+                    .map(|(name, value)| format!("{name}={value}"))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn delete_cookie(&self, _url: &str, name: &str) -> bool {
+        let Ok(mut cookies) = self.cookies.lock() else {
+            return false;
+        };
+        let before = cookies.len();
+        cookies.retain(|(each, _)| each != name);
+        cookies.len() != before
+    }
+
+    fn update_cookie(&self, _url: &str, name: &str, value: &str) -> bool {
+        let Ok(mut cookies) = self.cookies.lock() else {
+            return false;
+        };
+        match cookies.iter_mut().find(|(each, _)| each == name) {
+            Some((_, current)) => {
+                *current = value.to_owned();
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn clear_cookies(&self) {
+        if let Ok(mut cookies) = self.cookies.lock() {
+            cookies.clear();
+        }
     }
 }
 
