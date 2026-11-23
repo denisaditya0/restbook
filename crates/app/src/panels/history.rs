@@ -711,12 +711,17 @@ impl Render for HistoryPanel {
                     .px(px(self.metrics.space_sm))
                     .py(px(self.metrics.space_xs))
                     .child(
-                        Input::new(&self.query)
-                            .id("history-search")
-                            .flex_1()
-                            .prefix(icons::quiet(IconName::Search, icons::SMALL, &palette)),
+                        h_flex()
+                            .items_center()
+                            .gap(px(self.metrics.space_xs))
+                            .child(
+                                Input::new(&self.query)
+                                    .id("history-search")
+                                    .flex_1()
+                                    .prefix(icons::quiet(IconName::Search, icons::SMALL, &palette)),
+                            )
+                            .child(self.filter_button(cx)),
                     )
-                    .child(self.filter_button(cx))
                     .child(
                         h_flex()
                             .gap(px(self.metrics.space_xs))
