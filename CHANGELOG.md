@@ -24,6 +24,31 @@ Contributors and pull requests are added to the release page by `release.yml`;
 do not write them here.
 -->
 
+## 0.1.9
+
+- **A folder workspace encrypts its history.** History in a workspace now lives
+in the same encrypted database the per-user data directory uses, under
+`.restbook/`, instead of a plain text file — so no request or response body sits
+readable in the tree you share. A plain text history left there by an older
+build is imported once and then removed, and a machine without the keyring keeps
+that session's history in memory rather than writing it to disk.
+- **The window says how your history is protected.** A chip in the status bar
+reads *Encrypted*, *Not encrypted*, or *Not saved* beside the storage name, and
+its tooltip explains why. A plain text fallback used to be mentioned only in a
+log a window user never sees.
+- **The files the app creates are private.** The data directory, history
+database, log, settings, layout, and a workspace's local file are now readable
+only by you, and their directories only by you, on macOS and Linux.
+- **URLs stay out of the log.** A failed send's details, and the log lines that
+name a request, leave out the query string and any user name or password, so a
+token cannot end up in a log attached to a bug report.
+- **A failed send shows its result at once.** The response pane leaves its
+*Fetching* state as soon as the send fails instead of waiting for an unrelated
+repaint.
+- **A cleaner log after an upgrade.** Installing a new version starts a fresh
+`restbook.log` for the version you are running and keeps the old one beside it,
+so an attached log describes one build rather than a week of them.
+
 ## 0.1.8
 
 - **Filter the history.** A filter button beside the History search box narrows
