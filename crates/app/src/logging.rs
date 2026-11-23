@@ -267,6 +267,33 @@ pub(crate) fn redact_url(url: &str) -> String {
     }
 }
 
+/// [`redact_url`] for a whole message. `reqwest` quotes the URL it was given —
+/// userinfo, query, and all — in a transport error's text, and that text reaches
+/// both the log and the failure Details. Each URL in the message is reduced to
+/// scheme, host, and path; the cause chain around it is kept.
+pub(crate) fn redact_urls(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("://") {
+        let scheme_start = rest[..at]
+            .rfind(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.')))
+            .map_or(0, |index| index + 1);
+        out.push_str(&rest[..scheme_start]);
+
+        let url = &rest[scheme_start..];
+        let end = url
+            .find(|ch: char| {
+                ch.is_whitespace() || matches!(ch, ')' | ']' | '}' | '"' | '\'' | '<' | '>' | '`')
+            })
+            .unwrap_or(url.len());
+        let (head, tail) = url.split_at(end);
+        out.push_str(&redact_url(head));
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
+}
+
 fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -450,8 +477,8 @@ fn open(path: &Path) -> Option<File> {
 #[cfg(test)]
 mod tests {
     use super::{
-        debug_window_open, install_panic_hook, open, prune_debug_files, redact_url, teardown_noise,
-        Tee, MAX_BYTES,
+        debug_window_open, install_panic_hook, open, prune_debug_files, redact_url, redact_urls,
+        teardown_noise, Tee, MAX_BYTES,
     };
     use std::io::Write as _;
 
@@ -604,5 +631,21 @@ mod tests {
             "http://127.0.0.1:8787/path"
         );
         assert_eq!(redact_url("not a url?q=1"), "not a url");
+    }
+
+    /// `reqwest` quotes the URL it was handed inside a transport error's text, so
+    /// redacting a message has to reach every URL in it and leave the cause chain
+    /// around them readable.
+    #[test]
+    fn a_message_loses_every_url_secret_but_keeps_its_cause_chain() {
+        assert_eq!(
+            redact_urls(
+                "error sending request for url (https://alice:secret@api.test/v1/items?token=abc): \
+                 tcp connect error: refused; retry http://127.0.0.1:8787/path?q=1"
+            ),
+            "error sending request for url (https://api.test/v1/items): \
+             tcp connect error: refused; retry http://127.0.0.1:8787/path"
+        );
+        assert_eq!(redact_urls("no url here"), "no url here");
     }
 }
