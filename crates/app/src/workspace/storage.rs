@@ -258,7 +258,7 @@ fn workspace_name(root: &Path) -> String {
 /// through to the in-memory store, so the app still starts read-only instead of
 /// losing the window.
 pub(crate) fn open_history(state_dir: &Path) -> Arc<dyn Store> {
-    let _ = std::fs::create_dir_all(state_dir);
+    let _ = restbook_store::secure::create_dir(state_dir);
     let jsonl_path = state_dir.join(HISTORY_FILE);
 
     #[cfg(feature = "sqlcipher")]

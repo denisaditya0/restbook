@@ -120,9 +120,19 @@ impl SqlcipherStore {
     /// one instead, because a headless machine may have no credential store to
     /// read it back from.
     fn open_with_key(path: impl AsRef<Path>, key: &[u8; 32]) -> Result<Self> {
+        let path = path.as_ref();
         let hex: String = key.iter().map(|byte| format!("{byte:02x}")).collect();
 
-        let mut conn = Connection::open(path.as_ref()).map_err(db_error)?;
+        if let Some(parent) = path.parent() {
+            crate::secure::create_dir(parent)?;
+        }
+        let mut conn = Connection::open(path).map_err(db_error)?;
+        // SQLCipher creates the database itself, so the platform's umask decides
+        // its mode. Tighten it here; a failure is logged rather than taking the
+        // store down, because falling back to plaintext JSONL would be worse.
+        if let Err(error) = crate::secure::restrict_path(path) {
+            log::warn!("could not restrict {} permissions: {error}", path.display());
+        }
         // The key pragma must run before anything else touches the database;
         // the blob-literal form avoids quoting issues for arbitrary key bytes.
         // `cipher_memory_security = OFF` is deliberate: it does not weaken the
@@ -1906,5 +1916,29 @@ mod tests {
             .query_row("SELECT count(*) FROM history_fts", [], |row| row.get(0))
             .unwrap();
         assert_eq!(indexed, executions);
+    }
+
+    /// The database file is app-owned and holds every request and response, so
+    /// it is `0600` and its directory `0700` where the platform has a mode.
+    #[cfg(unix)]
+    #[test]
+    fn the_database_and_its_directory_are_private() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let _guard = exclusive();
+        let root = std::env::temp_dir().join("restbook-sqlcipher-private-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let db = root.join("nested").join("history.db");
+
+        let _store = open_test(&db).unwrap();
+
+        let dir_mode = std::fs::metadata(db.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        let file_mode = std::fs::metadata(&db).unwrap().permissions().mode() & 0o777;
+        assert_eq!(dir_mode, 0o700, "the database directory should be private");
+        assert_eq!(file_mode, 0o600, "the database should be private");
     }
 }
