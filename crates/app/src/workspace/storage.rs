@@ -309,6 +309,25 @@ pub(crate) fn enable_workspace(dir: &Path) -> Result<(), EnableWorkspaceError> {
     Ok(())
 }
 
+/// Start a second copy of this build with `root` as `RESTBOOK_WORKSPACE`.
+///
+/// Switching in place would rebuild the store, the panes, and every tab from a
+/// different root; a relaunch is the smaller seam, and it matches the rule the
+/// storage picker already states: the choice takes effect the next time restbook
+/// starts. The child inherits the current directory, so a relative root still
+/// resolves the way the current process resolved it.
+pub(crate) fn relaunch_in_workspace(root: &Path) -> std::io::Result<()> {
+    let exe = std::env::current_exe()?;
+    relaunch_command(&exe, root).spawn()?;
+    Ok(())
+}
+
+fn relaunch_command(exe: &Path, root: &Path) -> std::process::Command {
+    let mut command = std::process::Command::new(exe);
+    command.env("RESTBOOK_WORKSPACE", root);
+    command
+}
+
 /// The label for a workspace: its directory name, falling back to the app name
 /// for a root with no usable final component (a drive root, say).
 fn workspace_name(root: &Path) -> String {
@@ -516,8 +535,27 @@ fn legacy_files() -> Vec<PathBuf> {
 mod tests {
     // Named imports rather than `use super::*`: this crate glob-imports
     // `gpui_kit::*` elsewhere, and that macro set shadows `#[test]`.
-    use super::{enable_workspace, marked_workspace, workspace_name, EnableWorkspaceError};
+    use super::{
+        enable_workspace, marked_workspace, relaunch_command, workspace_name, EnableWorkspaceError,
+    };
     use std::path::PathBuf;
+
+    /// A relaunch names the workspace explicitly; otherwise the child would walk
+    /// up from the inherited directory and could open a different tree.
+    #[test]
+    fn a_relaunch_names_the_workspace_root() {
+        let command = relaunch_command(
+            std::path::Path::new("restbook"),
+            std::path::Path::new("C:/work/tree"),
+        );
+        let envs: Vec<_> = command.get_envs().collect();
+        assert!(
+            envs.iter().any(|(key, value)| {
+                *key == "RESTBOOK_WORKSPACE" && *value == Some(std::ffi::OsStr::new("C:/work/tree"))
+            }),
+            "the child must be pinned to the chosen workspace: {envs:?}",
+        );
+    }
 
     /// The plaintext warning names its reason. A build without encryption and
     /// one whose keyring was refused are different problems, and the tooltip

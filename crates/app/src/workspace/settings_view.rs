@@ -68,7 +68,7 @@ pub(crate) fn open(
             history_page(&settings),
             privacy_page(&workspace),
             updates_page(&settings, &updates),
-            storage_page(&workspace_root, &workspace),
+            storage_page(&workspace_root, &workspace, &settings),
             about_page(),
         ];
 
@@ -200,8 +200,16 @@ fn updates_page(settings: &Entity<Settings>, updates: &Entity<Updates>) -> Setti
 fn storage_page(
     workspace_root: &Option<PathBuf>,
     workspace: &WeakEntity<Workspace>,
+    settings: &Entity<Settings>,
 ) -> SettingPage {
-    let mut group = SettingGroup::new().item(storage_item(workspace_root));
+    let mut group =
+        SettingGroup::new()
+            .item(storage_item(workspace_root))
+            .item(recent_workspaces_item(
+                settings.clone(),
+                workspace.clone(),
+                workspace_root.clone(),
+            ));
     group = group.item(debug_capture_item());
     if workspace_root.is_none() {
         group = group.item(enable_workspace_item(workspace.clone()));
@@ -210,6 +218,80 @@ fn storage_page(
         .icon(IconName::HardDrive)
         .description("Where this session reads and writes.")
         .group(group)
+}
+
+/// The workspace roots this install has opened. `Open` starts a fresh process
+/// pinned to the chosen root, which is the only way to rebuild the store and
+/// every pane against a different tree; the current root is labeled instead of
+/// offering a pointless relaunch.
+fn recent_workspaces_item(
+    settings: Entity<Settings>,
+    workspace: WeakEntity<Workspace>,
+    current: Option<PathBuf>,
+) -> SettingItem {
+    SettingItem::new(
+        "Recent workspaces",
+        SettingField::render(move |_, _, cx| {
+            let metrics = Metrics::current(cx);
+            let palette = Palette::new(cx);
+            let roots = settings.read(cx).current().recent_workspaces.clone();
+
+            if roots.is_empty() {
+                return div()
+                    .text_sm()
+                    .text_color(palette.muted)
+                    .child("No workspaces opened yet.")
+                    .into_any_element();
+            }
+
+            let current = current.clone();
+            let mut list = v_flex().gap(px(metrics.space_xs));
+            for (index, root) in roots.into_iter().enumerate() {
+                let is_current = current.as_deref() == Some(std::path::Path::new(&root));
+                let right = if is_current {
+                    div()
+                        .text_sm()
+                        .text_color(palette.muted)
+                        .child("Current")
+                        .into_any_element()
+                } else {
+                    let target = workspace.clone();
+                    let path = PathBuf::from(&root);
+                    Button::new(format!("recent-workspace-{index}"))
+                        .label("Open")
+                        .outline()
+                        .on_click(move |_, _, cx| {
+                            let path = path.clone();
+                            target
+                                .update(cx, |workspace, cx| workspace.open_workspace(path, cx))
+                                .ok();
+                        })
+                        .into_any_element()
+                };
+
+                list = list.child(
+                    h_flex()
+                        .justify_between()
+                        .items_center()
+                        .gap(px(metrics.space_md))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_sm()
+                                .font_family(palette.mono_font.clone())
+                                .child(root),
+                        )
+                        .child(right),
+                );
+            }
+            list.into_any_element()
+        }),
+    )
+    .description(
+        "Workspaces this install has opened. Opening one restarts restbook in that folder.",
+    )
+    .keywords(["workspace", "recent", "switch", "open"])
 }
 
 /// Make a folder into a workspace root.

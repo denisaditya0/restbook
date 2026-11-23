@@ -36,6 +36,7 @@ pub(crate) enum Command {
     ToggleCollections,
     ResetLayout,
     OpenSettings,
+    ShowShortcuts,
     ZoomIn,
     ZoomOut,
     ResetZoom,
@@ -85,6 +86,7 @@ fn commands() -> Vec<(Command, &'static str)> {
         (Command::ToggleCollections, "Toggle collections"),
         (Command::ResetLayout, "Reset layout"),
         (Command::OpenSettings, "Settings…"),
+        (Command::ShowShortcuts, "Keyboard shortcuts"),
         (Command::ZoomIn, "Zoom in"),
         (Command::ZoomOut, "Zoom out"),
         (Command::ResetZoom, "Reset zoom"),
@@ -96,7 +98,8 @@ fn commands() -> Vec<(Command, &'static str)> {
 fn command_hint(command: Command, window: &Window) -> Option<String> {
     use crate::actions::{
         CloseTab, CopyCurl, ExportFile, FocusUrl, ImportFile, NewTab, NextTab, OpenSettings,
-        PasteCurl, PreviousTab, ReopenClosedTab, ResetZoom, SendRequest, ZoomIn, ZoomOut,
+        PasteCurl, PreviousTab, ReopenClosedTab, ResetZoom, SendRequest, ShowShortcuts, ZoomIn,
+        ZoomOut,
     };
 
     match command {
@@ -112,6 +115,7 @@ fn command_hint(command: Command, window: &Window) -> Option<String> {
         Command::ExportFile => shortcut(&ExportFile, window),
         Command::CopyCurl => shortcut(&CopyCurl, window),
         Command::OpenSettings => shortcut(&OpenSettings, window),
+        Command::ShowShortcuts => shortcut(&ShowShortcuts, window),
         Command::ZoomIn => shortcut(&ZoomIn, window),
         Command::ZoomOut => shortcut(&ZoomOut, window),
         Command::ResetZoom => shortcut(&ResetZoom, window),
@@ -129,6 +133,18 @@ fn command_hint(command: Command, window: &Window) -> Option<String> {
 /// does. The kit lowercases both sides before comparing.
 fn search_terms(hint: Option<String>) -> Vec<SharedString> {
     hint.into_iter().map(SharedString::from).collect()
+}
+
+/// The rows the shortcuts sheet shows: a label and the live shortcut for every
+/// command that has a binding. Palette-only commands are left out — the sheet is
+/// about keys, and an empty hint would only take a line.
+pub(crate) fn shortcut_rows(window: &Window) -> Vec<(String, String)> {
+    commands()
+        .into_iter()
+        .filter_map(|(command, label)| {
+            command_hint(command, window).map(|hint| (label.to_owned(), hint))
+        })
+        .collect()
 }
 
 /// Open the palette, and report the chosen command through `on_run`.
@@ -224,6 +240,63 @@ mod tests {
                 "docs/07-flows.md is missing the command {label:?}",
             );
         }
+    }
+
+    /// Every variant has exactly one row and one label. This is the drift guard
+    /// for the palette: a new command that forgets its row, or a copy-pasted
+    /// label that hides two rows from search, fails here. The variant list is
+    /// hand-written because `Command` has no `ALL`; `0.2.4` replaces this with
+    /// the one command table.
+    #[test]
+    fn every_command_has_exactly_one_palette_row() {
+        use Command::*;
+
+        let mut all = vec![
+            Send,
+            NewTab,
+            CloseTab,
+            NextTab,
+            PreviousTab,
+            ReopenClosedTab,
+            FocusUrl,
+            PasteCurl,
+            ImportFile,
+            ExportFile,
+            CopyCurl,
+        ];
+        for name in crate::workspace::PanelName::all() {
+            all.push(FocusPanel(name));
+            all.push(ClosePanel(name));
+        }
+        all.extend([
+            ToggleEnvironment,
+            ToggleCollections,
+            ResetLayout,
+            OpenSettings,
+            ShowShortcuts,
+            ZoomIn,
+            ZoomOut,
+            ResetZoom,
+        ]);
+
+        let rows = super::commands();
+        assert_eq!(
+            rows.len(),
+            all.len(),
+            "the palette and the variant list disagree"
+        );
+        for command in all {
+            assert_eq!(
+                rows.iter().filter(|(each, _)| *each == command).count(),
+                1,
+                "expected exactly one palette row for {command:?}",
+            );
+        }
+
+        let mut labels: Vec<&str> = rows.iter().map(|(_, label)| *label).collect();
+        labels.sort_unstable();
+        labels.dedup();
+        assert_eq!(labels.len(), rows.len(), "two commands share a label");
     }
 
     /// The palette searches the hint as well as the label. This pins the

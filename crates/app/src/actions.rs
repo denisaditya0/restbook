@@ -37,6 +37,8 @@ actions!(
         FocusUrl,
         /// Show or hide the command palette (`secondary-shift-p`).
         ToggleCommandPalette,
+        /// Show the keyboard shortcuts sheet (`?`).
+        ShowShortcuts,
         /// Import a request from a cURL command on the clipboard
         /// (`secondary-shift-v`).
         PasteCurl,
@@ -82,6 +84,10 @@ pub(crate) fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-shift-t", ReopenClosedTab, None),
         KeyBinding::new("secondary-l", FocusUrl, None),
         KeyBinding::new("secondary-shift-p", ToggleCommandPalette, None),
+        // `?` is a printable key, so it only opens the sheet when focus is not
+        // inside an input; otherwise typing a question mark in a body would be
+        // stolen. The palette row is the route that always works.
+        KeyBinding::new("?", ShowShortcuts, Some("!Input")),
         KeyBinding::new("secondary-shift-v", PasteCurl, None),
         KeyBinding::new("secondary-shift-i", ImportFile, None),
         KeyBinding::new("secondary-shift-e", ExportFile, None),
@@ -219,6 +225,34 @@ mod tests {
         assert!(
             stroke.modifiers.secondary(),
             "settings keeps its cmd/ctrl modifier"
+        );
+    }
+
+    /// The shortcuts sheet opens on `?`, but `?` is printable, so the binding
+    /// must carry a context predicate that keeps it out of text inputs. The
+    /// palette row and the window menu are the routes from inside an editor.
+    #[test]
+    fn the_shortcuts_sheet_is_bound_outside_inputs() {
+        use gpui_kit::Action as _;
+        use gpui_kit::AsKeystroke as _;
+
+        use super::ShowShortcuts;
+
+        let bindings = bindings();
+        let binding = bindings
+            .iter()
+            .find(|b| b.action().name() == ShowShortcuts::name_for_type())
+            .expect("the shortcuts action is bound");
+        let stroke = binding
+            .keystrokes()
+            .first()
+            .expect("the shortcuts action has a keystroke")
+            .as_keystroke();
+
+        assert_eq!(stroke.key, "?", "the sheet opens on the question mark");
+        assert!(
+            binding.predicate().is_some(),
+            "a printable key needs a context predicate, or it would eat text input"
         );
     }
 

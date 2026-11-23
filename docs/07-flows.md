@@ -109,6 +109,7 @@ not a registry, so this list is exhaustive.
 | Toggle collections | — (palette only) | reveal the Collections pane | Left dock | `reveal_panel` |
 | Reset layout | — (palette only) | apply the first-run arrangement and persist it | Left dock + Center | `Workspace::reset_layout` |
 | Settings… | `secondary-,` | open the Settings dialog | Overlay (dialog, 880px) | `Workspace::open_settings` |
+| Keyboard shortcuts | `?` | open the shortcuts sheet, generated from the palette table and the live keymap | Overlay (dialog) | `Workspace::open_shortcuts` |
 | Zoom in | `secondary-=` | scale the whole UI up, persist to `settings.json` | Chrome (all panes redraw) | `Workspace::set_zoom` |
 | Zoom out | `secondary--` | scale the whole UI down | Chrome (all panes redraw) | `Workspace::set_zoom` |
 | Reset zoom | `secondary-0` | return zoom to 100% | Chrome (all panes redraw) | `Workspace::set_zoom` |
@@ -231,6 +232,7 @@ with `window.defer`.
 |---|---|---|---|
 | Command palette | `secondary-shift-p`, titlebar menu | centered dialog, 520px | `command_palette::open` |
 | Settings | palette `Settings…`, titlebar menu | centered dialog, 880px, category rail | `settings_view::open` |
+| Keyboard shortcuts | `?`, palette `Keyboard shortcuts`, titlebar menu | centered dialog, 448px; one row per bound command | `Workspace::open_shortcuts` |
 | Save request | Save on an unbound tab | centered dialog, 460px | `Workspace::open_save_dialog` |
 | Import result | an import that landed something | centered dialog, 448px; counts, saved names, duplicates, every skipped item with its reason, and any notes (an imported row that needs attention, such as inherited auth) | `Workspace::open_import_report` |
 | Export picker | `secondary-shift-e`, palette `Export…`, titlebar menu | centered dialog, 448px; scope, format, *Include secrets* | `Workspace::open_export_dialog` |
@@ -245,6 +247,12 @@ now* hands the version and asset to `Updates::install_offered`, which is
 `settings.skipped_update` so the same version is not offered again (`0.1.5`
 still is). Settings › Updates keeps its own check, so nothing is lost if the
 offer is dismissed.
+
+Settings › Storage lists the workspace roots this install has opened, newest
+first and capped at eight. **Open** starts a fresh process pinned with
+`RESTBOOK_WORKSPACE`, because the store and every pane are built from the root
+at startup; the root this session is already using is labeled **Current** rather
+than offered as a relaunch.
 
 ### Dock-toggle confirmations
 
