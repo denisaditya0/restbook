@@ -375,6 +375,13 @@ A format that can also write gets an `export` in its module plus a variant in
 requests survive. Add a `devcli import` run to the plan's "exercised by devcli"
 check while you are there.
 
+`import::export` redacts before it dispatches, so every format behaves the same:
+`ExportOptions::default()` replaces each credential with `secrets::REDACTED`, and
+`include_secrets` is the caller's explicit opt-out. Which fields hold a
+credential is `core::secrets`' list, not the format's — the folder workspace
+redacts the same slots, so a value cannot be safe in the tracked file and
+plaintext in an export.
+
 ## Conventions and pitfalls
 
 - Error strings are rendered directly in the window; write them for a person
