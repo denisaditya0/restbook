@@ -120,6 +120,41 @@ pub(crate) struct StoreChoice {
     /// The workspace root, when one was found. `None` means the per-user
     /// database is in use and collections are not shareable from here.
     pub(crate) workspace_root: Option<PathBuf>,
+    /// How the history this session writes is protected. The window names it,
+    /// because a plaintext fallback is otherwise only ever said on stderr.
+    pub(crate) history: HistoryMode,
+}
+
+/// How the history at rest is protected for this session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HistoryMode {
+    /// SQLCipher under a key from the OS keyring.
+    #[cfg_attr(not(feature = "sqlcipher"), allow(dead_code))]
+    Encrypted,
+    /// A plain JSONL file, with the reason encryption did not happen.
+    Plaintext(PlaintextReason),
+    /// Nothing on disk: this window's history lives in memory.
+    Ephemeral,
+}
+
+/// Why history is written in plain text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlaintextReason {
+    /// The build was compiled without the `sqlcipher` feature. Only that build
+    /// constructs it, so the default build's variant has no producer.
+    #[cfg_attr(feature = "sqlcipher", allow(dead_code))]
+    NoEncryptionSupport,
+    /// The keyring or the encrypted database could not be opened.
+    #[cfg_attr(not(feature = "sqlcipher"), allow(dead_code))]
+    EncryptionUnavailable,
+    /// A folder workspace keeps its history in the shared tree.
+    WorkspaceFile,
+}
+
+/// The store history is served from, and how it is protected.
+pub(crate) struct History {
+    pub(crate) store: Arc<dyn Store>,
+    pub(crate) mode: HistoryMode,
 }
 
 /// Open the store the app should run against.
@@ -134,13 +169,17 @@ pub(crate) fn open_store(state_dir: &Path) -> StoreChoice {
             Ok(store) => {
                 let name = workspace_name(&root);
                 log::info!(
-                    "workspace {} (collections and environments are files here; history stays local)",
+                    "workspace {} (collections and environments are files here; history is a plain text file under .restbook)",
                     root.display()
                 );
                 return StoreChoice {
                     store: Arc::new(store),
                     name,
                     workspace_root: Some(root),
+                    // `FolderStore` still hardcodes the JSONL store, so a
+                    // workspace's history is readable even in a build that
+                    // could encrypt it.
+                    history: HistoryMode::Plaintext(PlaintextReason::WorkspaceFile),
                 };
             }
             Err(error) => {
@@ -161,10 +200,12 @@ pub(crate) fn open_store(state_dir: &Path) -> StoreChoice {
         "using the application data directory {}",
         state_dir.display()
     );
+    let history = open_history(state_dir);
     StoreChoice {
-        store: open_history(state_dir),
+        store: history.store,
         name: APP_NAME.to_owned(),
         workspace_root: None,
+        history: history.mode,
     }
 }
 
@@ -257,7 +298,7 @@ fn workspace_name(root: &Path) -> String {
 /// `state_dir` is created on demand; a directory that cannot be created falls
 /// through to the in-memory store, so the app still starts read-only instead of
 /// losing the window.
-pub(crate) fn open_history(state_dir: &Path) -> Arc<dyn Store> {
+pub(crate) fn open_history(state_dir: &Path) -> History {
     let _ = restbook_store::secure::create_dir(state_dir);
     let jsonl_path = state_dir.join(HISTORY_FILE);
 
@@ -268,7 +309,10 @@ pub(crate) fn open_history(state_dir: &Path) -> Arc<dyn Store> {
             Ok(store) => {
                 let store: Arc<dyn Store> = Arc::new(store);
                 import_legacy_jsonl(store.as_ref(), &jsonl_path);
-                return store;
+                return History {
+                    store,
+                    mode: HistoryMode::Encrypted,
+                };
             }
             Err(error) => {
                 log::warn!("encrypted history unavailable ({error}); using plaintext JSONL");
@@ -281,9 +325,29 @@ pub(crate) fn open_history(state_dir: &Path) -> Arc<dyn Store> {
     // once, so moving the directory does not look like data loss.
     migrate_plain_jsonl(&jsonl_path);
     match JsonlStore::open(&jsonl_path) {
-        Ok(store) => Arc::new(store),
-        Err(_) => Arc::new(MemoryStore::new()),
+        Ok(store) => History {
+            store: Arc::new(store),
+            mode: HistoryMode::Plaintext(plaintext_reason()),
+        },
+        // The file exists but cannot be opened; the window still works, and the
+        // status bar says this session's history will not survive it.
+        Err(_) => History {
+            store: Arc::new(MemoryStore::new()),
+            mode: HistoryMode::Ephemeral,
+        },
     }
+}
+
+/// Why the fallback path is plaintext: the build has no encryption, or it has
+/// some and refused to open the database.
+#[cfg(feature = "sqlcipher")]
+fn plaintext_reason() -> PlaintextReason {
+    PlaintextReason::EncryptionUnavailable
+}
+
+#[cfg(not(feature = "sqlcipher"))]
+fn plaintext_reason() -> PlaintextReason {
+    PlaintextReason::NoEncryptionSupport
 }
 
 /// Copy the old working-directory history to the new location, once.
@@ -368,6 +432,19 @@ mod tests {
     // `gpui_kit::*` elsewhere, and that macro set shadows `#[test]`.
     use super::{enable_workspace, marked_workspace, workspace_name, EnableWorkspaceError};
     use std::path::PathBuf;
+
+    /// The plaintext warning names its reason. A build without encryption and
+    /// one whose keyring was refused are different problems, and the tooltip
+    /// must not tell the user to fix the wrong one.
+    #[test]
+    fn a_plaintext_fallback_keeps_its_reason() {
+        use super::{plaintext_reason, PlaintextReason};
+
+        #[cfg(feature = "sqlcipher")]
+        assert_eq!(plaintext_reason(), PlaintextReason::EncryptionUnavailable);
+        #[cfg(not(feature = "sqlcipher"))]
+        assert_eq!(plaintext_reason(), PlaintextReason::NoEncryptionSupport);
+    }
 
     #[test]
     fn a_workspace_is_named_for_its_directory() {

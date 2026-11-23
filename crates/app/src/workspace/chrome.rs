@@ -18,6 +18,8 @@ use crate::icons::{self, IconName};
 use crate::notice::Notice;
 use crate::theme::{Metrics, Palette};
 
+use super::storage::{HistoryMode, PlaintextReason};
+
 /// One thing the titlebar can show, and its tooltip.
 pub(crate) struct TitlePart {
     pub label: SharedString,
@@ -412,6 +414,11 @@ pub(crate) fn status_bar(
             )
     };
 
+    // Where the data lives, and how the history it holds is protected. Two
+    // chips rather than one sentence: the location is a path and the protection
+    // is a state, and a user looks for them in different situations.
+    let history_chip = history_mode_chip(workspace, palette, metrics);
+
     div()
         .flex()
         .h(px(metrics.status_height))
@@ -431,6 +438,7 @@ pub(crate) fn status_bar(
                 // hugs the edge it names even when the status text is absent.
                 .child(left_toggle)
                 .child(storage_chip)
+                .child(history_chip)
                 .child(div().flex_1())
                 .child(right)
                 .child(right_toggle),
@@ -442,6 +450,75 @@ pub(crate) fn status_bar(
 pub(crate) struct WorkspaceChip {
     /// The workspace root, or `None` when the per-user database is in use.
     pub(crate) root: Option<PathBuf>,
+    /// How history is protected in this session.
+    pub(crate) history: HistoryMode,
+}
+
+/// How history at rest is protected, beside the storage chip.
+///
+/// The words carry the state and the tooltip carries the reason: a warning
+/// glyph alone would depend on color to be read, and the bar is one line, so
+/// the consequence of a plaintext history needs somewhere else to live.
+fn history_mode_chip(
+    workspace: &WorkspaceChip,
+    palette: &Palette,
+    metrics: &Metrics,
+) -> AnyElement {
+    let (state, icon, label, color, tooltip) = match workspace.history {
+        HistoryMode::Encrypted => (
+            "encrypted",
+            IconName::Lock,
+            "Encrypted",
+            palette.subtle,
+            "History is encrypted on this machine",
+        ),
+        HistoryMode::Plaintext(PlaintextReason::NoEncryptionSupport) => (
+            "plaintext",
+            IconName::TriangleAlert,
+            "Not encrypted",
+            palette.warning,
+            "This build cannot encrypt history. Requests and responses are stored as plain text on disk",
+        ),
+        HistoryMode::Plaintext(PlaintextReason::EncryptionUnavailable) => (
+            "plaintext",
+            IconName::TriangleAlert,
+            "Not encrypted",
+            palette.warning,
+            "The system keyring was unavailable, so history is stored as plain text",
+        ),
+        HistoryMode::Plaintext(PlaintextReason::WorkspaceFile) => (
+            "plaintext",
+            IconName::TriangleAlert,
+            "Not encrypted",
+            palette.warning,
+            "A folder workspace keeps history in a plain text file under .restbook",
+        ),
+        HistoryMode::Ephemeral => (
+            "ephemeral",
+            IconName::TriangleAlert,
+            "Not saved",
+            palette.danger,
+            "History could not be opened, so this session is kept in memory and is lost when the window closes",
+        ),
+    };
+
+    h_flex()
+        .id("status-history")
+        // Recorded so the render test can tell which state was painted.
+        .debug_selector(move || format!("status-history-{state}"))
+        .flex_none()
+        .items_center()
+        .gap(px(metrics.space_1p5))
+        .child(icons::sized(icon, icons::SMALL).text_color(color))
+        .child(
+            div()
+                .truncate()
+                .text_xs()
+                .text_color(color)
+                .child(SharedString::from(label)),
+        )
+        .tooltip(move |window, cx| Tooltip::new(tooltip).build(window, cx))
+        .into_any_element()
 }
 
 #[cfg(test)]
@@ -513,7 +590,7 @@ mod tests {
 /// any environment is picked.
 #[cfg(test)]
 mod render_tests {
-    use gpui_kit::{ParentElement as _, TestAppContext};
+    use gpui_kit::{IntoElement as _, ParentElement as _, Styled as _, TestAppContext};
 
     use super::environment_chip;
     use crate::preview::tree;
@@ -583,6 +660,75 @@ mod render_tests {
             "the chip truncates its placeholder: {capped}px at the cap but \
              `No environment` needs {natural}px, which is the `No enviro…` \
              defect"
+        );
+    }
+
+    /// A window that draws nothing but the status bar, over one history mode.
+    struct BarOnly(super::super::storage::HistoryMode);
+
+    impl gpui_kit::Render for BarOnly {
+        fn render(
+            &mut self,
+            _: &mut gpui_kit::Window,
+            cx: &mut gpui_kit::Context<Self>,
+        ) -> impl gpui_kit::IntoElement {
+            let palette = crate::theme::Palette::new(cx);
+            let metrics = crate::theme::Metrics::current(cx);
+            gpui_kit::component::v_flex()
+                .size_full()
+                .child(super::status_bar(
+                    &palette,
+                    &metrics,
+                    &super::WorkspaceChip {
+                        root: None,
+                        history: self.0,
+                    },
+                    &super::Status::default(),
+                    gpui_kit::Empty.into_any_element(),
+                    gpui_kit::Empty.into_any_element(),
+                ))
+        }
+    }
+
+    /// Draw the status bar for `mode` and report whether `selector` was painted.
+    fn painted(mode: super::super::storage::HistoryMode, selector: &'static str) -> bool {
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+        let (_view, vcx) = cx.add_window_view(|_window, _cx| BarOnly(mode));
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+        let found = vcx.debug_bounds(selector).is_some();
+        cx.quit();
+        found
+    }
+
+    /// The window names how its history is protected. A plaintext fallback is
+    /// otherwise only announced on stderr, which a GUI user never reads; the
+    /// encrypted state is the one that shows no warning in its place.
+    #[test]
+    fn the_status_bar_names_how_history_is_protected() {
+        use super::super::storage::{HistoryMode, PlaintextReason};
+
+        assert!(
+            painted(
+                HistoryMode::Plaintext(PlaintextReason::EncryptionUnavailable),
+                "status-history-plaintext"
+            ),
+            "a plaintext fallback must be visible in the window"
+        );
+        assert!(
+            !painted(
+                HistoryMode::Plaintext(PlaintextReason::EncryptionUnavailable),
+                "status-history-encrypted"
+            ),
+            "a plaintext fallback must not claim to be encrypted"
+        );
+        assert!(
+            painted(HistoryMode::Encrypted, "status-history-encrypted"),
+            "an encrypted history still says so"
+        );
+        assert!(
+            painted(HistoryMode::Ephemeral, "status-history-ephemeral"),
+            "history that will not be saved says so"
         );
     }
 }
