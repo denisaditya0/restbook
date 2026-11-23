@@ -437,6 +437,7 @@ impl Workspace {
                         this.pending_history = true;
                         cx.notify();
                     }
+                    ResponseEvent::Retry => this.send(cx),
                     ResponseEvent::DeleteCookie { name } => this.delete_cookie(name, cx),
                     ResponseEvent::UpdateCookie { name, value } => {
                         this.update_cookie(name, value, cx)

@@ -6,6 +6,7 @@
 //! are followed by hand so each hop can be recorded for `ResponseRecord`.
 
 use std::collections::HashMap;
+use std::error::Error as StdError;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -408,9 +409,9 @@ fn build_client(config: &NetworkConfig, jar: &Arc<SharedJar>, insecure: bool) ->
         // A failure with TLS material configured is almost always that material,
         // so it is reported as one instead of a generic transport error.
         if insecure || config.extra_roots.is_some() || config.client_cert.is_some() {
-            Error::Tls(error.to_string())
+            Error::Tls(describe(&error))
         } else {
-            Error::Transport(error.to_string())
+            Error::Transport(describe(&error))
         }
     })
 }
@@ -648,7 +649,23 @@ fn refuses_downgrade(from: &url::Url, to: &url::Url, insecure: bool) -> bool {
 }
 
 fn transport_error(error: reqwest::Error) -> Error {
-    Error::Transport(error.to_string())
+    Error::Transport(describe(&error))
+}
+
+/// A reqwest error's `Display` is the same generic sentence for DNS, connect,
+/// TLS, and timeout failures. The cause lives in the `source()` chain, so keep
+/// every distinct link: the response pane classifies it and the log names it.
+fn describe(error: &(dyn StdError + 'static)) -> String {
+    let mut parts = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let text = cause.to_string();
+        if !text.is_empty() && !parts.iter().any(|part| part == &text) {
+            parts.push(text);
+        }
+        source = cause.source();
+    }
+    parts.join(": ")
 }
 
 async fn apply_body(
@@ -687,7 +704,7 @@ async fn apply_body(
                         if let Some(mime) = mime {
                             file = file
                                 .mime_str(mime)
-                                .map_err(|error| Error::Transport(error.to_string()))?;
+                                .map_err(|error| Error::Transport(describe(&error)))?;
                         }
                         form.part(part.name.clone(), file)
                     }
@@ -726,6 +743,46 @@ mod tests {
         let mut request = RequestDef::new(method, url);
         request.body = body;
         restbook_core::prepare(&request, &VarContext::new()).unwrap()
+    }
+
+    /// A cause chain is what separates `Connection refused` from reqwest's
+    /// generic sentence, so `describe` must keep every distinct link.
+    #[test]
+    fn a_transport_error_keeps_its_cause_chain() {
+        #[derive(Debug)]
+        struct Link {
+            text: &'static str,
+            cause: Option<Box<Link>>,
+        }
+
+        impl std::fmt::Display for Link {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(self.text)
+            }
+        }
+
+        impl StdError for Link {
+            fn source(&self) -> Option<&(dyn StdError + 'static)> {
+                self.cause
+                    .as_deref()
+                    .map(|cause| cause as &(dyn StdError + 'static))
+            }
+        }
+
+        let error = Link {
+            text: "error sending request",
+            cause: Some(Box::new(Link {
+                text: "tcp connect error",
+                cause: Some(Box::new(Link {
+                    text: "Connection refused",
+                    cause: None,
+                })),
+            })),
+        };
+        assert_eq!(
+            describe(&error),
+            "error sending request: tcp connect error: Connection refused"
+        );
     }
 
     /// Accept one connection, read the request head, and answer with `response`.
