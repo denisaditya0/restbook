@@ -42,6 +42,8 @@ actions!(
         PasteCurl,
         /// Import requests from a file (`secondary-shift-i`).
         ImportFile,
+        /// Export a collection or the whole workspace (`secondary-shift-e`).
+        ExportFile,
         /// Copy the active request as a cURL command (`secondary-shift-c`).
         CopyCurl,
         /// Open the Settings dialog (`secondary-,`).
@@ -82,6 +84,7 @@ pub(crate) fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-shift-p", ToggleCommandPalette, None),
         KeyBinding::new("secondary-shift-v", PasteCurl, None),
         KeyBinding::new("secondary-shift-i", ImportFile, None),
+        KeyBinding::new("secondary-shift-e", ExportFile, None),
         KeyBinding::new("secondary-shift-c", CopyCurl, None),
         // The conventional preferences shortcut. Settings is app-level, so the
         // key is window-wide rather than scoped to a pane.
@@ -168,20 +171,22 @@ mod tests {
         }
     }
 
-    /// The cURL pair is the app's clipboard contract. They are workspace-wide
-    /// because the clipboard is a window resource, and the import/export can
-    /// run while a URL or body input has focus.
+    /// The cURL pair is the app's clipboard contract, and the file pair is the
+    /// same contract on disk. All four are workspace-wide because the clipboard
+    /// and the pickers are window resources, and they can run while a URL or
+    /// body input has focus.
     #[test]
     fn the_curl_commands_are_bound() {
         use gpui_kit::Action as _;
 
-        use super::ImportFile;
+        use super::{ExportFile, ImportFile};
 
         let bindings = bindings();
         for name in [
             PasteCurl::name_for_type(),
             CopyCurl::name_for_type(),
             ImportFile::name_for_type(),
+            ExportFile::name_for_type(),
         ] {
             assert!(
                 bindings.iter().any(|b| b.action().name() == name),

@@ -612,6 +612,14 @@ impl CollectionsPanel {
         self.save_request(node, name, None, cx)
     }
 
+    /// The selected collection as `(id, name)`, for a command that acts on one
+    /// collection rather than on the tree.
+    pub(crate) fn selected_collection(&self) -> Option<(&str, &str)> {
+        let id = self.selection.collection.as_deref()?;
+        let collection = self.collections.iter().find(|each| each.id == id)?;
+        Some((collection.id.as_str(), collection.name.as_str()))
+    }
+
     /// Where a save would land, for the first-save dialog: the selected
     /// collection and folder path, or `None` when no collection is selected.
     ///
