@@ -70,19 +70,31 @@ fn the_changelog_entry_is_plain_prose() {
     );
 }
 
-/// The manifest's `notes` is the changelog entry alone, never the install block
-/// `docs/release-install.md` puts at the top of the release *page*.
-///
-/// The page is read in a browser by someone who has not installed the app; the
-/// manifest is read inside the app, where being told to download the installer
-/// is nonsense. `release.yml` prepended the block to both and 0.1.4 shipped
-/// with `<!-- restbook-install -->` rendered in the update dialog. The workflow
-/// now keeps the two apart; this fails if that ever rejoins.
+/// The release page is one line per merged pull request: what changed, its
+/// kind, the author, and the PR number. The manifest's `notes` stays the
+/// changelog entry, so the in-app dialog keeps the user's words.
 #[test]
-fn the_release_workflow_keeps_install_text_out_of_the_manifest() {
+fn the_release_page_is_a_whats_new_list() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows/release.yml");
     let workflow = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+
+    assert!(
+        !workflow.contains("release-install"),
+        "the install block was removed from the release page; do not bring it back",
+    );
+    assert!(
+        workflow.contains("## What's New"),
+        "the release page must be a What's New list",
+    );
+    assert!(
+        workflow.contains("($kind) by @$author #$n"),
+        "each What's New line is '- <detail> (<kind>) by @<author> #<pr>'",
+    );
+    assert!(
+        !workflow.contains("## Contributors"),
+        "the page attributes each change instead of listing contributors separately",
+    );
 
     // The `--arg notes` must be given the changelog entry, not the page body.
     let binding = workflow
@@ -92,7 +104,46 @@ fn the_release_workflow_keeps_install_text_out_of_the_manifest() {
     assert!(
         binding.contains("--arg notes \"$notes\""),
         "the manifest's notes must be the changelog entry ($notes), not the release \
-         page's body ($body with the install block above it)",
+         page's What's New body",
+    );
+}
+
+/// Every version reads the same way on the release page and in the update
+/// dialog: one bullet per user-visible change, each led by a bold sentence.
+/// That is the template in the file's header, and it only holds if every
+/// section follows it.
+#[test]
+fn every_changelog_entry_follows_the_template() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../CHANGELOG.md");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+
+    let mut version = String::new();
+    let mut in_section = false;
+    let mut bullets = 0;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("## ") {
+            assert!(
+                !in_section || bullets > 0,
+                "CHANGELOG.md's '## {version}' section lists nothing a user would read",
+            );
+            version = rest.trim().to_owned();
+            in_section = true;
+            bullets = 0;
+            continue;
+        }
+        if in_section && line.starts_with("- ") {
+            bullets += 1;
+            assert!(
+                line.starts_with("- **"),
+                "CHANGELOG.md's '## {version}' section has a bullet that is not \
+                 led by a bold sentence: {line}",
+            );
+        }
+    }
+    assert!(
+        !in_section || bullets > 0,
+        "CHANGELOG.md's '## {version}' section lists nothing a user would read",
     );
 }
 

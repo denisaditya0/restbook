@@ -36,6 +36,10 @@ if /i "%~1"=="--logs" (
     shift
 )
 
+rem The first command argument, captured before `:collect` shifts the positionals
+rem away. `--print-openssl-dir` is checked below, after detection has run.
+set "FIRST=%~1"
+
 :collect
 if "%~1"=="" goto collected
 set "ARGS=!ARGS! %1"
@@ -46,15 +50,10 @@ goto collect
 if not defined OPENSSL_DIR (
     set "detected="
 
-    rem A pkg-config .pc file names the prefix, when one is installed.
-    where pkg-config >nul 2>nul
-    if not errorlevel 1 (
-        for /f "delims=" %%P in ('pkg-config --variable=prefix openssl 2^>nul') do (
-            if exist "%%P\include\openssl\ssl.h" set "detected=%%P"
-        )
-    )
-
-    rem MINGW_PREFIX, then the `opt` beside the gcc on PATH.
+    rem MINGW_PREFIX, then the `opt` beside the gcc on PATH. The compiler's
+    rem own tree comes first: a `pkg-config` earlier on PATH can belong to
+    rem another toolchain (Strawberry Perl ships one) and name an OpenSSL this
+    rem compiler does not link.
     if not defined detected if defined MINGW_PREFIX if exist "%MINGW_PREFIX%\include\openssl\ssl.h" set "detected=%MINGW_PREFIX%"
     if not defined detected (
         for /f "delims=" %%G in ('where gcc 2^>nul') do (
@@ -63,12 +62,26 @@ if not defined OPENSSL_DIR (
             )
         )
     )
-
-    rem Scoop's usual prefixes.
     if not defined detected (
         if not defined SCOOP set "SCOOP=%USERPROFILE%\scoop"
         if exist "!SCOOP!\apps\mingw\current\opt\include\openssl\ssl.h" set "detected=!SCOOP!\apps\mingw\current\opt"
-        if not defined detected if exist "!SCOOP!\apps\openssl\current\include\openssl\ssl.h" set "detected=!SCOOP!\apps\openssl\current"
+    )
+
+    rem A pkg-config .pc file names the prefix, when one is installed. Only
+    rem after the compiler's own tree, for the reason above.
+    if not defined detected (
+        where pkg-config >nul 2>nul
+        if not errorlevel 1 (
+            for /f "delims=" %%P in ('pkg-config --variable=prefix openssl 2^>nul') do (
+                if exist "%%P\include\openssl\ssl.h" for %%O in ("%%P") do set "detected=%%~fO"
+            )
+        )
+    )
+
+    rem Scoop's other usual prefix.
+    if not defined detected (
+        if not defined SCOOP set "SCOOP=%USERPROFILE%\scoop"
+        if exist "!SCOOP!\apps\openssl\current\include\openssl\ssl.h" set "detected=!SCOOP!\apps\openssl\current"
     )
 
     rem The prefixes a plain MSYS2 install uses.
@@ -85,7 +98,7 @@ rem libcrypto is linked dynamically, so the loader needs the DLL that matches it
 rem at run time; put the detected prefix first.
 if defined OPENSSL_DIR if exist "%OPENSSL_DIR%\bin" set "PATH=%OPENSSL_DIR%\bin;%PATH%"
 
-if /i "%~1"=="--print-openssl-dir" (
+if /i "%FIRST%"=="--print-openssl-dir" (
     if defined OPENSSL_DIR echo %OPENSSL_DIR%
     exit /b 0
 )

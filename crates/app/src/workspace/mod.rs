@@ -8,6 +8,7 @@
 mod chrome;
 mod delete;
 mod dock;
+mod export;
 mod import;
 mod persistence;
 mod send;
@@ -18,6 +19,7 @@ mod tabs;
 mod updates;
 
 pub(crate) use delete::PendingDelete;
+pub(crate) use export::ExportState;
 pub(crate) use tabs::{Tab, TabAction, TabEntry, TabId, TabState};
 
 use std::path::PathBuf;
@@ -35,9 +37,9 @@ use restbook_core::{RequestDef, Store};
 use restbook_transport::ReqwestTransport;
 
 use crate::actions::{
-    self as actions, CloseTab, CopyCurl, ImportFile, NewTab, NextTab, OpenSettings, PreviousTab,
-    ReopenClosedTab, ResetZoom, SaveRequestAs, ToggleCommandPalette, ToggleSidebar, ToggleTools,
-    ZoomIn, ZoomOut,
+    self as actions, CloseTab, CopyCurl, ExportFile, ImportFile, NewTab, NextTab, OpenSettings,
+    PreviousTab, ReopenClosedTab, ResetZoom, SaveRequestAs, ToggleCommandPalette, ToggleSidebar,
+    ToggleTools, ZoomIn, ZoomOut,
 };
 use crate::document::Document;
 use crate::icons::IconName;
@@ -129,6 +131,9 @@ pub(crate) struct Workspace {
     /// window, so the picker opens from the next render, the same way a save is
     /// deferred.
     pending_import: bool,
+    /// The export picker's choices. Rebuilt each time the dialog opens so
+    /// "include secrets" is always off and a stale scope cannot leak a file.
+    pub(crate) export_state: ExportState,
     /// Whether the response pane asked for its earlier sends. Set by its event
     /// and consumed by render, because the event carries no window and reveal
     /// needs one.
@@ -341,6 +346,7 @@ impl Workspace {
             save_name,
             pending_save: false,
             pending_import: false,
+            export_state: ExportState::default(),
             pending_history: false,
             pending_delete: None,
             pending_update: None,
@@ -759,6 +765,7 @@ impl Workspace {
                 .update(cx, |panel, cx| panel.paste_curl(window, cx)),
             Command::CopyCurl => self.copy_curl(cx),
             Command::ImportFile => self.import_file(window, cx),
+            Command::ExportFile => self.open_export_dialog(window, cx),
             // Reveal first, then focus: History and Environment are not docked
             // by default, so focusing a pane no dock is showing would aim at
             // nothing. The centre panes are always mounted, so the reveal is a
@@ -1099,6 +1106,16 @@ impl Render for Workspace {
                                     .update(cx, |workspace, cx| workspace.import_file(window, cx));
                             }),
                     );
+                    let export = workspace.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new("Export\u{2026}")
+                            .icon(IconName::Download)
+                            .on_click(move |_, window, cx| {
+                                export.update(cx, |workspace, cx| {
+                                    workspace.open_export_dialog(window, cx)
+                                });
+                            }),
+                    );
                     let copy = workspace.clone();
                     menu = menu.item(
                         PopupMenuItem::new("Copy as cURL")
@@ -1261,6 +1278,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &NewTab, _, cx| this.new_tab(cx)))
             .on_action(cx.listener(|this, _: &CopyCurl, _, cx| this.copy_curl(cx)))
             .on_action(cx.listener(|this, _: &ImportFile, window, cx| this.import_file(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &ExportFile, window, cx| this.open_export_dialog(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &CloseTab, _, cx| {
                 if let Some(id) = this.tabs.active_id() {
                     this.confirm_close_tab(id, cx);

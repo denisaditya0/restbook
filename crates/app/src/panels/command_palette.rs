@@ -28,6 +28,7 @@ pub(crate) enum Command {
     FocusUrl,
     PasteCurl,
     ImportFile,
+    ExportFile,
     CopyCurl,
     FocusPanel(PanelName),
     ClosePanel(PanelName),
@@ -54,6 +55,7 @@ fn commands() -> Vec<(Command, &'static str)> {
         (Command::FocusUrl, "Focus URL"),
         (Command::PasteCurl, "Paste cURL"),
         (Command::ImportFile, "Import…"),
+        (Command::ExportFile, "Export…"),
         (Command::CopyCurl, "Copy as cURL"),
         // One focus and one close per pane, so the fixed table stays flat and
         // the confirm index remains a plain position in this list.
@@ -93,8 +95,8 @@ fn commands() -> Vec<(Command, &'static str)> {
 /// that only live in the palette and have no keybinding of their own.
 fn command_hint(command: Command, window: &Window) -> Option<String> {
     use crate::actions::{
-        CloseTab, CopyCurl, FocusUrl, ImportFile, NewTab, NextTab, OpenSettings, PasteCurl,
-        PreviousTab, ReopenClosedTab, ResetZoom, SendRequest, ZoomIn, ZoomOut,
+        CloseTab, CopyCurl, ExportFile, FocusUrl, ImportFile, NewTab, NextTab, OpenSettings,
+        PasteCurl, PreviousTab, ReopenClosedTab, ResetZoom, SendRequest, ZoomIn, ZoomOut,
     };
 
     match command {
@@ -107,6 +109,7 @@ fn command_hint(command: Command, window: &Window) -> Option<String> {
         Command::FocusUrl => shortcut(&FocusUrl, window),
         Command::PasteCurl => shortcut(&PasteCurl, window),
         Command::ImportFile => shortcut(&ImportFile, window),
+        Command::ExportFile => shortcut(&ExportFile, window),
         Command::CopyCurl => shortcut(&CopyCurl, window),
         Command::OpenSettings => shortcut(&OpenSettings, window),
         Command::ZoomIn => shortcut(&ZoomIn, window),

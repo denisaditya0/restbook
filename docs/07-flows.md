@@ -93,6 +93,7 @@ not a registry, so this list is exhaustive.
 | Focus URL | `secondary-l` | focus the URL field | Center | `RequestPanel::focus_url` |
 | Paste cURL | `secondary-shift-v` | clipboard → `RequestDef`, adopt it, then offer to save it | Center | `RequestPanel::paste_curl` |
 | Import… | `secondary-shift-i` | file picker → `import::parse` → save each collection, then a result dialog | Overlay (dialog) + Left dock | `Workspace::import_file` |
+| Export… | `secondary-shift-e` | picker → `import::export` → save prompt → write the file | Overlay (dialog) + Chrome (notification) | `Workspace::open_export_dialog` |
 | Copy as cURL | `secondary-shift-c` | live `RequestDef` → `curl::to_curl` → clipboard | Window (any pane) | `Workspace::copy_curl` |
 | Focus history | — (palette only) | reveal **then** focus the History pane | Right dock | `run_command` |
 | Focus collections | — (palette only) | reveal **then** focus the Collections pane | Left dock | `run_command` |
@@ -227,6 +228,7 @@ with `window.defer`.
 | Settings | palette `Settings…`, titlebar menu | centered dialog, 880px, category rail | `settings_view::open` |
 | Save request | Save on an unbound tab | centered dialog, 460px | `Workspace::open_save_dialog` |
 | Import result | an import that landed something | centered dialog, 448px; counts, saved names, duplicates, and every skipped item with its reason | `Workspace::open_import_report` |
+| Export picker | `secondary-shift-e`, palette `Export…`, titlebar menu | centered dialog, 448px; scope, format, *Include secrets* | `Workspace::open_export_dialog` |
 | Delete confirmation | a row's trash button (Collections) or Delete (Environment) | centered **alert** dialog, 420px | `Workspace::open_delete_dialog` |
 | Update offer | the launch check finding a newer release that is not skipped | centered dialog, 448px; *Install now* / *Later* / *Skip this version* | `Workspace::open_update_offer_dialog` |
 | Flash toast | any `Notice` / `flash`, including the two dock toggles | park in `pending_notice`, then a kit notification above dialogs | `Workspace::issue_notice` |

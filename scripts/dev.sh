@@ -16,12 +16,10 @@ set -eu
 
 if [ -z "${OPENSSL_DIR:-}" ]; then
     detected=$(
-        # A pkg-config .pc file names the prefix, when one is installed.
-        if command -v pkg-config >/dev/null 2>&1; then
-            pkg-config --variable=prefix openssl 2>/dev/null || true
-        fi
-
         # A MinGW toolchain usually keeps a sibling `opt` with OpenSSL headers.
+        # The compiler's own tree comes first: a `pkg-config` earlier on PATH
+        # can belong to another toolchain (Strawberry Perl ships one) and name
+        # an OpenSSL this compiler does not link.
         for prefix in \
             "${MINGW_PREFIX:-/nonexistent}" \
             "$(dirname "$(command -v gcc 2>/dev/null || echo /nonexistent/x)")/../opt" \
@@ -32,7 +30,12 @@ if [ -z "${OPENSSL_DIR:-}" ]; then
             fi
         done
 
-        # The usual package-manager prefixes, in case pkg-config is absent.
+        # A pkg-config .pc file names the prefix, when one is installed.
+        if command -v pkg-config >/dev/null 2>&1; then
+            pkg-config --variable=prefix openssl 2>/dev/null || true
+        fi
+
+        # The usual package-manager prefixes, in case the above found nothing.
         for prefix in \
             "${SCOOP:-$HOME/scoop}/apps/openssl/current" \
             /mingw64 /usr/local /usr \

@@ -7,10 +7,11 @@ this click land", and this file owns "what still feels unfinished".
 Every item names the code that makes it true, so an item that gets fixed can be
 checked off without re-deriving it. Items are ordered by user pain, not by size.
 
-**Status:** two items are open: **6.3** (the `restbook-ui` crate split) and
-**6.6** (two type scales that disagree). Both stay deferred. Open work,
-including those, is tracked in [`01-milestones.md`](01-milestones.md). The
-per-item text below is the record of what was wrong and what fixed it.
+**Status:** three items are open: **5.4** (collection verbs live in the window
+menu), **6.3** (the `restbook-ui` crate split) and **6.6** (two type scales that
+disagree). Open work, including those, is tracked in
+[`01-milestones.md`](01-milestones.md). The per-item text below is the record of
+what was wrong and what fixed it.
 
 Priority:
 
@@ -391,6 +392,22 @@ window. Fine, but worth stating in `07-flows.md` so it is not mistaken for a
 missing binding.
 
 Refs: `actions::bindings()`.
+
+### 5.4 Collection verbs live in the window menu, and panes repeat it — **P2**
+
+Save, import and export are commands about collections, yet they sit in the
+titlebar window menu beside Settings and the palette, and the request pane adds
+its own ellipsis for another copy of Paste cURL. The result is one window menu,
+a per-dock ellipsis, and a second ellipsis inside the request pane, with the same
+verb reachable from each.
+
+**Fix:** move save, import and export onto the Collections pane's header and row
+menus, and remove the request pane's own ellipsis; the titlebar keeps only
+window-level commands. `0.2.0` owns the move; `0.2.4` (X5) derives what remains
+from one `Command` table.
+
+Refs: `workspace/mod.rs` (`render`, window menu), `panels/request.rs`
+(`dropdown_menu`, `request-menu`), `01-milestones.md` 0.2.0 and X5.
 
 ## 6. Developer experience
 
