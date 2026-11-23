@@ -119,7 +119,7 @@ impl SqlcipherStore {
     /// through [`open`], which takes the key from the OS keyring; the tests pin
     /// one instead, because a headless machine may have no credential store to
     /// read it back from.
-    fn open_with_key(path: impl AsRef<Path>, key: &[u8; 32]) -> Result<Self> {
+    pub(crate) fn open_with_key(path: impl AsRef<Path>, key: &[u8; 32]) -> Result<Self> {
         let path = path.as_ref();
         let hex: String = key.iter().map(|byte| format!("{byte:02x}")).collect();
 

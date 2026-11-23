@@ -213,23 +213,29 @@ stderr rather than passing unnoticed. The paths:
 | What fails | What happens |
 |---|---|
 | Keyring has no entry | A new key is generated and stored. A fresh `history.db` is written encrypted. |
-| Keyring is unavailable (no backend, locked, denied) | `SqlcipherStore::open` returns an error. The app prints `restbook: encrypted history unavailable (<error>); using plaintext JSONL` and uses `history.jsonl`. |
-| `history.db` exists but the key no longer matches | The `PRAGMA key` or the first schema statement fails, so `open` returns an error, and the same plaintext fallback applies. The unreadable database is left alone, never rewritten. |
+| Keyring is unavailable (no backend, locked, denied) | `SqlcipherStore::open` returns an error. The app prints `restbook: encrypted history unavailable (<error>); using plaintext JSONL` and, in the data directory, uses `history.jsonl`. |
+| `history.db` exists but the key no longer matches | The `PRAGMA key` or the first schema statement fails, so `open` returns an error, and the same plaintext fallback applies in the data directory. The unreadable database is left alone, never rewritten. |
 | `history.db` is corrupt or truncated | Same as above: error, fallback, file preserved for recovery. |
-| SQLCipher compiled out (`--no-default-features`) | No attempt is made; plaintext `history.jsonl` in the same directory. |
+| SQLCipher compiled out (`--no-default-features`) | No attempt is made; plaintext `history.jsonl` in the same data directory. |
 | The data directory cannot be created | The app starts against an in-memory store, so it opens read-only-ish instead of failing to launch. |
+| A workspace has no encrypted store | There is no plaintext fallback: the session's history stays in memory and the status bar says `Not saved`. |
 
 Two consequences worth stating plainly:
 
 - **Losing the keyring entry loses the history.** There is no recovery path and
   no backdoor, because there is no copy of the key. Deleting the credential
   manager entry makes `history.db` permanently unreadable, and the app simply
-  falls back to a new plaintext `history.jsonl`.
-- **The fallback is plaintext.** A failing keyring means history — including
-  every response body — lands in `history.jsonl` unencrypted. That is a
-  deliberate choice to keep the app usable, which is why the warning exists.
-  A `history.jsonl` in the data directory is the signal that encryption is not
-  currently protecting you; its absence means `history.db` is in use.
+  falls back to a new plaintext `history.jsonl` in the data directory.
+- **The data-directory fallback is plaintext.** A failing keyring there means
+  history — including every response body — lands in `history.jsonl`
+  unencrypted. That is a deliberate choice to keep the app usable, which is why
+  the warning exists. A `history.jsonl` in the data directory is the signal that
+  encryption is not currently protecting you; its absence means `history.db` is
+  in use.
+- **A workspace takes no such fallback.** It is the tree a user shares, so
+  without an encrypted store its history stays in memory for that session and
+  the status bar says `Not saved`. No plaintext history file is ever created
+  under `.restbook/`.
 
 `crates/store/src/sqlcipher.rs` has a roundtrip test that creates the keyring
 entry, applies the key, writes a history entry, and searches it back. The
@@ -248,8 +254,15 @@ api/
   collections/<slug>/collection.json   tracked: folders, requests
   environments/<slug>.json            tracked: non-secret vars
   restbook.local.json           gitignored: active env, globals, drafts
-  .restbook/history.jsonl       gitignored: every send, with its response body
+  .restbook/history.db          gitignored, encrypted: every send with its body
+  .restbook/history.db-wal      gitignored: SQLCipher's encrypted journal
 ```
+
+History in a workspace is the same `SqlcipherStore` the data directory uses, so
+it is encrypted with the same key from the OS keyring, and a send leaves no
+readable body under `.restbook/`. A `history.jsonl` written there by an older
+build is imported into the encrypted database once and then removed rather than
+renamed, so no readable copy is left in the shared tree.
 
 The rule is **tracked files hold structure, local files hold secrets**. History
 never leaves the machine — it is the one thing nobody wants in a shared checkout.
