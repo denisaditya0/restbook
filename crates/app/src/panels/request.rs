@@ -20,7 +20,7 @@ use gpui_kit::*;
 
 use restbook_core::{Method, OAuthConfig, RequestDef};
 
-use crate::actions::{shortcut, CopyCurl, FocusUrl, NewTab, PasteCurl, SaveRequest, SendRequest};
+use crate::actions::{shortcut, FocusUrl, NewTab, PasteCurl, SaveRequest, SendRequest};
 use crate::completion::Autocomplete;
 use crate::document::Document;
 use crate::icons::{self, IconName};
@@ -57,6 +57,13 @@ pub(crate) enum Event {
     Imported,
     /// An import failed and wants to say why.
     Notice(Notice),
+    /// The empty-state button asked for a file. The pane holds no window, so the
+    /// workspace opens the picker from its next render, the same way it defers
+    /// a save.
+    Import,
+    /// The editor menu asked to copy the live request as a cURL command. The
+    /// workspace owns the clipboard, so the pane only asks.
+    CopyCurl,
     /// The Auth tab asked to fetch an OAuth token with these settings. The
     /// workspace runs it, because only it holds the transport.
     FetchToken(OAuthConfig),
@@ -81,6 +88,8 @@ impl Event {
             // A notice is logged by `Workspace::notice`, which also routes it
             // to the flash; logging it twice would just repeat the message.
             Event::Notice(_) => None,
+            Event::Import => Some("event: import file".to_owned()),
+            Event::CopyCurl => Some("event: copy as curl".to_owned()),
             Event::FetchToken(_) => Some("event: fetch oauth token".to_owned()),
         }
     }
@@ -246,7 +255,7 @@ impl gpui_kit::component::dock::Panel for RequestPanel {
                 }),
         );
 
-        let duplicate = panel;
+        let duplicate = panel.clone();
         menu = menu.item(
             PopupMenuItem::new("Duplicate tab")
                 .icon(IconName::Copy)
@@ -260,16 +269,20 @@ impl gpui_kit::component::dock::Panel for RequestPanel {
                 }),
         );
 
-        // The clipboard commands are actions, not pane events: the workspace
-        // owns the clipboard so they work from any pane, and these entries are
-        // just a second trigger for the same keybinding.
+        // Direct calls rather than dispatched actions: a menu click does not
+        // focus the pane, so an action would be routed from wherever focus
+        // happens to sit. Copy is a workspace intent because the clipboard is
+        // a window resource.
         menu = menu.separator();
-        menu = menu.item(PopupMenuItem::new("Paste cURL").on_click(|_, window, cx| {
-            window.dispatch_action(Box::new(PasteCurl), cx);
-        }));
+        let paste = panel.clone();
+        menu = menu.item(
+            PopupMenuItem::new("Paste cURL").on_click(move |_, window, cx| {
+                paste.update(cx, |this, cx| this.paste_curl(window, cx));
+            }),
+        );
         menu.item(
-            PopupMenuItem::new("Copy as cURL").on_click(|_, window, cx| {
-                window.dispatch_action(Box::new(CopyCurl), cx);
+            PopupMenuItem::new("Copy as cURL").on_click(move |_, _, cx| {
+                panel.update(cx, |_, cx| cx.emit(Event::CopyCurl));
             }),
         )
     }
@@ -909,7 +922,7 @@ impl RequestPanel {
     }
 
     /// What the pane shows when every tab was closed: a line naming the state
-    /// and the one action that leaves it.
+    /// and the two actions that leave it without opening a blank tab first.
     fn render_empty(&self, cx: &mut Context<Self>) -> AnyElement {
         v_flex()
             .size_full()
@@ -924,10 +937,20 @@ impl RequestPanel {
                     .child("No request open"),
             )
             .child(
-                Button::new("new-request-empty")
-                    .label("New request")
-                    .icon(IconName::Plus)
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::NewTab))),
+                h_flex()
+                    .gap(px(self.metrics.space_sm))
+                    .child(
+                        Button::new("new-request-empty")
+                            .label("New request")
+                            .icon(IconName::Plus)
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::NewTab))),
+                    )
+                    .child(
+                        Button::new("import-file-empty")
+                            .label("Import…")
+                            .icon(IconName::Upload)
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::Import))),
+                    ),
             )
             .into_any_element()
     }
@@ -1261,11 +1284,20 @@ impl RequestPanel {
             .ghost()
             .compact()
             .tooltip("More actions")
-            .dropdown_menu(|mut menu: PopupMenu, _, _| {
-                menu = menu.item(PopupMenuItem::new("Paste cURL").on_click(|_, window, cx| {
-                    window.dispatch_action(Box::new(PasteCurl), cx);
-                }));
-                menu
+            .dropdown_menu({
+                let panel = cx.entity();
+                move |mut menu: PopupMenu, _, _| {
+                    // A menu click does not focus the pane, so the action is run
+                    // through the entity instead of being dispatched. The outer
+                    // closure rebuilds the menu, so it clones per build.
+                    let paste = panel.clone();
+                    menu = menu.item(PopupMenuItem::new("Paste cURL").on_click(
+                        move |_, window, cx| {
+                            paste.update(cx, |this, cx| this.paste_curl(window, cx));
+                        },
+                    ));
+                    menu
+                }
             });
 
         let editor = self.editor.clone();

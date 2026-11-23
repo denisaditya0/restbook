@@ -8,6 +8,7 @@
 mod chrome;
 mod delete;
 mod dock;
+mod import;
 mod persistence;
 mod send;
 pub(crate) mod settings;
@@ -34,7 +35,7 @@ use restbook_core::{RequestDef, Store};
 use restbook_transport::ReqwestTransport;
 
 use crate::actions::{
-    self as actions, CloseTab, CopyCurl, NewTab, NextTab, OpenSettings, PreviousTab,
+    self as actions, CloseTab, CopyCurl, ImportFile, NewTab, NextTab, OpenSettings, PreviousTab,
     ReopenClosedTab, ResetZoom, SaveRequestAs, ToggleCommandPalette, ToggleSidebar, ToggleTools,
     ZoomIn, ZoomOut,
 };
@@ -124,6 +125,10 @@ pub(crate) struct Workspace {
     /// A draft asked to be saved, but the dialog needs a window and the event the
     /// request arrived on had none. The next render opens the dialog.
     pending_save: bool,
+    /// The empty request state asked for a file to import. The event carries no
+    /// window, so the picker opens from the next render, the same way a save is
+    /// deferred.
+    pending_import: bool,
     /// Whether the response pane asked for its earlier sends. Set by its event
     /// and consumed by render, because the event carries no window and reveal
     /// needs one.
@@ -335,6 +340,7 @@ impl Workspace {
             focus_handle: cx.focus_handle(),
             save_name,
             pending_save: false,
+            pending_import: false,
             pending_history: false,
             pending_delete: None,
             pending_update: None,
@@ -451,6 +457,11 @@ impl Workspace {
                 RequestEvent::SaveAs => this.save_active_as(cx),
                 RequestEvent::Imported => this.imported(cx),
                 RequestEvent::Notice(notice) => this.notice(notice, cx),
+                RequestEvent::Import => {
+                    this.pending_import = true;
+                    cx.notify();
+                }
+                RequestEvent::CopyCurl => this.copy_curl(cx),
                 RequestEvent::FetchToken(config) => this.fetch_token(config.clone(), cx),
             }
         })
@@ -747,6 +758,7 @@ impl Workspace {
                 .request
                 .update(cx, |panel, cx| panel.paste_curl(window, cx)),
             Command::CopyCurl => self.copy_curl(cx),
+            Command::ImportFile => self.import_file(window, cx),
             // Reveal first, then focus: History and Environment are not docked
             // by default, so focusing a pane no dock is showing would aim at
             // nothing. The centre panes are always mounted, so the reveal is a
@@ -930,6 +942,15 @@ impl Render for Workspace {
             });
         }
 
+        // The empty-state import button has no window either; the picker is
+        // opened after this element returns, like every other deferred surface.
+        if std::mem::take(&mut self.pending_import) {
+            let this = cx.entity();
+            window.defer(cx, move |window, cx| {
+                this.update(cx, |workspace, cx| workspace.import_file(window, cx));
+            });
+        }
+
         // Same deferral as the save dialog: the History pane has to be revealed,
         // and a dock change needs the frame to settle first.
         if std::mem::take(&mut self.pending_history) {
@@ -1067,6 +1088,15 @@ impl Render for Workspace {
                                         .request
                                         .update(cx, |panel, cx| panel.paste_curl(window, cx))
                                 });
+                            }),
+                    );
+                    let import = workspace.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new("Import\u{2026}")
+                            .icon(IconName::Upload)
+                            .on_click(move |_, window, cx| {
+                                import
+                                    .update(cx, |workspace, cx| workspace.import_file(window, cx));
                             }),
                     );
                     let copy = workspace.clone();
@@ -1230,6 +1260,7 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &NewTab, _, cx| this.new_tab(cx)))
             .on_action(cx.listener(|this, _: &CopyCurl, _, cx| this.copy_curl(cx)))
+            .on_action(cx.listener(|this, _: &ImportFile, window, cx| this.import_file(window, cx)))
             .on_action(cx.listener(|this, _: &CloseTab, _, cx| {
                 if let Some(id) = this.tabs.active_id() {
                     this.confirm_close_tab(id, cx);

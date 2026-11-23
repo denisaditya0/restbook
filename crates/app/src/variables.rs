@@ -32,25 +32,36 @@ impl Variables {
     /// Read the store once. `_cx` is unused today; it keeps the constructor in
     /// the shape `cx.new(|cx| Variables::new(store, cx))` expects.
     pub(crate) fn new(store: Arc<dyn Store>, _cx: &mut Context<Self>) -> Self {
-        let environments = store.environments().unwrap_or_else(|error| {
+        let mut variables = Self {
+            store,
+            environments: Vec::new(),
+            globals: Vec::new(),
+            active: None,
+        };
+        variables.load();
+        variables
+    }
+
+    fn load(&mut self) {
+        self.environments = self.store.environments().unwrap_or_else(|error| {
             log::error!("failed to load environments: {error}");
             Vec::new()
         });
-        let globals = store.globals().unwrap_or_else(|error| {
+        self.globals = self.store.globals().unwrap_or_else(|error| {
             log::error!("failed to load globals: {error}");
             Vec::new()
         });
-        let active = store.active_environment().unwrap_or_else(|error| {
+        self.active = self.store.active_environment().unwrap_or_else(|error| {
             log::error!("failed to load the active environment: {error}");
             None
         });
+    }
 
-        Self {
-            store,
-            environments,
-            globals,
-            active,
-        }
+    /// Re-read after another writer touched the store, so an imported
+    /// environment shows up without reopening the window.
+    pub(crate) fn reload(&mut self, cx: &mut Context<Self>) {
+        self.load();
+        cx.notify();
     }
 
     pub(crate) fn environments(&self) -> &[Environment] {
