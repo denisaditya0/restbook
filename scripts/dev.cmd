@@ -15,8 +15,10 @@ rem still runs cargo, which then reports what is missing.
 rem
 rem A GUI run detaches from the console, so its stdout and stderr are easy to
 rem miss. `--logs` keeps a copy of everything cargo and the app print under
-rem `target\dev-logs\<stamp>-<logfile>`, and points RUST_LOG at the log sink the
-rem app already installs (see `crates/app/src/logging.rs`).
+rem `target\dev-logs\<stamp>-<kind>.log`, points `RUST_LOG` at the log sink the
+rem app already installs (see `crates/app/src/logging.rs`), and points the app's
+rem own `RESTBOOK_LOG_FILE` there too, so a developer run does not pour the
+rem debug transcript into the user's `restbook.log`.
 
 setlocal EnableExtensions EnableDelayedExpansion
 
@@ -113,6 +115,10 @@ if defined LOGS (
     for /f "delims=" %%T in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmmss"') do set "STAMP=%%T"
     if not defined STAMP set "STAMP=run"
     set "LOG_FILE=!LOG_DIR!\!STAMP!-cargo.log"
+    rem The app writes its own file, beside the cargo tee rather than in the data
+    rem directory: this run is a transcript for the developer, and the ordinary
+    rem log must keep describing what a user's install does.
+    set "RESTBOOK_LOG_FILE=!LOG_DIR!\!STAMP!-app.log"
 
     rem `--logs` is the developer path, so it runs the full debug transcript
     rem (the app's own capture window is for release builds). A caller's own
@@ -120,6 +126,7 @@ if defined LOGS (
     if not defined RUST_LOG set "RUST_LOG=warn,restbook_app=debug,restbook_core=debug,restbook_store=debug,restbook_transport=debug"
 
     echo dev: logging to !LOG_FILE! 1>&2
+    echo dev: app log !RESTBOOK_LOG_FILE! 1>&2
     echo dev: RUST_LOG=!RUST_LOG! 1>&2
 
     rem Tee by writing each stream to the file and to its console, line by line.

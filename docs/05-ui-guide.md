@@ -172,9 +172,11 @@ attached) and a file:
 
 The directory is the same one `RESTBOOK_DATA_DIR` overrides, so a portable run's
 log moves with its data. `RESTBOOK_LOG_FILE` names the file directly. The file
-is appended to; a start that finds it over 1 MiB renames it to `restbook.log.1`
-and begins a fresh file, keeping one previous log. A failure to open it is not
-fatal: the app warns on stderr and runs with stderr alone.
+is appended to, with one archive: a start that finds it over 1 MiB renames it to
+`restbook.log.1` and begins a fresh file, and so does a start that finds no
+startup line for its own version, so an upgrade archives the previous version's
+transcript instead of mixing two builds' lines in one file. A failure to open it
+is not fatal: the app warns on stderr and runs with stderr alone.
 
 The file is deliberately quiet: startup facts, `warn`/`error`, panics, and one
 send outcome. The play-by-play is not in it. When a user needs to report a
@@ -263,9 +265,12 @@ set RUST_LOG=restbook_app=debug
 ..\..\scripts\dev.cmd --logs run
 ```
 
-`--logs` (cmd.exe only) additionally tees **cargo's** output to
+`--logs` (cmd.exe only) tees **cargo's** output to
 `target\dev-logs\<stamp>-cargo.log`, which is what catches a build error that
-scrolled past. The app's own file does not depend on it.
+scrolled past, and points the app's `RESTBOOK_LOG_FILE` at
+`target\dev-logs\<stamp>-app.log` beside it, so the debug transcript never lands
+in the `restbook.log` a user would attach. Unless `RUST_LOG` is already set,
+`--logs` supplies the full debug filter itself.
 
 ## Testing
 
