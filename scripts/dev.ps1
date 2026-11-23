@@ -29,18 +29,10 @@ $wasSet = -not [string]::IsNullOrWhiteSpace($env:OPENSSL_DIR)
 if (-not $wasSet) {
     $detected = $null
 
-    # A pkg-config .pc file names the prefix, when one is installed.
-    $pkgConfig = Get-Command pkg-config -ErrorAction SilentlyContinue
-    if ($pkgConfig) {
-        try {
-            $prefix = & pkg-config --variable=prefix openssl 2>$null | Select-Object -First 1
-            $detected = Test-OpenSsl $prefix
-        } catch {
-            $detected = $null
-        }
-    }
-
-    # A MinGW toolchain usually keeps a sibling `opt` beside `bin`.
+    # A MinGW toolchain usually keeps a sibling `opt` beside `bin`. The
+    # compiler's own tree comes first: a `pkg-config` earlier on PATH can belong
+    # to another toolchain (Strawberry Perl ships one) and name an OpenSSL this
+    # compiler does not link.
     if (-not $detected) {
         $gcc = Get-Command gcc -ErrorAction SilentlyContinue
         if ($gcc) {
@@ -50,12 +42,29 @@ if (-not $wasSet) {
         }
     }
 
+    $scoop = if ($env:SCOOP) { $env:SCOOP } else { Join-Path $HOME 'scoop' }
+    if (-not $detected) {
+        $detected = Test-OpenSsl (Join-Path $scoop 'apps/mingw/current/opt')
+    }
+
+    # A pkg-config .pc file names the prefix, when one is installed. Only after
+    # the compiler's own tree, for the reason above.
+    if (-not $detected) {
+        $pkgConfig = Get-Command pkg-config -ErrorAction SilentlyContinue
+        if ($pkgConfig) {
+            try {
+                $prefix = & pkg-config --variable=prefix openssl 2>$null | Select-Object -First 1
+                $detected = Test-OpenSsl $prefix
+            } catch {
+                $detected = $null
+            }
+        }
+    }
+
     # The usual package-manager prefixes, in case the above found nothing.
     if (-not $detected) {
-        $scoop = if ($env:SCOOP) { $env:SCOOP } else { Join-Path $HOME 'scoop' }
         $candidates = @(
             $env:MINGW_PREFIX
-            (Join-Path $scoop 'apps/mingw/current/opt')
             (Join-Path $scoop 'apps/openssl/current')
             'C:\msys64\mingw64'
             'C:\msys64\usr'
