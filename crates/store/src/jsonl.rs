@@ -12,7 +12,8 @@ use std::sync::Mutex;
 
 use restbook_core::store::{trim_target, Draft};
 use restbook_core::{
-    Collection, Environment, Error, HistoryEntry, HistoryHit, Kv, Origin, Result, Store,
+    Collection, Environment, Error, HistoryEntry, HistoryFilter, HistoryHit, Kv, Origin, Result,
+    Store,
 };
 use serde::{Deserialize, Serialize};
 
@@ -194,16 +195,31 @@ impl Store for JsonlStore {
         Ok(next_id)
     }
 
-    fn search_history(&self, query: &str, limit: u32) -> Result<Vec<HistoryHit>> {
-        Ok(crate::matching(&self.read_all()?, query, limit))
+    fn search_history(
+        &self,
+        query: &str,
+        filter: &HistoryFilter,
+        limit: u32,
+    ) -> Result<Vec<HistoryHit>> {
+        Ok(crate::matching(&self.read_all()?, query, filter, limit))
     }
 
     fn get_history(&self, id: i64) -> Result<Option<HistoryEntry>> {
         Ok(self.read_all()?.into_iter().find(|entry| entry.id == id))
     }
 
-    fn history_for_origin(&self, origin: &Origin, limit: u32) -> Result<Option<Vec<HistoryHit>>> {
-        Ok(Some(crate::owned_by(&self.read_all()?, origin, limit)))
+    fn history_for_origin(
+        &self,
+        origin: &Origin,
+        filter: &HistoryFilter,
+        limit: u32,
+    ) -> Result<Option<Vec<HistoryHit>>> {
+        Ok(Some(crate::owned_by(
+            &self.read_all()?,
+            origin,
+            filter,
+            limit,
+        )))
     }
 
     fn reassign_history_origin(&self, from: &Origin, to: &Origin) -> Result<u64> {
@@ -440,11 +456,60 @@ mod tests {
         // Cap 10 trims to 9, so the oldest 11 are dropped and the file is
         // rewritten rather than left append-only.
         assert_eq!(store.trim_history(10).unwrap(), 11);
-        assert_eq!(store.search_history("", 100).unwrap().len(), 9);
+        assert_eq!(
+            store
+                .search_history("", &HistoryFilter::default(), 100)
+                .unwrap()
+                .len(),
+            9
+        );
 
         // The rewrite is what survives a reopen.
         let reopened = JsonlStore::open(&history).unwrap();
-        assert_eq!(reopened.search_history("", 100).unwrap().len(), 9);
+        assert_eq!(
+            reopened
+                .search_history("", &HistoryFilter::default(), 100)
+                .unwrap()
+                .len(),
+            9
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn filters_apply_to_the_file_and_survive_a_reopen() {
+        let dir = temp_dir("restbook-jsonl-filter-test");
+        let history = dir.join("history.jsonl");
+
+        let doomed;
+        {
+            let store = JsonlStore::open(&history).unwrap();
+            let mut ids = Vec::new();
+            for (method, status) in [(Method::Get, 200), (Method::Post, 404), (Method::Get, 500)] {
+                let mut item = sample_entry();
+                item.request.method = method;
+                item.response.status = status;
+                ids.push(store.append_history(&item).unwrap());
+            }
+            doomed = ids[2];
+            store.delete_history(doomed).unwrap();
+        }
+
+        let reopened = JsonlStore::open(&history).unwrap();
+        let get = HistoryFilter {
+            methods: vec!["GET".to_owned()],
+            ..Default::default()
+        };
+        let rows = reopened.search_history("", &get, 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].status, 200);
+
+        let all = reopened
+            .search_history("", &HistoryFilter::default(), 10)
+            .unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().all(|hit| hit.id != doomed));
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -493,6 +558,7 @@ mod tests {
                 &Origin::Saved {
                     node: "node-9".to_owned(),
                 },
+                &HistoryFilter::default(),
                 10,
             )
             .unwrap()
@@ -525,7 +591,13 @@ mod tests {
 
         // The removal is on disk, not just in the in-memory view.
         let reopened = JsonlStore::open(&history).unwrap();
-        assert_eq!(reopened.search_history("", 100).unwrap().len(), 2);
+        assert_eq!(
+            reopened
+                .search_history("", &HistoryFilter::default(), 100)
+                .unwrap()
+                .len(),
+            2
+        );
 
         assert_eq!(
             reopened
@@ -538,7 +610,10 @@ mod tests {
         assert_eq!(reopened.clear_history().unwrap(), 1);
 
         let emptied = JsonlStore::open(&history).unwrap();
-        assert!(emptied.search_history("", 100).unwrap().is_empty());
+        assert!(emptied
+            .search_history("", &HistoryFilter::default(), 100)
+            .unwrap()
+            .is_empty());
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -580,7 +655,10 @@ mod tests {
         assert_eq!(reopened.globals().unwrap()[0].key, "token");
 
         // History is untouched by the workspace file.
-        assert!(reopened.search_history("", 10).unwrap().is_empty());
+        assert!(reopened
+            .search_history("", &HistoryFilter::default(), 10)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

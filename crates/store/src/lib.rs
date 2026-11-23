@@ -18,7 +18,8 @@ use std::sync::Mutex;
 
 use restbook_core::store::{trim_target, Draft};
 use restbook_core::{
-    Collection, Environment, Error, HistoryEntry, HistoryHit, Kv, Origin, Result, Store,
+    Collection, Environment, Error, HistoryEntry, HistoryFilter, HistoryHit, Kv, Origin, Result,
+    Store,
 };
 
 /// In-process store. Loses everything on exit; useful in tests and previews.
@@ -59,9 +60,14 @@ impl Store for MemoryStore {
         Ok(id)
     }
 
-    fn search_history(&self, query: &str, limit: u32) -> Result<Vec<HistoryHit>> {
+    fn search_history(
+        &self,
+        query: &str,
+        filter: &HistoryFilter,
+        limit: u32,
+    ) -> Result<Vec<HistoryHit>> {
         let entries = self.entries.lock().map_err(poisoned)?;
-        Ok(matching(&entries, query, limit))
+        Ok(matching(&entries, query, filter, limit))
     }
 
     fn get_history(&self, id: i64) -> Result<Option<HistoryEntry>> {
@@ -69,9 +75,14 @@ impl Store for MemoryStore {
         Ok(entries.iter().find(|entry| entry.id == id).cloned())
     }
 
-    fn history_for_origin(&self, origin: &Origin, limit: u32) -> Result<Option<Vec<HistoryHit>>> {
+    fn history_for_origin(
+        &self,
+        origin: &Origin,
+        filter: &HistoryFilter,
+        limit: u32,
+    ) -> Result<Option<Vec<HistoryHit>>> {
         let entries = self.entries.lock().map_err(poisoned)?;
-        Ok(Some(owned_by(&entries, origin, limit)))
+        Ok(Some(owned_by(&entries, origin, filter, limit)))
     }
 
     fn reassign_history_origin(&self, from: &Origin, to: &Origin) -> Result<u64> {
@@ -210,11 +221,16 @@ fn poisoned<T>(_: T) -> Error {
 ///
 /// Newest first matches the SQL backend's `ORDER BY received_at DESC` and what
 /// the response pane reads from `history.first()` (the request's latest send).
-pub(crate) fn owned_by(entries: &[HistoryEntry], origin: &Origin, limit: u32) -> Vec<HistoryHit> {
+pub(crate) fn owned_by(
+    entries: &[HistoryEntry],
+    origin: &Origin,
+    filter: &HistoryFilter,
+    limit: u32,
+) -> Vec<HistoryHit> {
     entries
         .iter()
         .rev()
-        .filter(|entry| &entry.origin == origin)
+        .filter(|entry| &entry.origin == origin && filter.matches_entry(entry))
         .take(limit as usize)
         .map(HistoryEntry::hit)
         .collect()
@@ -235,13 +251,18 @@ pub(crate) fn reassign(entries: &mut [HistoryEntry], from: &Origin, to: &Origin)
 /// Newest-first filter shared by the non-SQL stores. The SQL backend orders by
 /// `received_at DESC`, and the response pane reads `first()` as the latest send,
 /// so this must not flip the order back to oldest-first.
-pub(crate) fn matching(entries: &[HistoryEntry], query: &str, limit: u32) -> Vec<HistoryHit> {
+pub(crate) fn matching(
+    entries: &[HistoryEntry],
+    query: &str,
+    filter: &HistoryFilter,
+    limit: u32,
+) -> Vec<HistoryHit> {
     let needle = query.trim().to_ascii_lowercase();
     entries
         .iter()
         .rev()
         .filter(|entry| {
-            needle.is_empty()
+            (needle.is_empty()
                 || entry.url.to_ascii_lowercase().contains(&needle)
                 || entry.request.name.to_ascii_lowercase().contains(&needle)
                 || entry
@@ -249,7 +270,8 @@ pub(crate) fn matching(entries: &[HistoryEntry], query: &str, limit: u32) -> Vec
                     .method
                     .as_str()
                     .to_ascii_lowercase()
-                    .contains(&needle)
+                    .contains(&needle))
+                && filter.matches_entry(entry)
         })
         .take(limit as usize)
         .map(HistoryEntry::hit)
@@ -294,7 +316,9 @@ mod tests {
         let store = MemoryStore::new();
         store.append_history(&entry()).unwrap();
 
-        let hits = store.search_history("", 10).unwrap();
+        let hits = store
+            .search_history("", &HistoryFilter::default(), 10)
+            .unwrap();
         assert_eq!(hits.len(), 1);
 
         let loaded = store.get_history(hits[0].id).unwrap().unwrap();
@@ -338,17 +362,26 @@ mod tests {
                 &Origin::Saved {
                     node: "node-a".to_owned(),
                 },
+                &HistoryFilter::default(),
                 10,
             )
             .unwrap()
             .expect("the memory store answers by owner");
         assert_eq!(node_a.len(), 1);
 
-        let unowned = store.history_for_origin(&Origin::Standalone, 10).unwrap();
+        let unowned = store
+            .history_for_origin(&Origin::Standalone, &HistoryFilter::default(), 10)
+            .unwrap();
         assert_eq!(unowned.expect("supported").len(), 1);
 
         // A URL search still sees all three: ownership narrows, it does not hide.
-        assert_eq!(store.search_history("example.com", 10).unwrap().len(), 3);
+        assert_eq!(
+            store
+                .search_history("example.com", &HistoryFilter::default(), 10)
+                .unwrap()
+                .len(),
+            3
+        );
     }
 
     #[test]
@@ -364,9 +397,15 @@ mod tests {
         };
         assert_eq!(store.reassign_history_origin(&from, &to).unwrap(), 1);
 
-        let draft_rows = store.history_for_origin(&from, 10).unwrap().unwrap();
+        let draft_rows = store
+            .history_for_origin(&from, &HistoryFilter::default(), 10)
+            .unwrap()
+            .unwrap();
         assert!(draft_rows.is_empty());
-        let saved_rows = store.history_for_origin(&to, 10).unwrap().unwrap();
+        let saved_rows = store
+            .history_for_origin(&to, &HistoryFilter::default(), 10)
+            .unwrap()
+            .unwrap();
         assert_eq!(saved_rows.len(), 1);
     }
 
@@ -382,9 +421,61 @@ mod tests {
         // removed it first).
         assert!(!store.delete_history(doomed).unwrap());
 
-        let hits = store.search_history("", 10).unwrap();
+        let hits = store
+            .search_history("", &HistoryFilter::default(), 10)
+            .unwrap();
         assert_eq!(hits.len(), 2);
         assert!(hits.iter().all(|hit| hit.id != doomed));
+    }
+
+    #[test]
+    fn search_narrows_by_method_status_and_time_before_the_limit() {
+        let store = MemoryStore::new();
+        let now = chrono::Utc::now();
+        for (method, status, hours_ago) in [
+            (Method::Get, 200, 1),
+            (Method::Post, 404, 2),
+            (Method::Get, 500, 24 * 30),
+        ] {
+            let mut item = entry();
+            item.request.method = method;
+            item.response.status = status;
+            item.url = format!("https://example.com/{}", method.as_str().to_lowercase());
+            item.response.received_at = now - chrono::Duration::hours(hours_ago);
+            store.append_history(&item).unwrap();
+        }
+
+        let get = HistoryFilter {
+            methods: vec!["get".to_owned()],
+            ..Default::default()
+        };
+        assert_eq!(store.search_history("", &get, 10).unwrap().len(), 2);
+
+        let client_error = HistoryFilter {
+            status_classes: vec![4],
+            ..Default::default()
+        };
+        assert_eq!(
+            store.search_history("", &client_error, 10).unwrap().len(),
+            1
+        );
+
+        // The limit is applied after the filter, so a narrow list is not cut
+        // short by rows it would have discarded.
+        let recent = HistoryFilter {
+            since: Some(now - chrono::Duration::days(7)),
+            ..Default::default()
+        };
+        assert_eq!(store.search_history("", &recent, 2).unwrap().len(), 2);
+
+        let successful_get = HistoryFilter {
+            methods: vec!["GET".to_owned()],
+            status_classes: vec![2],
+            ..Default::default()
+        };
+        let hits = store.search_history("", &successful_get, 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].status, 200);
     }
 
     #[test]
@@ -395,7 +486,10 @@ mod tests {
         }
 
         assert_eq!(store.clear_history().unwrap(), 4);
-        assert!(store.search_history("", 10).unwrap().is_empty());
+        assert!(store
+            .search_history("", &HistoryFilter::default(), 10)
+            .unwrap()
+            .is_empty());
         // Clearing an empty history is zero, not an error.
         assert_eq!(store.clear_history().unwrap(), 0);
     }
@@ -419,7 +513,13 @@ mod tests {
             .unwrap();
         assert_eq!(cleared, 1);
         // The draft's send survives; only the addressed owner was forgotten.
-        assert_eq!(store.search_history("", 10).unwrap().len(), 1);
+        assert_eq!(
+            store
+                .search_history("", &HistoryFilter::default(), 10)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -434,7 +534,7 @@ mod tests {
         assert_eq!(store.len(), 9);
 
         let mut ids: Vec<i64> = store
-            .search_history("", 100)
+            .search_history("", &HistoryFilter::default(), 100)
             .unwrap()
             .iter()
             .map(|hit| hit.id)

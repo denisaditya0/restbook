@@ -11,13 +11,14 @@ use std::sync::Mutex;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use rand::RngCore;
-use rusqlite::{params, Connection};
+use rusqlite::types::Value;
+use rusqlite::{params, params_from_iter, Connection};
 use serde::{Deserialize, Serialize};
 
 use restbook_core::store::{trim_target, Draft};
 use restbook_core::{
-    Body, Collection, Environment, Error, HistoryEntry, HistoryHit, Kv, Method, Origin,
-    RedirectHop, RequestDef, ResponseRecord, Result, Store,
+    Body, Collection, Environment, Error, HistoryEntry, HistoryFilter, HistoryHit, Kv, Method,
+    Origin, RedirectHop, RequestDef, ResponseRecord, Result, Store,
 };
 
 const SERVICE: &str = "restbook";
@@ -324,7 +325,12 @@ impl Store for SqlcipherStore {
         Ok(execution_id)
     }
 
-    fn search_history(&self, query: &str, limit: u32) -> Result<Vec<HistoryHit>> {
+    fn search_history(
+        &self,
+        query: &str,
+        filter: &HistoryFilter,
+        limit: u32,
+    ) -> Result<Vec<HistoryHit>> {
         let conn = self
             .conn
             .lock()
@@ -336,12 +342,12 @@ impl Store for SqlcipherStore {
         if self.fts && trimmed.chars().count() >= 3 {
             // A corrupt or half-written index must not break search, so any FTS
             // error falls through to the `LIKE` scan below.
-            if let Ok(hits) = search_history_fts(&conn, trimmed, limit) {
+            if let Ok(hits) = search_history_fts(&conn, trimmed, filter, limit) {
                 return Ok(hits);
             }
         }
 
-        search_history_like(&conn, trimmed, limit)
+        search_history_like(&conn, trimmed, filter, limit)
     }
 
     fn get_history(&self, id: i64) -> Result<Option<HistoryEntry>> {
@@ -416,26 +422,36 @@ impl Store for SqlcipherStore {
         }))
     }
 
-    fn history_for_origin(&self, origin: &Origin, limit: u32) -> Result<Option<Vec<HistoryHit>>> {
+    fn history_for_origin(
+        &self,
+        origin: &Origin,
+        filter: &HistoryFilter,
+        limit: u32,
+    ) -> Result<Option<Vec<HistoryHit>>> {
         let conn = self
             .conn
             .lock()
             .map_err(|_| Error::Store("history lock poisoned".to_owned()))?;
 
         let (kind, id) = origin_parts(origin);
-        let mut statement = conn
-            .prepare(
-                "SELECT e.id, r.method, r.url, e.status, e.received_at
-                 FROM executions e
-                 JOIN requests r ON r.id = e.request_id
-                 WHERE e.origin_kind = ?1 AND e.origin_id = ?2
-                 ORDER BY e.received_at DESC, e.id DESC
-                 LIMIT ?3",
-            )
-            .map_err(db_error)?;
+        let mut sql = String::from(
+            "SELECT e.id, r.method, r.url, e.status, e.received_at
+             FROM executions e
+             JOIN requests r ON r.id = e.request_id
+             WHERE e.origin_kind = ?1 AND e.origin_id = ?2",
+        );
+        let mut values = vec![Value::Text(kind.to_owned()), Value::Text(id)];
+        let mut next = 2;
+        push_filter(&mut sql, &mut values, filter, &mut next);
+        next += 1;
+        sql.push_str(&format!(
+            " ORDER BY e.received_at DESC, e.id DESC LIMIT ?{next}"
+        ));
+        values.push(Value::Integer(limit as i64));
 
+        let mut statement = conn.prepare(&sql).map_err(db_error)?;
         let rows = statement
-            .query_map(params![kind, id, limit as i64], history_hit)
+            .query_map(params_from_iter(values), history_hit)
             .map_err(db_error)?;
 
         let mut hits = Vec::new();
@@ -876,24 +892,34 @@ fn now_ms() -> i64 {
 /// The `LIKE` scan, kept verbatim: it is the fallback when the FTS index is
 /// unavailable or cannot be trusted for the query (fewer than 3 characters).
 /// An empty query becomes `%%`, which matches everything: most recent first.
-fn search_history_like(conn: &Connection, query: &str, limit: u32) -> Result<Vec<HistoryHit>> {
+fn search_history_like(
+    conn: &Connection,
+    query: &str,
+    filter: &HistoryFilter,
+    limit: u32,
+) -> Result<Vec<HistoryHit>> {
     let pattern = format!("%{}%", query.to_ascii_lowercase());
 
-    let mut statement = conn
-        .prepare(
-            "SELECT e.id, r.method, r.url, e.status, e.received_at
-             FROM executions e
-             JOIN requests r ON r.id = e.request_id
-             WHERE lower(r.url) LIKE ?1
-                OR lower(r.method) LIKE ?1
-                OR lower(r.name) LIKE ?1
-             ORDER BY e.received_at DESC
-             LIMIT ?2",
-        )
-        .map_err(db_error)?;
+    let mut sql = String::from(
+        "SELECT e.id, r.method, r.url, e.status, e.received_at
+         FROM executions e
+         JOIN requests r ON r.id = e.request_id
+         WHERE (lower(r.url) LIKE ?1
+            OR lower(r.method) LIKE ?1
+            OR lower(r.name) LIKE ?1)",
+    );
+    let mut values = vec![Value::Text(pattern)];
+    let mut next = 1;
+    push_filter(&mut sql, &mut values, filter, &mut next);
+    next += 1;
+    sql.push_str(&format!(
+        " ORDER BY e.received_at DESC, e.id DESC LIMIT ?{next}"
+    ));
+    values.push(Value::Integer(limit as i64));
 
+    let mut statement = conn.prepare(&sql).map_err(db_error)?;
     let rows = statement
-        .query_map(params![pattern, limit as i64], history_hit)
+        .query_map(params_from_iter(values), history_hit)
         .map_err(db_error)?;
 
     let mut hits = Vec::new();
@@ -906,23 +932,33 @@ fn search_history_like(conn: &Connection, query: &str, limit: u32) -> Result<Vec
 /// Indexed substring search. The query is escaped into a single FTS5 phrase, so
 /// any FTS operator the user typed (`"`, `*`, `-`, `NEAR`) is taken literally
 /// and can never turn into a syntax error or broaden the match.
-fn search_history_fts(conn: &Connection, query: &str, limit: u32) -> Result<Vec<HistoryHit>> {
+fn search_history_fts(
+    conn: &Connection,
+    query: &str,
+    filter: &HistoryFilter,
+    limit: u32,
+) -> Result<Vec<HistoryHit>> {
     let phrase = format!("\"{}\"", query.replace('"', "\"\""));
 
-    let mut statement = conn
-        .prepare(
-            "SELECT e.id, r.method, r.url, e.status, e.received_at
-             FROM history_fts f
-             JOIN executions e ON e.id = f.rowid
-             JOIN requests r ON r.id = e.request_id
-             WHERE f MATCH ?1
-             ORDER BY e.received_at DESC
-             LIMIT ?2",
-        )
-        .map_err(db_error)?;
+    let mut sql = String::from(
+        "SELECT e.id, r.method, r.url, e.status, e.received_at
+         FROM history_fts f
+         JOIN executions e ON e.id = f.rowid
+         JOIN requests r ON r.id = e.request_id
+         WHERE f MATCH ?1",
+    );
+    let mut values = vec![Value::Text(phrase)];
+    let mut next = 1;
+    push_filter(&mut sql, &mut values, filter, &mut next);
+    next += 1;
+    sql.push_str(&format!(
+        " ORDER BY e.received_at DESC, e.id DESC LIMIT ?{next}"
+    ));
+    values.push(Value::Integer(limit as i64));
 
+    let mut statement = conn.prepare(&sql).map_err(db_error)?;
     let rows = statement
-        .query_map(params![phrase, limit as i64], history_hit)
+        .query_map(params_from_iter(values), history_hit)
         .map_err(db_error)?;
 
     let mut hits = Vec::new();
@@ -930,6 +966,53 @@ fn search_history_fts(conn: &Connection, query: &str, limit: u32) -> Result<Vec<
         hits.push(row.map_err(db_error)?);
     }
     Ok(hits)
+}
+
+/// Append the filter's conditions to `sql`, continuing the `?N` numbering from
+/// `next`. Values are bound, never interpolated.
+fn push_filter(
+    sql: &mut String,
+    values: &mut Vec<Value>,
+    filter: &HistoryFilter,
+    next: &mut usize,
+) {
+    if !filter.methods.is_empty() {
+        sql.push_str(" AND upper(r.method) IN (");
+        for (index, method) in filter.methods.iter().enumerate() {
+            if index > 0 {
+                sql.push_str(", ");
+            }
+            *next += 1;
+            sql.push_str(&format!("?{next}"));
+            values.push(Value::Text(method.to_ascii_uppercase()));
+        }
+        sql.push(')');
+    }
+
+    if !filter.status_classes.is_empty() {
+        sql.push_str(" AND (e.status / 100) IN (");
+        for (index, class) in filter.status_classes.iter().enumerate() {
+            if index > 0 {
+                sql.push_str(", ");
+            }
+            *next += 1;
+            sql.push_str(&format!("?{next}"));
+            values.push(Value::Integer(i64::from(*class)));
+        }
+        sql.push(')');
+    }
+
+    if let Some(since) = filter.since {
+        *next += 1;
+        sql.push_str(&format!(" AND e.received_at >= ?{next}"));
+        values.push(Value::Integer(since.timestamp_millis()));
+    }
+
+    if let Some(until) = filter.until {
+        *next += 1;
+        sql.push_str(&format!(" AND e.received_at <= ?{next}"));
+        values.push(Value::Integer(until.timestamp_millis()));
+    }
 }
 
 fn history_hit(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryHit> {
@@ -1089,7 +1172,9 @@ mod tests {
         let id = store.append_history(&sample_entry()).unwrap();
         assert!(id > 0);
 
-        let hits = store.search_history("example.com", 10).unwrap();
+        let hits = store
+            .search_history("example.com", &HistoryFilter::default(), 10)
+            .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].status, 200);
         assert_eq!(hits[0].url, "https://example.com/things");
@@ -1147,12 +1232,21 @@ mod tests {
         let node_a = Origin::Saved {
             node: "node-a".to_owned(),
         };
-        let rows = store.history_for_origin(&node_a, 10).unwrap().unwrap();
+        let rows = store
+            .history_for_origin(&node_a, &HistoryFilter::default(), 10)
+            .unwrap()
+            .unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].id, later_id, "newest first, like the URL search");
 
         // Ownership narrows the list; it does not hide rows from a URL search.
-        assert_eq!(store.search_history("example.com", 10).unwrap().len(), 5);
+        assert_eq!(
+            store
+                .search_history("example.com", &HistoryFilter::default(), 10)
+                .unwrap()
+                .len(),
+            5
+        );
 
         // Filing the draft moves only its own row.
         let from = Origin::Draft { draft: 5 };
@@ -1161,14 +1255,21 @@ mod tests {
         };
         assert_eq!(store.reassign_history_origin(&from, &to).unwrap(), 1);
         assert!(store
-            .history_for_origin(&from, 10)
+            .history_for_origin(&from, &HistoryFilter::default(), 10)
             .unwrap()
             .unwrap()
             .is_empty());
-        assert_eq!(store.history_for_origin(&to, 10).unwrap().unwrap().len(), 1);
         assert_eq!(
             store
-                .history_for_origin(&Origin::Standalone, 10)
+                .history_for_origin(&to, &HistoryFilter::default(), 10)
+                .unwrap()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            store
+                .history_for_origin(&Origin::Standalone, &HistoryFilter::default(), 10)
                 .unwrap()
                 .unwrap()
                 .len(),
@@ -1181,7 +1282,7 @@ mod tests {
         let reopened = open_test(&db).unwrap();
         assert_eq!(
             reopened
-                .history_for_origin(&node_a, 10)
+                .history_for_origin(&node_a, &HistoryFilter::default(), 10)
                 .unwrap()
                 .unwrap()
                 .len(),
@@ -1236,8 +1337,20 @@ mod tests {
         );
         assert!(store.get_history(b_id).unwrap().is_none());
         // The trigram index no longer returns the deleted row.
-        assert_eq!(store.search_history("two", 10).unwrap().len(), 1);
-        assert_eq!(store.search_history("one", 10).unwrap().len(), 1);
+        assert_eq!(
+            store
+                .search_history("two", &HistoryFilter::default(), 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            store
+                .search_history("one", &HistoryFilter::default(), 10)
+                .unwrap()
+                .len(),
+            1
+        );
         assert!(store.get_history(a_id).unwrap().is_some());
 
         // An owner-scoped clear forgets only that owner's sends.
@@ -1249,15 +1362,27 @@ mod tests {
                 .unwrap(),
             1
         );
-        assert_eq!(store.search_history("", 10).unwrap().len(), 1);
+        assert_eq!(
+            store
+                .search_history("", &HistoryFilter::default(), 10)
+                .unwrap()
+                .len(),
+            1
+        );
 
         assert_eq!(store.clear_history().unwrap(), 1);
-        assert!(store.search_history("", 10).unwrap().is_empty());
+        assert!(store
+            .search_history("", &HistoryFilter::default(), 10)
+            .unwrap()
+            .is_empty());
 
         // The deletions are on disk, and the index agrees on reopen.
         drop(store);
         let reopened = open_test(&db).unwrap();
-        assert!(reopened.search_history("", 10).unwrap().is_empty());
+        assert!(reopened
+            .search_history("", &HistoryFilter::default(), 10)
+            .unwrap()
+            .is_empty());
         assert!(reopened.get_history(a_id).unwrap().is_none());
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1299,7 +1424,7 @@ mod tests {
         );
         assert_eq!(
             store
-                .history_for_origin(&Origin::Standalone, 10)
+                .history_for_origin(&Origin::Standalone, &HistoryFilter::default(), 10)
                 .unwrap()
                 .unwrap()
                 .len(),
@@ -1339,20 +1464,115 @@ mod tests {
                 ))
                 .unwrap();
         }
-        assert_eq!(store.search_history("example.com", 100).unwrap().len(), 20);
+        assert_eq!(
+            store
+                .search_history("example.com", &HistoryFilter::default(), 100)
+                .unwrap()
+                .len(),
+            20
+        );
 
         // 20 rows with a cap of 10 trims to the low-water mark of 9.
         assert_eq!(store.trim_history(10).unwrap(), 11);
         // The indexed query and the LIKE scan must agree: the contentless FTS
         // table was rebuilt, not left pointing at deleted executions.
-        assert_eq!(store.search_history("example.com", 100).unwrap().len(), 9);
-        assert_eq!(store.search_history("example", 100).unwrap().len(), 9);
+        assert_eq!(
+            store
+                .search_history("example.com", &HistoryFilter::default(), 100)
+                .unwrap()
+                .len(),
+            9
+        );
+        assert_eq!(
+            store
+                .search_history("example", &HistoryFilter::default(), 100)
+                .unwrap()
+                .len(),
+            9
+        );
 
         // The newest survive and the oldest are gone. Indices 0..=10 were the
         // eleven trimmed; 11..=19 remain.
-        assert_eq!(store.search_history("item/19", 10).unwrap().len(), 1);
-        assert_eq!(store.search_history("item/11", 10).unwrap().len(), 1);
-        assert_eq!(store.search_history("item/10", 10).unwrap().len(), 0);
+        assert_eq!(
+            store
+                .search_history("item/19", &HistoryFilter::default(), 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            store
+                .search_history("item/11", &HistoryFilter::default(), 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            store
+                .search_history("item/10", &HistoryFilter::default(), 10)
+                .unwrap()
+                .len(),
+            0
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn filters_narrow_the_index_and_the_scan_alike() {
+        let _guard = exclusive();
+        let dir = test_dir("restbook-sqlcipher-filter-test");
+        let db = dir.join("history.db");
+        let base = 1_700_000_000_000;
+
+        {
+            let store = open_test(&db).unwrap();
+            for (method, status, at_ms) in [
+                (Method::Get, 200, base),
+                (Method::Post, 404, base + 1_000),
+                (Method::Get, 500, base + 2_000),
+            ] {
+                let mut item = entry_named(
+                    method,
+                    &format!("https://example.com/{}", method.as_str().to_lowercase()),
+                    "thing",
+                    at_ms,
+                );
+                item.response.status = status;
+                store.append_history(&item).unwrap();
+            }
+
+            // A query of three or more characters takes the FTS path; an empty
+            // one takes the LIKE scan. Filters have to work on both.
+            let get = HistoryFilter {
+                methods: vec!["get".to_owned()],
+                ..Default::default()
+            };
+            assert_eq!(store.search_history("example", &get, 10).unwrap().len(), 2);
+
+            let client_error = HistoryFilter {
+                status_classes: vec![4],
+                ..Default::default()
+            };
+            assert_eq!(
+                store.search_history("", &client_error, 10).unwrap().len(),
+                1
+            );
+
+            let recent = HistoryFilter {
+                since: Some(chrono::DateTime::from_timestamp_millis(base + 1_000).unwrap()),
+                ..Default::default()
+            };
+            assert_eq!(store.search_history("", &recent, 10).unwrap().len(), 2);
+        }
+
+        // The narrowing is storage-side, so it survives a reopen.
+        let reopened = open_test(&db).unwrap();
+        let get = HistoryFilter {
+            methods: vec!["GET".to_owned()],
+            ..Default::default()
+        };
+        assert_eq!(reopened.search_history("", &get, 10).unwrap().len(), 2);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1489,12 +1709,33 @@ mod tests {
 
         // Neither of these is a prefix of the URL, which is the shape `LIKE
         // '%q%'` supported and the trigram index has to reproduce.
-        assert_eq!(store.search_history("example.co", 10).unwrap().len(), 1);
-        assert_eq!(store.search_history("users", 10).unwrap().len(), 1);
+        assert_eq!(
+            store
+                .search_history("example.co", &HistoryFilter::default(), 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            store
+                .search_history("users", &HistoryFilter::default(), 10)
+                .unwrap()
+                .len(),
+            1
+        );
         // The trigram tokenizer folds ASCII case, which is what `lower() LIKE`
         // did before; a mixed-case query has to keep matching.
-        assert_eq!(store.search_history("USERS", 10).unwrap().len(), 1);
-        assert!(store.search_history("nothing-here", 10).unwrap().is_empty());
+        assert_eq!(
+            store
+                .search_history("USERS", &HistoryFilter::default(), 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(store
+            .search_history("nothing-here", &HistoryFilter::default(), 10)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -1514,7 +1755,9 @@ mod tests {
 
         // Two characters cannot be indexed by a trigram tokenizer, so this hit
         // can only come from the `LIKE` fallback.
-        let hits = store.search_history("us", 10).unwrap();
+        let hits = store
+            .search_history("us", &HistoryFilter::default(), 10)
+            .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].url, "https://api.example.com/users/42");
     }
@@ -1535,11 +1778,19 @@ mod tests {
             .unwrap();
 
         // An unescaped `"` is an FTS5 phrase delimiter; escaped it is just text.
-        let hits = store.search_history("said \"hi", 10).unwrap();
+        let hits = store
+            .search_history("said \"hi", &HistoryFilter::default(), 10)
+            .unwrap();
         assert_eq!(hits.len(), 1);
 
         // A lone quote is under three characters, so it exercises the fallback.
-        assert_eq!(store.search_history("\"", 10).unwrap().len(), 1);
+        assert_eq!(
+            store
+                .search_history("\"", &HistoryFilter::default(), 10)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -1557,8 +1808,20 @@ mod tests {
             ))
             .unwrap();
 
-        assert_eq!(store.search_history("widget", 10).unwrap().len(), 1);
-        assert_eq!(store.search_history("patc", 10).unwrap().len(), 1);
+        assert_eq!(
+            store
+                .search_history("widget", &HistoryFilter::default(), 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            store
+                .search_history("patc", &HistoryFilter::default(), 10)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -1585,7 +1848,13 @@ mod tests {
         // index the same executions again, or hits would multiply.
         for _ in 0..2 {
             let store = open_test(&db).unwrap();
-            assert_eq!(store.search_history("example.co", 10).unwrap().len(), 3);
+            assert_eq!(
+                store
+                    .search_history("example.co", &HistoryFilter::default(), 10)
+                    .unwrap()
+                    .len(),
+                3
+            );
         }
 
         // Hits written after a reopen are indexed on insert, not only by the
@@ -1599,7 +1868,9 @@ mod tests {
                 1_700_000_100_000,
             ))
             .unwrap();
-        let hits = store.search_history("example.co", 10).unwrap();
+        let hits = store
+            .search_history("example.co", &HistoryFilter::default(), 10)
+            .unwrap();
         assert_eq!(hits.len(), 4);
         assert_eq!(hits[0].url, "https://api.example.com/items/newest");
     }

@@ -14,7 +14,8 @@ use std::sync::Mutex;
 use restbook_core::secrets::{self, SecretSlot, REDACTED};
 use restbook_core::store::Draft;
 use restbook_core::{
-    Collection, Environment, Error, HistoryEntry, HistoryHit, Kv, Origin, Result, Store,
+    Collection, Environment, Error, HistoryEntry, HistoryFilter, HistoryHit, Kv, Origin, Result,
+    Store,
 };
 use serde::{Deserialize, Serialize};
 
@@ -228,8 +229,13 @@ impl Store for FolderStore {
         self.history.append_history(entry)
     }
 
-    fn search_history(&self, query: &str, limit: u32) -> Result<Vec<HistoryHit>> {
-        self.history.search_history(query, limit)
+    fn search_history(
+        &self,
+        query: &str,
+        filter: &HistoryFilter,
+        limit: u32,
+    ) -> Result<Vec<HistoryHit>> {
+        self.history.search_history(query, filter, limit)
     }
 
     fn get_history(&self, id: i64) -> Result<Option<HistoryEntry>> {
@@ -252,8 +258,13 @@ impl Store for FolderStore {
         self.history.delete_history_for_origin(origin)
     }
 
-    fn history_for_origin(&self, origin: &Origin, limit: u32) -> Result<Option<Vec<HistoryHit>>> {
-        self.history.history_for_origin(origin, limit)
+    fn history_for_origin(
+        &self,
+        origin: &Origin,
+        filter: &HistoryFilter,
+        limit: u32,
+    ) -> Result<Option<Vec<HistoryHit>>> {
+        self.history.history_for_origin(origin, filter, limit)
     }
 
     fn reassign_history_origin(&self, from: &Origin, to: &Origin) -> Result<u64> {
@@ -948,7 +959,9 @@ mod tests {
         };
         store.append_history(&entry).unwrap();
 
-        let hits = store.search_history("", 10).unwrap();
+        let hits = store
+            .search_history("", &HistoryFilter::default(), 10)
+            .unwrap();
         assert_eq!(hits.len(), 1);
         assert!(dir.join(STATE_DIR).join(HISTORY_FILE).is_file());
         // The history file is not at the root, so it cannot be committed by

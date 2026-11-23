@@ -181,7 +181,8 @@ async fn main() -> Result<()> {
             .await
         }
         Command::History { query, limit } => {
-            let hits = store.search_history(&query, limit)?;
+            let hits =
+                store.search_history(&query, &restbook_core::HistoryFilter::default(), limit)?;
             if hits.is_empty() {
                 println!("no history yet ({})", store.path().display());
                 return Ok(());
