@@ -11,7 +11,7 @@
 //! A capture is never written into `restbook.log`, so expiring it cannot erase
 //! the ordinary record.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -158,7 +158,7 @@ pub(crate) fn start_debug_capture() -> Result<PathBuf, &'static str> {
     }
 
     let dir = log_dir();
-    fs::create_dir_all(&dir).map_err(|_| "could not create the log directory")?;
+    restbook_store::secure::create_dir(&dir).map_err(|_| "could not create the log directory")?;
 
     // One capture at a time. Drop the old handle before pruning, or Windows
     // refuses to remove the file that is still open.
@@ -176,12 +176,8 @@ pub(crate) fn start_debug_capture() -> Result<PathBuf, &'static str> {
         "{DEBUG_PREFIX}{}.log",
         chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
     ));
-    let file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&path)
-        .map_err(|_| "could not create the debug log")?;
+    let file =
+        restbook_store::secure::create(&path).map_err(|_| "could not create the debug log")?;
 
     {
         let mut capture = DEBUG
@@ -437,14 +433,14 @@ impl Write for Tee {
 /// log is a backstop, and an unbounded set of rotated files is not.
 fn open(path: &Path) -> Option<File> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).ok()?;
+        restbook_store::secure::create_dir(parent).ok()?;
     }
     if fs::metadata(path).map(|meta| meta.len()).unwrap_or(0) > MAX_BYTES {
         let backup = path.with_extension("log.1");
         let _ = fs::remove_file(&backup);
         let _ = fs::rename(path, backup);
     }
-    OpenOptions::new().create(true).append(true).open(path).ok()
+    restbook_store::secure::open_append(path).ok()
 }
 
 #[cfg(test)]
@@ -519,6 +515,24 @@ mod tests {
             std::fs::read_to_string(&path).unwrap(),
             "hello from the tee\n"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The log carries redacted URLs but still enough detail to be worth
+    /// keeping private: `0600` where the platform has a mode.
+    #[cfg(unix)]
+    #[test]
+    fn the_log_file_is_private() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = std::env::temp_dir().join("restbook-log-private-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("nested").join("restbook.log");
+
+        drop(open(&path).expect("a fresh log file"));
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "the log should be private");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
