@@ -104,12 +104,12 @@ impl FolderStore {
     /// Open (or create) a workspace at `root`.
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
-        fs::create_dir_all(&root)?;
-        fs::create_dir_all(root.join(COLLECTIONS_DIR))?;
-        fs::create_dir_all(root.join(ENVIRONMENTS_DIR))?;
+        crate::secure::create_dir(&root)?;
+        crate::secure::create_dir(&root.join(COLLECTIONS_DIR))?;
+        crate::secure::create_dir(&root.join(ENVIRONMENTS_DIR))?;
 
         let state = root.join(STATE_DIR);
-        fs::create_dir_all(&state)?;
+        crate::secure::create_dir(&state)?;
 
         // `JsonlStore` renames sources into place and is happy with an empty
         // directory; history is plaintext here on purpose, because the
@@ -219,7 +219,7 @@ impl FolderStore {
             .map_err(|_| Error::Store("local workspace lock poisoned".to_owned()))?;
         let outcome = edit(&mut local);
         local.normalize();
-        write_json(&self.root.join(LOCAL_FILE), &*local)?;
+        write_json(&self.root.join(LOCAL_FILE), &*local, true)?;
         Ok(outcome)
     }
 }
@@ -313,14 +313,14 @@ impl Store for FolderStore {
             Some(existing) => {
                 let wanted = self.collection_dir(collection);
                 if existing != wanted {
-                    fs::create_dir_all(&wanted)?;
+                    crate::secure::create_dir(&wanted)?;
                     fs::rename(&existing, &wanted)?;
                 }
                 wanted
             }
             None => {
                 let wanted = self.collection_dir(collection);
-                fs::create_dir_all(&wanted)?;
+                crate::secure::create_dir(&wanted)?;
                 wanted
             }
         };
@@ -341,9 +341,9 @@ impl Store for FolderStore {
                 redact_into(slot, &mut local.secrets)
             });
             local.normalize();
-            write_json(&self.root.join(LOCAL_FILE), &*local)?;
+            write_json(&self.root.join(LOCAL_FILE), &*local, true)?;
         }
-        write_json(&dir.join(COLLECTION_FILE), &redacted)
+        write_json(&dir.join(COLLECTION_FILE), &redacted, false)
     }
 
     fn delete_collection(&self, id: &str) -> Result<()> {
@@ -418,7 +418,7 @@ impl Store for FolderStore {
                 let _ = fs::remove_file(&existing);
             }
         }
-        fs::create_dir_all(self.root.join(ENVIRONMENTS_DIR))?;
+        crate::secure::create_dir(&self.root.join(ENVIRONMENTS_DIR))?;
         // Same rule as a collection: the tracked file keeps the row, so
         // `{{TOKEN}}` still resolves and the variable list still diffs, but a
         // `secret` row ships as a placeholder and the value stays local.
@@ -436,9 +436,9 @@ impl Store for FolderStore {
                 redact_into(slot, &mut local.secrets)
             });
             local.normalize();
-            write_json(&self.root.join(LOCAL_FILE), &*local)?;
+            write_json(&self.root.join(LOCAL_FILE), &*local, true)?;
         }
-        write_json(&wanted, &redacted)
+        write_json(&wanted, &redacted, false)
     }
 
     fn delete_environment(&self, name: &str) -> Result<()> {
@@ -637,6 +637,7 @@ fn write_marker(root: &Path, version: u32) -> Result<()> {
             version,
             name: None,
         },
+        false,
     )
 }
 
@@ -669,7 +670,7 @@ target/
 /// a `struct` alone is already deterministic, but going through
 /// `serde_json::Value` costs one allocation on a path that runs at most once per
 /// save.
-fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+fn write_json<T: Serialize>(path: &Path, value: &T, private: bool) -> Result<()> {
     let value = serde_json::to_value(value)?;
     let sorted = sort_keys(value);
     let mut bytes = serde_json::to_vec_pretty(&sorted)?;
@@ -677,13 +678,17 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
+            crate::secure::create_dir(parent)?;
         }
     }
 
     // Atomic: a crash mid-write leaves the previous file, not a truncated one.
     let temp = temp_path(path);
-    let mut file = File::create(&temp)?;
+    let mut file = if private {
+        crate::secure::create(&temp)?
+    } else {
+        File::create(&temp)?
+    };
     file.write_all(&bytes)?;
     file.flush()?;
     drop(file);
@@ -1254,5 +1259,34 @@ mod tests {
         store.save_collection(&collection).unwrap();
         let second = fs::read(&file).unwrap();
         assert_eq!(first, second, "a re-save produced a diff");
+    }
+
+    /// `restbook.local.json` is the one file in a workspace that holds real
+    /// credentials, so it is `0600` where the platform has a mode.
+    #[cfg(unix)]
+    #[test]
+    fn the_local_secrets_file_is_private() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = temp_dir("local-private");
+        let mut collection = sample_collection("col-1", "Example");
+        let CollectionItem::Folder(folder) = &mut collection.items[0] else {
+            unreachable!();
+        };
+        let CollectionItem::Request(saved) = &mut folder.items[0] else {
+            unreachable!();
+        };
+        saved.request.auth = restbook_core::Auth::Bearer {
+            token: "super-secret-token".to_owned(),
+        };
+
+        FolderStore::open(&dir)
+            .unwrap()
+            .save_collection(&collection)
+            .unwrap();
+
+        let local = dir.join(LOCAL_FILE);
+        let mode = fs::metadata(&local).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "{LOCAL_FILE} should be private");
     }
 }

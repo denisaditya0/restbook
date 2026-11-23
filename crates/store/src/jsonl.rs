@@ -5,7 +5,7 @@
 //! drafts are low-frequency and edited as a whole, so they live in a single
 //! `workspace.json` beside the history file and are rewritten atomically.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -45,10 +45,10 @@ impl JsonlStore {
         let path = path.as_ref().to_path_buf();
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)?;
+                crate::secure::create_dir(parent)?;
             }
         }
-        OpenOptions::new().create(true).append(true).open(&path)?;
+        crate::secure::open_append(&path)?;
 
         let workspace_path = workspace_path_for(&path);
         let workspace = read_workspace(&workspace_path)?;
@@ -106,14 +106,14 @@ fn read_workspace(path: &Path) -> Result<Workspace> {
 fn write_workspace(path: &Path, workspace: &Workspace) -> Result<()> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
+            crate::secure::create_dir(parent)?;
         }
     }
 
     let bytes = serde_json::to_vec_pretty(workspace)?;
     let temp = temp_path(path);
 
-    let mut file = File::create(&temp)?;
+    let mut file = crate::secure::create(&temp)?;
     file.write_all(&bytes)?;
     file.flush()?;
     drop(file);
@@ -128,12 +128,12 @@ fn write_workspace(path: &Path, workspace: &Workspace) -> Result<()> {
 fn write_history(path: &Path, entries: &[HistoryEntry]) -> Result<()> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
+            crate::secure::create_dir(parent)?;
         }
     }
 
     let temp = temp_path(path);
-    let mut file = File::create(&temp)?;
+    let mut file = crate::secure::create(&temp)?;
     for entry in entries {
         writeln!(file, "{}", serde_json::to_string(entry)?)?;
     }
@@ -186,10 +186,7 @@ impl Store for JsonlStore {
         let mut stored = entry.clone();
         stored.id = next_id;
 
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)?;
+        let mut file = crate::secure::open_append(&self.path)?;
         writeln!(file, "{}", serde_json::to_string(&stored)?)?;
         file.flush()?;
         Ok(next_id)
@@ -687,5 +684,26 @@ mod tests {
 
         reopened.delete_draft(id).unwrap();
         assert!(reopened.drafts().unwrap().is_empty());
+    }
+
+    /// History holds response bodies and `workspace.json` holds drafts and
+    /// secrets, so both are `0600` where the platform has a mode.
+    #[cfg(unix)]
+    #[test]
+    fn the_history_and_snapshot_are_private() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = temp_dir("restbook-jsonl-private-test");
+        let history = dir.join("history.jsonl");
+        let store = JsonlStore::open(&history).unwrap();
+        store.append_history(&sample_entry()).unwrap();
+        store
+            .save_globals(&[restbook_core::Kv::new("token", "x")])
+            .unwrap();
+
+        for path in [history, store.workspace_path().to_path_buf()] {
+            let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "{} should be private", path.display());
+        }
     }
 }
