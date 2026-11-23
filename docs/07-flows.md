@@ -91,6 +91,7 @@ not a registry, so this list is exhaustive.
 | Previous tab | `ctrl-shift-tab` / `ctrl-pageup` | select the previous tab, wrapping at the start | Center (tab strip) | `Workspace::select_relative` |
 | Reopen closed tab | `secondary-shift-t` | restore the most recently closed tab | Center (tab strip) | `Workspace::reopen_closed_tab` |
 | Focus URL | `secondary-l` | focus the URL field | Center | `RequestPanel::focus_url` |
+| Find in response | `secondary-f` | open the find row and focus it; Enter steps forward, Shift+Enter back, Escape closes | Center (Response) | `ResponsePanel::open_find` |
 | Paste cURL | `secondary-shift-v` | clipboard → `RequestDef`, adopt it, then offer to save it | Center | `RequestPanel::paste_curl` |
 | Import… | `secondary-shift-i` | file picker → `import::parse` → save each collection, then a result dialog | Overlay (dialog) + Left dock | `Workspace::import_file` |
 | Export… | `secondary-shift-e` | picker → `import::export` → save prompt → write the file | Overlay (dialog) + Chrome (notification) | `Workspace::open_export_dialog` |
