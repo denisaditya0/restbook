@@ -196,6 +196,7 @@ impl Workspace {
             })
             .detach();
 
+            let request_started = std::time::Instant::now();
             let response = match transport
                 .execute_with_progress(prepared, cancel, progress)
                 .await
@@ -204,20 +205,14 @@ impl Workspace {
                 Err(error) => {
                     done.store(true, Ordering::Relaxed);
                     let canceled = matches!(error, Error::Cancelled);
-                    if canceled {
-                        log::debug!(target: "restbook_app::send", "cancelled: {sent_url}");
-                    } else {
-                        log::error!(
-                            target: "restbook_app::send",
-                            "failed: {}: {error}",
-                            crate::logging::redact_url(&sent_url)
-                        );
-                    }
                     let failure = if canceled {
                         None
                     } else {
                         Some(error.failure())
                     };
+                    // Paint first. The log sink writes synchronously to stderr
+                    // and a file, and doing that before the document update
+                    // puts a slow console between the failure and the view.
                     this.update(cx, |this, cx| {
                         // The transfer is over, whichever tab is on screen.
                         if this.sending == Some(send_id) {
@@ -253,6 +248,26 @@ impl Workspace {
                         }
                     })
                     .ok();
+
+                    // The timestamp separates "the wire took 2.5 s" from "the
+                    // pane took 2.5 s"; the log write itself is off the
+                    // foreground so it cannot be the latter.
+                    let elapsed = request_started.elapsed().as_millis();
+                    let shown_url = crate::logging::redact_url(&sent_url);
+                    cx.background_spawn(async move {
+                        if canceled {
+                            log::debug!(
+                                target: "restbook_app::send",
+                                "cancelled after {elapsed}ms: {sent_url}"
+                            );
+                        } else {
+                            log::error!(
+                                target: "restbook_app::send",
+                                "failed after {elapsed}ms: {shown_url}: {error}"
+                            );
+                        }
+                    })
+                    .detach();
                     return;
                 }
             };
