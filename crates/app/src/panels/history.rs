@@ -9,12 +9,12 @@ use std::sync::Arc;
 
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputState};
-use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::{h_flex, v_flex, Selectable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use restbook_core::{HistoryHit, Origin, Store};
+use restbook_core::{HistoryFilter, HistoryHit, Method, Origin, Store};
 
 use crate::document::Document;
 use crate::icons::{self, IconName};
@@ -54,6 +54,57 @@ enum Scope {
     Request,
 }
 
+/// How far back the *When* filter reaches. Presets rather than two date
+/// pickers: the dock is narrow, and "since" is what a history scan asks.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum SentWithin {
+    #[default]
+    Any,
+    Last24Hours,
+    Last7Days,
+    Last30Days,
+}
+
+impl SentWithin {
+    fn label(self) -> &'static str {
+        match self {
+            SentWithin::Any => "Any time",
+            SentWithin::Last24Hours => "Last 24 hours",
+            SentWithin::Last7Days => "Last 7 days",
+            SentWithin::Last30Days => "Last 30 days",
+        }
+    }
+
+    fn since(self, now: chrono::DateTime<chrono::Utc>) -> Option<chrono::DateTime<chrono::Utc>> {
+        match self {
+            SentWithin::Any => None,
+            SentWithin::Last24Hours => Some(now - chrono::Duration::hours(24)),
+            SentWithin::Last7Days => Some(now - chrono::Duration::days(7)),
+            SentWithin::Last30Days => Some(now - chrono::Duration::days(30)),
+        }
+    }
+}
+
+const METHODS: [Method; 7] = [
+    Method::Get,
+    Method::Post,
+    Method::Put,
+    Method::Patch,
+    Method::Delete,
+    Method::Head,
+    Method::Options,
+];
+
+/// The status dimension: `None` is any, otherwise the first digit of a code.
+const STATUS_CLASSES: [(Option<u16>, &str); 6] = [
+    (None, "Any status"),
+    (Some(1), "1xx"),
+    (Some(2), "2xx"),
+    (Some(3), "3xx"),
+    (Some(4), "4xx"),
+    (Some(5), "5xx"),
+];
+
 pub(crate) struct HistoryPanel {
     palette: Palette,
     metrics: Metrics,
@@ -79,6 +130,11 @@ pub(crate) struct HistoryPanel {
     /// when the search started, so a slow one cannot paint over a newer query.
     reload_epoch: u64,
     query: Entity<InputState>,
+    /// The filter row's three dimensions. `None` is "any", so a fresh pane
+    /// shows every send and menuless state stays the default.
+    method: Option<Method>,
+    status_class: Option<u16>,
+    sent_within: SentWithin,
     /// The row the user picked, kept highlighted so the list reads as a list
     /// of choices rather than a wall of rows.
     selected: Option<i64>,
@@ -195,6 +251,7 @@ impl HistoryPanel {
             &Origin::default(),
             "",
             "",
+            &HistoryFilter::default(),
             limit,
         );
         Self {
@@ -209,6 +266,9 @@ impl HistoryPanel {
             error,
             reload_epoch: 0,
             query,
+            method: None,
+            status_class: None,
+            sent_within: SentWithin::Any,
             selected: None,
             focus_handle: cx.focus_handle(),
         }
@@ -233,13 +293,22 @@ impl HistoryPanel {
         let limit = self.settings.read(cx).current().history_limit;
         let store = self.store.clone();
         let scope = self.scope;
+        let filter = self.history_filter();
         let key = self.current_scope_key(cx);
         self.scope_key = key.clone();
 
         cx.spawn(async move |this, cx| {
             let (hits, error) = cx
                 .background_spawn(async move {
-                    search(store.as_ref(), scope, &key.0, &key.1, &query, limit)
+                    search(
+                        store.as_ref(),
+                        scope,
+                        &key.0,
+                        &key.1,
+                        &query,
+                        &filter,
+                        limit,
+                    )
                 })
                 .await;
             this.update(cx, |panel, cx| {
@@ -261,6 +330,24 @@ impl HistoryPanel {
         self.scope = Scope::Request;
         self.reload(cx);
         cx.notify();
+    }
+
+    /// The store-side shape of the filter row. Built on every search, so a
+    /// preset like *Last 7 days* always counts from the moment of the reload.
+    fn history_filter(&self) -> HistoryFilter {
+        HistoryFilter {
+            methods: self
+                .method
+                .map(|method| vec![method.as_str().to_owned()])
+                .unwrap_or_default(),
+            status_classes: self.status_class.into_iter().collect(),
+            since: self.sent_within.since(chrono::Utc::now()),
+            until: None,
+        }
+    }
+
+    fn filters_active(&self) -> bool {
+        self.method.is_some() || self.status_class.is_some() || self.sent_within != SentWithin::Any
     }
 
     /// What *This request* is scoped to, plus the revision that invalidates it.
@@ -317,6 +404,101 @@ impl HistoryPanel {
             .into_any_element()
     }
 
+    /// The filter control. One button, one menu: the dock can be 100 px wide,
+    /// so three pickers would not fit, and the checked items are the visible
+    /// state. Selecting a row replaces that dimension's choice.
+    fn filter_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        let panel = cx.entity();
+        let method = self.method;
+        let status = self.status_class;
+        let span = self.sent_within;
+        let active = self.filters_active();
+
+        let menu = move |mut menu: PopupMenu, _: &mut Window, _: &mut Context<PopupMenu>| {
+            menu = menu.item(PopupMenuItem::new("Method").disabled(true));
+            for choice in [None].into_iter().chain(METHODS.into_iter().map(Some)) {
+                let label = choice.map_or("Any method", Method::as_str);
+                let panel = panel.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(label)
+                        .checked(method == choice)
+                        .on_click(move |_, _, cx| {
+                            panel.update(cx, |this, cx| {
+                                this.method = choice;
+                                this.reload(cx);
+                                cx.notify();
+                            });
+                        }),
+                );
+            }
+
+            menu = menu.separator();
+            menu = menu.item(PopupMenuItem::new("Status").disabled(true));
+            for (choice, label) in STATUS_CLASSES {
+                let panel = panel.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(label)
+                        .checked(status == choice)
+                        .on_click(move |_, _, cx| {
+                            panel.update(cx, |this, cx| {
+                                this.status_class = choice;
+                                this.reload(cx);
+                                cx.notify();
+                            });
+                        }),
+                );
+            }
+
+            menu = menu.separator();
+            menu = menu.item(PopupMenuItem::new("When").disabled(true));
+            for choice in [
+                SentWithin::Any,
+                SentWithin::Last24Hours,
+                SentWithin::Last7Days,
+                SentWithin::Last30Days,
+            ] {
+                let panel = panel.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(choice.label())
+                        .checked(span == choice)
+                        .on_click(move |_, _, cx| {
+                            panel.update(cx, |this, cx| {
+                                this.sent_within = choice;
+                                this.reload(cx);
+                                cx.notify();
+                            });
+                        }),
+                );
+            }
+
+            menu.separator().item(
+                PopupMenuItem::new("Clear filters")
+                    .disabled(!active)
+                    .on_click({
+                        let panel = panel.clone();
+                        move |_, _, cx| {
+                            panel.update(cx, |this, cx| {
+                                this.method = None;
+                                this.status_class = None;
+                                this.sent_within = SentWithin::Any;
+                                this.reload(cx);
+                                cx.notify();
+                            });
+                        }
+                    }),
+            )
+        };
+
+        Button::new("history-filter")
+            .icon(IconName::ListFilter)
+            .ghost()
+            .compact()
+            .selected(active)
+            .tooltip("Filter history")
+            .dropdown_menu(menu)
+            .into_any_element()
+    }
+
     fn render_hits(&self, cx: &mut Context<Self>) -> AnyElement {
         let palette = &self.palette;
 
@@ -333,10 +515,16 @@ impl HistoryPanel {
         }
 
         if self.hits.is_empty() {
-            let message = match self.scope {
-                Scope::All => "Nothing sent yet.",
-                Scope::Request if self.document.read(cx).url().is_empty() => "No request open.",
-                Scope::Request => "Nothing sent for this request.",
+            let message = if self.scope == Scope::Request && self.document.read(cx).url().is_empty()
+            {
+                "No request open."
+            } else if self.filters_active() {
+                "No sends match these filters."
+            } else {
+                match self.scope {
+                    Scope::All => "Nothing sent yet.",
+                    Scope::Request => "Nothing sent for this request.",
+                }
             };
             return div()
                 .px(px(self.metrics.space_md))
@@ -409,13 +597,16 @@ fn search(
     origin: &Origin,
     url: &str,
     query: &str,
+    filter: &HistoryFilter,
     limit: u32,
 ) -> (Vec<HistoryHit>, Option<SharedString>) {
     let result = match scope {
-        Scope::All => store.search_history(query, limit),
+        Scope::All => store.search_history(query, filter, limit),
         // The owner's rows are the request's sends; the query box still filters
         // those rows, but it cannot widen the list past the owner.
-        Scope::Request => scoped_rows(store, origin, url, limit).map(|hits| filter(hits, query)),
+        Scope::Request => {
+            scoped_rows(store, origin, url, filter, limit).map(|hits| filter_by_query(hits, query))
+        }
     };
     match result {
         Ok(hits) => (hits, None),
@@ -438,21 +629,22 @@ pub(crate) fn scoped_rows(
     store: &dyn Store,
     origin: &Origin,
     url: &str,
+    filter: &HistoryFilter,
     limit: u32,
 ) -> restbook_core::Result<Vec<HistoryHit>> {
     let scoped = if *origin == Origin::Standalone {
         None
     } else {
-        store.history_for_origin(origin, limit)?
+        store.history_for_origin(origin, filter, limit)?
     };
     match scoped {
         Some(hits) => Ok(hits),
         None if url.is_empty() => Ok(Vec::new()),
-        None => store.search_history(url, limit),
+        None => store.search_history(url, filter, limit),
     }
 }
 
-fn filter(hits: Vec<HistoryHit>, query: &str) -> Vec<HistoryHit> {
+fn filter_by_query(hits: Vec<HistoryHit>, query: &str) -> Vec<HistoryHit> {
     let query = query.trim().to_lowercase();
     if query.is_empty() {
         return hits;
@@ -524,6 +716,7 @@ impl Render for HistoryPanel {
                             .flex_1()
                             .prefix(icons::quiet(IconName::Search, icons::SMALL, &palette)),
                     )
+                    .child(self.filter_button(cx))
                     .child(
                         h_flex()
                             .gap(px(self.metrics.space_xs))
@@ -552,7 +745,9 @@ impl Render for HistoryPanel {
 
 #[cfg(test)]
 mod tests {
-    use restbook_core::{HistoryEntry, Method, Origin, RequestDef, ResponseRecord, Store};
+    use restbook_core::{
+        HistoryEntry, HistoryFilter, Method, Origin, RequestDef, ResponseRecord, Store,
+    };
     use restbook_store::MemoryStore;
 
     use super::scoped_rows;
@@ -595,7 +790,14 @@ mod tests {
             },
         );
 
-        let rows = scoped_rows(&store, &owner, "https://example.com/a", 20).unwrap();
+        let rows = scoped_rows(
+            &store,
+            &owner,
+            "https://example.com/a",
+            &HistoryFilter::default(),
+            20,
+        )
+        .unwrap();
         assert_eq!(rows.len(), 2);
     }
 
@@ -607,10 +809,23 @@ mod tests {
         seed(&store, "https://example.com/a", Origin::Standalone);
         seed(&store, "https://example.com/b", Origin::Standalone);
 
-        let rows = scoped_rows(&store, &Origin::Standalone, "https://example.com/a", 20).unwrap();
+        let rows = scoped_rows(
+            &store,
+            &Origin::Standalone,
+            "https://example.com/a",
+            &HistoryFilter::default(),
+            20,
+        )
+        .unwrap();
         assert_eq!(rows.len(), 1);
-        assert!(scoped_rows(&store, &Origin::Standalone, "", 20)
-            .unwrap()
-            .is_empty());
+        assert!(scoped_rows(
+            &store,
+            &Origin::Standalone,
+            "",
+            &HistoryFilter::default(),
+            20,
+        )
+        .unwrap()
+        .is_empty());
     }
 }

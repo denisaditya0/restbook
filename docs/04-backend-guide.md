@@ -225,7 +225,7 @@ Implement three methods:
 
 ```rust
 fn append_history(&self, entry: &HistoryEntry) -> Result<i64>;
-fn search_history(&self, query: &str, limit: u32) -> Result<Vec<HistoryHit>>;
+fn search_history(&self, query: &str, filter: &HistoryFilter, limit: u32) -> Result<Vec<HistoryHit>>;
 fn get_history(&self, id: i64) -> Result<Option<HistoryEntry>>;
 ```
 
@@ -237,6 +237,13 @@ inside the store — that is the app's policy, passed in as a path/key.
 Empty `query` means "most recent", and ordering is newest-first in every
 implementation, because the history pane does not sort. `get_history` answers
 `Ok(None)` for an unknown id; the UI treats that as a stale row, not a failure.
+
+`HistoryFilter` is the search's narrowing: method names, status classes (`2`
+keeps `200..=299`), and an inclusive sent-at window. An empty field does not
+narrow, and the filter is applied **before** `limit`, so a backend must narrow
+its query rather than discard rows from a page it already took.
+`history_for_origin` takes the same filter; a backend that answers by owner and
+one that falls back to a URL search must agree on the result.
 
 ### What a history row restores
 

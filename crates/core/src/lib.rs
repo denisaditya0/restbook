@@ -33,7 +33,7 @@ pub use oauth::{
 pub use prepare::{
     default_headers, prepare, PartData, PreparedBody, PreparedPart, PreparedRequest,
 };
-pub use store::{Draft, HistoryEntry, HistoryHit, Origin, Store};
+pub use store::{Draft, HistoryEntry, HistoryFilter, HistoryHit, Origin, Store};
 pub use template::{resolve, VarContext};
 pub use testing::FakeTransport;
 pub use transport::{CancelToken, Progress, ProgressSnapshot, Transport};

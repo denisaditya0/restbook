@@ -852,6 +852,7 @@ impl ResponsePanel {
             self.store.as_ref(),
             &self.history_origin,
             &self.history_query,
+            &restbook_core::HistoryFilter::default(),
             HISTORY_ROWS,
         )
         .unwrap_or_default();
@@ -3101,7 +3102,7 @@ mod render_tests {
         };
         seed_owned_history(&store, url, 200, owner.clone());
         let id = store
-            .history_for_origin(&owner, 10)
+            .history_for_origin(&owner, &restbook_core::HistoryFilter::default(), 10)
             .unwrap()
             .unwrap()
             .first()

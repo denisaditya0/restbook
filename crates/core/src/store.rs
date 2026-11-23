@@ -3,6 +3,7 @@
 //! The app implementation encrypts everything (SQLCipher). The trait stays
 //! narrow so the UI only knows: record what happened, and look it up later.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
@@ -66,6 +67,58 @@ pub struct HistoryHit {
     pub at: String,
 }
 
+/// The narrowing a history search applies before its row limit.
+///
+/// Every field is empty or `None` by default, so `HistoryFilter::default()` is
+/// the unfiltered search. A status class is its first digit (`2` keeps
+/// `200..=299`), because a history list is scanned for outcomes rather than for
+/// one exact code. The filter is applied before `limit`, so a restricted list
+/// still fills its page.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HistoryFilter {
+    /// Methods to keep, matched case-insensitively; empty means any.
+    pub methods: Vec<String>,
+    /// Status classes to keep; empty means any.
+    pub status_classes: Vec<u16>,
+    /// Inclusive lower bound on when the request was sent.
+    pub since: Option<DateTime<Utc>>,
+    /// Inclusive upper bound on when the request was sent.
+    pub until: Option<DateTime<Utc>>,
+}
+
+impl HistoryFilter {
+    /// Whether the filter would narrow a search at all.
+    pub fn is_empty(&self) -> bool {
+        self.methods.is_empty()
+            && self.status_classes.is_empty()
+            && self.since.is_none()
+            && self.until.is_none()
+    }
+
+    pub fn matches_method(&self, method: &str) -> bool {
+        self.methods.is_empty()
+            || self
+                .methods
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(method))
+    }
+
+    pub fn matches_status(&self, status: u16) -> bool {
+        self.status_classes.is_empty() || self.status_classes.contains(&(status / 100))
+    }
+
+    pub fn matches_time(&self, at: DateTime<Utc>) -> bool {
+        self.since.is_none_or(|since| at >= since) && self.until.is_none_or(|until| at <= until)
+    }
+
+    /// Whether one stored entry passes every selected dimension.
+    pub fn matches_entry(&self, entry: &HistoryEntry) -> bool {
+        self.matches_method(entry.request.method.as_str())
+            && self.matches_status(entry.response.status)
+            && self.matches_time(entry.response.received_at)
+    }
+}
+
 /// The number of entries [`Store::trim_history`] keeps when the cap is `keep`.
 ///
 /// Trimming to exactly the cap would touch storage on every send once the
@@ -94,16 +147,29 @@ pub struct Draft {
 pub trait Store: Send + Sync + 'static {
     fn append_history(&self, entry: &HistoryEntry) -> Result<i64>;
 
-    /// Empty query means "most recent".
-    fn search_history(&self, query: &str, limit: u32) -> Result<Vec<HistoryHit>>;
+    /// Empty query means "most recent". The filter narrows the result before
+    /// `limit`, so a page of a filtered search is not cut short by rows it would
+    /// have discarded.
+    fn search_history(
+        &self,
+        query: &str,
+        filter: &HistoryFilter,
+        limit: u32,
+    ) -> Result<Vec<HistoryHit>>;
 
     /// History owned by one saved request or draft, newest first.
     ///
     /// `Ok(None)` means this backend cannot answer by owner yet, and the caller
     /// should fall back to a URL search. A backend that stores the owner returns
     /// `Ok(Some(rows))`, with an empty vector meaning "this owner has no sends" —
-    /// which is *not* the same thing as unsupported.
-    fn history_for_origin(&self, _origin: &Origin, _limit: u32) -> Result<Option<Vec<HistoryHit>>> {
+    /// which is *not* the same thing as unsupported. The filter applies the same
+    /// way it does to [`Store::search_history`].
+    fn history_for_origin(
+        &self,
+        _origin: &Origin,
+        _filter: &HistoryFilter,
+        _limit: u32,
+    ) -> Result<Option<Vec<HistoryHit>>> {
         Ok(None)
     }
 
