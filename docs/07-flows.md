@@ -138,6 +138,7 @@ This is the "intent as event" rule in action.
 | Tab close button / `secondary-w` | `Event::CloseTab(i)` | close that tab; a tab with unsaved edits asks through the close alert dialog first | Center, or Overlay (alert dialog) | `Workspace::confirm_close_tab` |
 | Paste-curl imported | `Event::Imported` | report a notification, then open the Save As dialog when a collection is selected | Overlay (notification, optionally a dialog) | `Workspace::imported` |
 | Paste-curl failed | `Event::Notice(_)` | report a notification with the parse error | Overlay (notification) | `Workspace::notice` |
+| Empty-state Import… button | `Event::Import` | open the file picker, land the file, show the result | Overlay (dialog) + Left dock | `Workspace::import_file` |
 
 ### Sidebar → workspace
 
@@ -213,11 +214,11 @@ Only a scope lookup can be unresolved.
 
 ## Overlays and dialogs
 
-The workspace is the only thing that opens a window-level surface. Four of them
+The workspace is the only thing that opens a window-level surface. Five of them
 are opened with a deliberate two-step: an event or a background task has no
-`Window`, so it parks the request (`pending_save`, `pending_history`,
-`pending_delete`, `pending_update`) and `render` consumes it with
-`window.defer`.
+`Window`, so it parks the request (`pending_save`, `pending_import`,
+`pending_history`, `pending_delete`, `pending_update`) and `render` consumes it
+with `window.defer`.
 
 | Surface | Triggered by | Position / size | Source |
 |---|---|---|---|

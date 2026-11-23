@@ -20,9 +20,7 @@ use gpui_kit::*;
 
 use restbook_core::{Method, OAuthConfig, RequestDef};
 
-use crate::actions::{
-    shortcut, CopyCurl, FocusUrl, ImportFile, NewTab, PasteCurl, SaveRequest, SendRequest,
-};
+use crate::actions::{shortcut, CopyCurl, FocusUrl, NewTab, PasteCurl, SaveRequest, SendRequest};
 use crate::completion::Autocomplete;
 use crate::document::Document;
 use crate::icons::{self, IconName};
@@ -59,6 +57,10 @@ pub(crate) enum Event {
     Imported,
     /// An import failed and wants to say why.
     Notice(Notice),
+    /// The empty-state button asked for a file. The pane holds no window, so the
+    /// workspace opens the picker from its next render, the same way it defers
+    /// a save.
+    Import,
     /// The Auth tab asked to fetch an OAuth token with these settings. The
     /// workspace runs it, because only it holds the transport.
     FetchToken(OAuthConfig),
@@ -83,6 +85,7 @@ impl Event {
             // A notice is logged by `Workspace::notice`, which also routes it
             // to the flash; logging it twice would just repeat the message.
             Event::Notice(_) => None,
+            Event::Import => Some("event: import file".to_owned()),
             Event::FetchToken(_) => Some("event: fetch oauth token".to_owned()),
         }
     }
@@ -938,9 +941,7 @@ impl RequestPanel {
                         Button::new("import-file-empty")
                             .label("Import…")
                             .icon(IconName::Upload)
-                            .on_click(|_, window, cx| {
-                                window.dispatch_action(Box::new(ImportFile), cx);
-                            }),
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::Import))),
                     ),
             )
             .into_any_element()

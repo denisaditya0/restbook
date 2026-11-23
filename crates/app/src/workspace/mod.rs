@@ -125,6 +125,10 @@ pub(crate) struct Workspace {
     /// A draft asked to be saved, but the dialog needs a window and the event the
     /// request arrived on had none. The next render opens the dialog.
     pending_save: bool,
+    /// The empty request state asked for a file to import. The event carries no
+    /// window, so the picker opens from the next render, the same way a save is
+    /// deferred.
+    pending_import: bool,
     /// Whether the response pane asked for its earlier sends. Set by its event
     /// and consumed by render, because the event carries no window and reveal
     /// needs one.
@@ -336,6 +340,7 @@ impl Workspace {
             focus_handle: cx.focus_handle(),
             save_name,
             pending_save: false,
+            pending_import: false,
             pending_history: false,
             pending_delete: None,
             pending_update: None,
@@ -452,6 +457,10 @@ impl Workspace {
                 RequestEvent::SaveAs => this.save_active_as(cx),
                 RequestEvent::Imported => this.imported(cx),
                 RequestEvent::Notice(notice) => this.notice(notice, cx),
+                RequestEvent::Import => {
+                    this.pending_import = true;
+                    cx.notify();
+                }
                 RequestEvent::FetchToken(config) => this.fetch_token(config.clone(), cx),
             }
         })
@@ -929,6 +938,15 @@ impl Render for Workspace {
             let this = cx.entity();
             window.defer(cx, move |window, cx| {
                 this.update(cx, |workspace, cx| workspace.open_save_dialog(window, cx));
+            });
+        }
+
+        // The empty-state import button has no window either; the picker is
+        // opened after this element returns, like every other deferred surface.
+        if std::mem::take(&mut self.pending_import) {
+            let this = cx.entity();
+            window.defer(cx, move |window, cx| {
+                this.update(cx, |workspace, cx| workspace.import_file(window, cx));
             });
         }
 
