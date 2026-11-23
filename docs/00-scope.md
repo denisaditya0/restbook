@@ -67,7 +67,7 @@ The engine's kept-current milestones are B1..B18, with B19..B24 planned, in
 | Borrowed | From | Kept | Rejected |
 |---|---|---|---|
 | Collections, profiles, templating | Slumber | The model | YAML as the system of record |
-| Offline, data ownership | Bruno | No account, local secrets | `.bru` plain text, built-in Git |
+| Offline, data ownership | Bruno | No account, local secrets | `.bru` plain text, built-in Git *(deferred; `1.0.0` at most)* |
 | Paste-curl, local-first UX | Yaak | Interaction ideas | Plugin runtime |
 | Feature vocabulary | Postman | Parameter tables, env switcher | Cloud, workspaces-as-a-service |
 | Widgets, dock layout | `gpui-kit` | Components | Building a widget system |
