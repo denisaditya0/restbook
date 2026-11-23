@@ -1112,11 +1112,11 @@ mod tests {
     #[tokio::test]
     async fn a_redirect_to_another_host_drops_the_credentials() {
         let (target, target_handle) = serve_sequence(vec![
-            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_owned(),
+            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned(),
         ])
         .await;
         let (first, first_handle) = serve_sequence(vec![format!(
-            "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{}/next\r\nContent-Length: 0\r\n\r\n",
+            "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{}/next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
             target.port()
         )])
         .await;
@@ -1142,8 +1142,9 @@ mod tests {
     #[tokio::test]
     async fn a_same_host_redirect_keeps_the_credentials() {
         let (address, handle) = serve_sequence(vec![
-            "HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 0\r\n\r\n".to_owned(),
-            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_owned(),
+            "HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .to_owned(),
+            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned(),
         ])
         .await;
 
