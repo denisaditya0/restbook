@@ -51,13 +51,16 @@ prerelease suffix: the updater's only URL is `releases/latest`, which never
 serves a prerelease, so a `0.2.0-beta.1` tag would publish something no client
 could ever find — or quietly take the `latest` marker from a real release.
 
-Versions are chosen by the size of the change, not by channel:
+Versions are chosen by what an upgrade can cost, not by how much code moved:
 
 | Change | Version |
 |---|---|
-| Bug fix, doc correction, CI change | patch — `0.1.3` |
-| A batch of user-visible features | minor — `0.2.0` |
-| First release that promises compatibility, or a breaking change | major — `1.0.0` |
+| A lane: a fix, a test, an internal split, or new surface that leaves persisted state and habits intact | patch — `0.1.4`, `0.1.9` |
+| Anything that changes what is on disk (a layout or settings schema, the workspace file layout, a new field in committed files) or a habit the user must relearn | minor — `0.2.0`, `0.4.0` |
+| The 1.0 compatibility promise, or a break after it | major — `1.0.0` |
+
+A patch can carry a whole feature — most of this app shipped in `0.1.x`. What a
+patch never does is move something an installed build cannot roll back.
 
 A beta channel used to exist for the cases where a bad release cannot be undone
 for someone who already installed it — a `history.db` migration, an installer
@@ -382,7 +385,7 @@ Most of this is code that either exists or fails, so the list stays short:
   says so on stderr and in the status bar; an install that silently changed mode
   is a support incident.
 - **Files.** The plaintext history and the local workspace file are created
-  `0600` where the platform supports it (`0.2.7`).
+  `0600` where the platform supports it (`0.1.9`).
 
 ## Not done yet
 

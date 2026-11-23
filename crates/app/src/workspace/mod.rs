@@ -26,10 +26,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui_kit::component::button::*;
+use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::dock::{DockArea, DockEvent, DockSkin};
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{h_flex, v_flex, WindowExt as _};
 use gpui_kit::*;
 
@@ -38,8 +40,8 @@ use restbook_transport::ReqwestTransport;
 
 use crate::actions::{
     self as actions, CloseTab, CopyCurl, ExportFile, ImportFile, NewTab, NextTab, OpenSettings,
-    PreviousTab, ReopenClosedTab, ResetZoom, SaveRequestAs, ToggleCommandPalette, ToggleSidebar,
-    ToggleTools, ZoomIn, ZoomOut,
+    PreviousTab, ReopenClosedTab, ResetZoom, SaveRequestAs, ShowShortcuts, ToggleCommandPalette,
+    ToggleSidebar, ToggleTools, ZoomIn, ZoomOut,
 };
 use crate::document::Document;
 use crate::icons::IconName;
@@ -284,6 +286,9 @@ impl Workspace {
         let variables = cx.new(|cx| Variables::new(store.clone(), cx));
         let save_name = cx.new(|cx| InputState::new(window, cx).placeholder("Request name"));
         let settings = cx.new(|_| settings::Settings::new(state_dir.join(settings::SETTINGS_FILE)));
+        if let Some(root) = &workspace_root {
+            settings.update(cx, |settings, cx| settings.record_workspace(root, cx));
+        }
 
         // Install the theme *before* any pane is built: every pane snapshots
         // its palette with `Palette::new(cx)` in its constructor, so the tokens
@@ -747,6 +752,66 @@ impl Workspace {
         });
     }
 
+    /// Open another workspace by starting a fresh process in it. The store and
+    /// every pane are built from the root at startup, so this is a relaunch,
+    /// not an in-place switch; the child is pinned with `RESTBOOK_WORKSPACE`.
+    pub(crate) fn open_workspace(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        match storage::relaunch_in_workspace(&root) {
+            Ok(()) => cx.quit(),
+            Err(error) => self.notice_flash(
+                chrome::FlashKind::Error,
+                format!("Couldn\u{2019}t open {}: {error}", root.display()),
+                cx,
+            ),
+        }
+    }
+
+    /// Show the keyboard shortcuts sheet. The rows come from the palette's own
+    /// command table and the live keymap, so a rebinding changes the sheet with
+    /// no second list to edit.
+    fn open_shortcuts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let rows = command_palette::shortcut_rows(window);
+        let palette = Palette::new(cx);
+        let metrics = Metrics::current(cx);
+
+        window.open_dialog(cx, move |dialog, _, _| {
+            let rows = rows.clone();
+            let list = v_flex()
+                .gap(px(metrics.space_xs))
+                .max_h(px(480.))
+                .overflow_y_scrollbar()
+                .children(rows.iter().map(|(label, hint)| {
+                    h_flex()
+                        .justify_between()
+                        .items_center()
+                        .gap(px(metrics.space_md))
+                        .child(div().text_sm().child(label.clone()))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(palette.muted)
+                                .child(hint.clone()),
+                        )
+                }));
+
+            dialog
+                .title("Keyboard shortcuts")
+                .w_112()
+                .child(list)
+                .footer(
+                    DialogFooter::new().child(
+                        Button::new("shortcuts-close")
+                            .label("Close")
+                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                    ),
+                )
+                .on_ok(|_, window, cx| {
+                    window.close_dialog(cx);
+                    true
+                })
+        });
+    }
+
     fn run_command(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
         log::debug!(target: "restbook_app::ui", "command: {command:?}");
         match command {
@@ -787,6 +852,7 @@ impl Workspace {
             Command::ToggleCollections => self.toggle_sidebar(window, cx),
             Command::ResetLayout => self.reset_layout(window, cx),
             Command::OpenSettings => self.open_settings(window, cx),
+            Command::ShowShortcuts => self.open_shortcuts(window, cx),
             Command::ZoomIn => self.zoom_by(theme::ZOOM_STEP, window, cx),
             Command::ZoomOut => self.zoom_by(1.0 / theme::ZOOM_STEP, window, cx),
             Command::ResetZoom => self.set_zoom(1.0, window, cx),
@@ -1087,6 +1153,16 @@ impl Render for Workspace {
                                 });
                             }),
                     );
+                    let shortcuts = workspace.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new("Keyboard shortcuts")
+                            .icon(IconName::Keyboard)
+                            .on_click(move |_, window, cx| {
+                                shortcuts.update(cx, |workspace, cx| {
+                                    workspace.open_shortcuts(window, cx)
+                                });
+                            }),
+                    );
                     // The clipboard pair is a request command, so it sits above
                     // the diagnostics block and below the window commands.
                     let paste = workspace.clone();
@@ -1299,6 +1375,9 @@ impl Render for Workspace {
             // same as the menu entry and the palette command.
             .on_action(
                 cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &ShowShortcuts, window, cx| this.open_shortcuts(window, cx)),
             )
             // Zoom is canvas-level for the same reason: it must work with focus
             // anywhere, and the level lives in the theme global rather than in

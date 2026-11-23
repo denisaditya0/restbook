@@ -65,6 +65,7 @@ so a space, `&`, `$`, or an embedded quote survives a paste into a terminal.
 | `secondary-\` | Show or hide the sidebar dock |
 | `secondary-/` | Show or hide the History + Environment dock |
 | `secondary-shift-p` | Command palette |
+| `?` | Show the keyboard shortcuts sheet when focus is not in a text field |
 | `secondary-,` | Settings |
 | `secondary-=` / `secondary-+` | Zoom in |
 | `secondary--` | Zoom out |
@@ -79,6 +80,11 @@ The palette searches the formatted shortcut as well as the label, so typing
 palette row (focusing and closing a pane, and resetting the layout, are
 palette-only). The window menu's **View** section lists every pane with a check
 for the one its dock is showing.
+
+`?` is a printable key, so its binding is scoped to `!Input`: it opens the sheet
+from the canvas, but a question mark typed into a URL or body stays text. Use
+the palette row or the window menu's **Keyboard shortcuts** entry from inside an
+editor.
 
 ## Completion
 

@@ -2059,6 +2059,48 @@ mod tests {
         }]
     }
 
+    /// A 3,000-request tree is filtered in one pass. The bound is deliberately
+    /// generous because a debug build is not a benchmark, but the measured time
+    /// belongs in the failure message: this is the test that keeps the `0.2.0`
+    /// filter rewrite honest about the tree the app is expected to survive. The
+    /// whole test, fixture included, ran in roughly 10 ms on the development
+    /// machine; the 250 ms bound leaves room for a slow CI scheduler.
+    #[test]
+    fn a_three_thousand_request_tree_filters_without_a_stall() {
+        let tree = large_tree(3_000);
+        let started = std::time::Instant::now();
+        let filtered = filter_tree(&tree, "needle-2999");
+        let elapsed = started.elapsed();
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].items.len(), 1);
+        assert!(
+            matches!(&filtered[0].items[0], CollectionItem::Request(request) if request.id == "req-2999"),
+            "the filter kept the wrong row",
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(250),
+            "filtering 3,000 requests took {elapsed:?}",
+        );
+    }
+
+    fn large_tree(count: usize) -> Vec<Collection> {
+        let items = (0..count)
+            .map(|index| {
+                CollectionItem::Request(saved(
+                    &format!("req-{index}"),
+                    Method::Get,
+                    &format!("https://example.com/needle-{index}"),
+                ))
+            })
+            .collect();
+        vec![Collection {
+            id: "col-large".to_owned(),
+            name: "Large".to_owned(),
+            items,
+        }]
+    }
+
     fn into_folder(id: &str) -> Selection {
         Selection {
             collection: Some("col-1".to_owned()),

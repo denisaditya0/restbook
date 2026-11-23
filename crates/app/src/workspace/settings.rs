@@ -52,6 +52,10 @@ pub(crate) struct AppSettings {
     /// clearing by hand.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) skipped_update: Option<String>,
+    /// Workspace roots this install has opened, newest first. Local to this
+    /// machine: a path is not useful to a teammate cloning the workspace.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) recent_workspaces: Vec<String>,
 }
 
 impl Default for AppSettings {
@@ -65,6 +69,7 @@ impl Default for AppSettings {
             theme: None,
             check_updates: true,
             skipped_update: None,
+            recent_workspaces: Vec::new(),
         }
     }
 }
@@ -87,6 +92,23 @@ pub(crate) const HISTORY_LIMIT_MAX: u32 = 1_000;
 /// a hand-edited or mistyped value from pinning a whole response-body archive.
 pub(crate) const HISTORY_MAX_ENTRIES_MIN: u32 = 100;
 pub(crate) const HISTORY_MAX_ENTRIES_MAX: u32 = 100_000;
+
+/// How many workspace roots the Storage page remembers. A short list stays
+/// scannable; an older entry is dropped rather than growing the file forever.
+pub(crate) const RECENT_WORKSPACES_MAX: usize = 8;
+
+/// Put `root` at the front of `recent`, without duplicates, capped to the
+/// recent list's length. Kept separate from [`Settings`] so the rule is testable
+/// without an `App`.
+pub(crate) fn remember_workspace(recent: &mut Vec<String>, root: &Path) {
+    let path = root.to_string_lossy().into_owned();
+    if path.trim().is_empty() {
+        return;
+    }
+    recent.retain(|each| each != &path);
+    recent.insert(0, path);
+    recent.truncate(RECENT_WORKSPACES_MAX);
+}
 
 /// Metadata for one numeric preference: the text the dialog shows and the
 /// bounds its value is held to.
@@ -240,6 +262,17 @@ impl Settings {
             self.current.save(path);
         }
     }
+
+    /// Record the workspace this session opened, so Storage can offer it again.
+    /// A no-op when the list would not change, so a normal launch does not
+    /// rewrite `settings.json` just to say what it already said.
+    pub(crate) fn record_workspace(&mut self, root: &Path, cx: &mut Context<Self>) {
+        let mut next = self.current.clone();
+        remember_workspace(&mut next.recent_workspaces, root);
+        if next.recent_workspaces != self.current.recent_workspaces {
+            self.update(next, cx);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -248,8 +281,30 @@ mod tests {
     // macro set shadows `#[test]`.
     use super::{
         AppSettings, NumberField, HISTORY_LIMIT_MAX, HISTORY_LIMIT_MIN, HISTORY_MAX_ENTRIES_MAX,
-        HISTORY_MAX_ENTRIES_MIN,
+        HISTORY_MAX_ENTRIES_MIN, RECENT_WORKSPACES_MAX,
     };
+
+    #[test]
+    fn a_workspace_is_remembered_once_and_the_list_is_bounded() {
+        use super::remember_workspace;
+        use std::path::Path;
+
+        let mut recent = Vec::new();
+        remember_workspace(&mut recent, Path::new("C:/work/one"));
+        remember_workspace(&mut recent, Path::new("C:/work/two"));
+        assert_eq!(recent, ["C:/work/two", "C:/work/one"]);
+
+        // Re-opening an old workspace moves it to the front instead of adding
+        // a second copy.
+        remember_workspace(&mut recent, Path::new("C:/work/one"));
+        assert_eq!(recent, ["C:/work/one", "C:/work/two"]);
+
+        for index in 0..(RECENT_WORKSPACES_MAX + 3) {
+            remember_workspace(&mut recent, Path::new(&format!("C:/work/{index}")));
+        }
+        assert_eq!(recent.len(), RECENT_WORKSPACES_MAX);
+        assert_eq!(recent[0], format!("C:/work/{}", RECENT_WORKSPACES_MAX + 2));
+    }
 
     #[test]
     fn the_defaults_are_the_behavior_the_app_had_before_settings_existed() {
