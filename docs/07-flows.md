@@ -164,6 +164,7 @@ This is the "intent as event" rule in action.
 | Body toolbar: format switch, copy body, copy summary | (local) | pretty/raw, or write the body or the status line to the clipboard | Center (Response) | `ResponsePanel::render_body_toolbar` |
 | Error view: capture debug | (local) | start a ten-minute `restbook-debug-<timestamp>.log` capture and name its path in a notification | Overlay (notification) | `logging::start_debug_capture` |
 | Error view: Retry | `ResponseEvent::Retry` | send the same request again through `Workspace::send`, so the unresolved-variable and pending guards still apply | Center → wire | `ResponsePanel::render_failure` |
+| Error view: Details | (local) | disclose the engine message and read the recent log for the first time; a later success closes it again | Center (Response) | `ResponsePanel::toggle_failure_details` |
 
 The Cookies tab draws the session jar for the request's URL, because those are
 the cookies a send would carry. A response restored from history has no jar

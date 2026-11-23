@@ -19,7 +19,7 @@ pub mod testing;
 pub mod transport;
 pub mod vars;
 
-pub use error::{Error, Result};
+pub use error::{Error, Failure, FailureKind, Result};
 pub use generator::Generators;
 pub use model::{
     ApiKeyLocation, Auth, Body, Collection, CollectionItem, Environment, FileBody, Folder,
