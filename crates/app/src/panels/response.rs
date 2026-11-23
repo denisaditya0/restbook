@@ -179,6 +179,11 @@ pub(crate) struct ResponsePanel {
     /// `true` once the failure view has been painted, so the perf probe logs a
     /// frame and not every repaint.
     failure_painted: bool,
+    /// The [`Document::paint_key`] the last redraw was given. A send that
+    /// resolves without a response leaves the query and the history stamp
+    /// untouched, so this is what tells the pane its in-flight strip has
+    /// become a failure view.
+    painted: (ResponseState, Option<String>),
     focus_handle: FocusHandle,
 }
 
@@ -802,6 +807,7 @@ impl ResponsePanel {
             failure_details: false,
             failure_log: None,
             failure_painted: false,
+            painted: (ResponseState::Idle, None),
             focus_handle: cx.focus_handle(),
         };
         panel.sync_history(cx);
@@ -819,11 +825,11 @@ impl ResponsePanel {
 
     /// Refresh the cached history when the current request or its newest
     /// response changed, then redraw. Progress ticks notify many times per
-    /// second and must not each search the store, so the store is hit and the
-    /// pane redraws only on a real change in `(query, stamp)` — plus every tick
-    /// while pending, since the elapsed clock is derived at paint time.
+    /// second and must not each search the store, so the store is hit only on a
+    /// real change in `(query, stamp)` — plus every tick while pending, since
+    /// the elapsed clock is derived at paint time.
     fn sync_history(&mut self, cx: &mut Context<Self>) {
-        let (pending, query, origin, stamp, revision) = {
+        let (pending, query, origin, stamp, revision, painted) = {
             let document = self.document.read(cx);
             let query = document
                 .last_url
@@ -839,6 +845,7 @@ impl ResponsePanel {
                 document.origin.clone(),
                 stamp,
                 document.history_revision,
+                document.paint_key(),
             )
         };
 
@@ -860,10 +867,16 @@ impl ResponsePanel {
             );
         }
 
+        // The redraw has its own reason. A failure or a cancel leaves the query
+        // and the stamp exactly as they were, so `changed` stays false while the
+        // pane is still painting the screen the in-flight send put there.
+        let repaint = painted != self.painted;
+        self.painted = painted;
+
         // While pending the clock has to advance on every heartbeat; once the
         // send resolves, a notify is a one-off, so a redraw with an unchanged
         // key would only burn a frame.
-        if pending || changed {
+        if pending || changed || repaint {
             cx.notify();
         }
     }
