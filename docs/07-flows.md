@@ -139,6 +139,7 @@ This is the "intent as event" rule in action.
 | Paste-curl imported | `Event::Imported` | report a notification, then open the Save As dialog when a collection is selected | Overlay (notification, optionally a dialog) | `Workspace::imported` |
 | Paste-curl failed | `Event::Notice(_)` | report a notification with the parse error | Overlay (notification) | `Workspace::notice` |
 | Empty-state Import… button | `Event::Import` | open the file picker, land the file, show the result | Overlay (dialog) + Left dock | `Workspace::import_file` |
+| Editor menu: Copy as cURL | `Event::CopyCurl` | live `RequestDef` → `curl::to_curl` → clipboard | Window (any pane) | `Workspace::copy_curl` |
 
 ### Sidebar → workspace
 
