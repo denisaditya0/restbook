@@ -437,7 +437,7 @@ titlebar (34px, app-drawn)     workspace chip › request › url   …   window
 │     GET /users             │    │ Response  200 · 812 ms · 1.2k │
 │                            │    │ Body Headers Cookies          │
 └────────────────────────────┘    └───────────────────────────────┘
-status bar (24px)   storage mode · environment      last exchange / last error
+status bar (24px)   storage mode · history protection   last exchange / last error
 ```
 
 The left dock defaults to **Collections**, not History: history is a record of
@@ -479,7 +479,7 @@ fixes the clock and the seed.
 ## Where data goes
 
 `storage.rs::open_store` is the single decision point, and it returns a
-`StoreChoice { store, name, workspace_root }`:
+`StoreChoice { store, name, workspace_root, history }`:
 
 - A **workspace** — a directory with a `restbook.json` marker — wins. It is
   located by `RESTBOOK_WORKSPACE` (explicit, must be marked) or by walking up
@@ -494,13 +494,20 @@ point, and switching stores live would strand every pane's cached collections.
 An "Open Folder as Workspace…" action therefore relaunches (or reopens the
 window) rather than swapping the store behind the panes.
 
-The status bar's left chip reports the mode, so the user can always answer
-"where did my data go":
+The status bar's left chips report the mode and its protection, so the user can
+always answer "where did my data go" and "who can read it":
 
 | Chip | Mode | What it means |
 |---|---|---|
 | the workspace path | workspace | collections/environments are files in that directory |
-| `local database` | data directory | everything is in the per-user encrypted database, private to this machine |
+| `local database` | data directory | everything is in the per-user database, private to this machine |
+| `Encrypted` | encrypted history | the database is SQLCipher, keyed from the system keyring |
+| `Not encrypted` | plaintext history | a build without SQLCipher, a keyring that failed, or a folder workspace writes a readable JSONL file |
+| `Not saved` | in-memory history | the history file could not be opened; this session is lost on close |
+
+The protection chip's tooltip names the reason, because the bar is one line and
+a warning glyph alone would rely on color to be read. `HistoryMode` in
+`storage.rs` is what the chip matches on; it is decided once, with the store.
 
 `layout.json` always lives in the data directory, even in workspace mode: it is
 a UI preference, not something to commit.
@@ -965,7 +972,8 @@ which is how a portable or test build gets its own sandbox.
 `workspace/storage.rs` decides that directory and which store serves history: a
 fresh `SqlcipherStore` (the default build), falling back to plaintext
 `JsonlStore` in the same directory when SQLCipher is compiled out or the keyring
-is unavailable (announced on stderr). A legacy `.restbook/history.jsonl` from an
+is unavailable. The status bar names that fallback instead of leaving it to
+stderr, which a GUI user never reads. A legacy `.restbook/history.jsonl` from an
 older working-directory build is imported once — into the database when it is
 new, or copied next to the new JSONL file.
 
@@ -1096,8 +1104,9 @@ default arrangement changes; the user gets the new default and a fresh file.
   this, and the response pane's render test asserts it.
 - The status bar is not a second response header. Status, duration, and size are
   printed once, in the response pane's own header; the footer carries the
-  storage chip, the environment, the last sent URL, and engine messages
-  (`chrome::Status`). Adding a number to both is the duplication U43 removed.
+  storage chip, the history-protection chip, the last sent URL, and engine
+  messages (`chrome::Status`). Adding a number to both is the duplication U43
+  removed.
 - `gpui_kit::component::IconName` is the component's default list (~100 glyphs).
   Anything outside it — `Pencil`, `Trash`, `ClipboardCopy` — comes from
   `crate::icons::IconName` (the full Lucide catalog, embedded by `AllAssets`);

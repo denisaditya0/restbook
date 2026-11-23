@@ -76,6 +76,8 @@ pub(crate) struct Workspace {
     /// The workspace root, when one is open. `None` means the per-user database
     /// is in use, so collections are not shareable from this window.
     workspace_root: Option<PathBuf>,
+    /// How the history this session writes is protected, for the status bar.
+    history: storage::HistoryMode,
     /// The request, and the outcome of sending it. One per window; the tab
     /// strip swaps its contents in and out so panes can keep one entity.
     document: Entity<Document>,
@@ -265,6 +267,7 @@ impl Workspace {
             store,
             name: workspace_name,
             workspace_root,
+            history,
         } = storage::open_store(&state_dir);
         let transport =
             Arc::new(ReqwestTransport::new().expect("failed to start the restbook http runtime"));
@@ -328,6 +331,7 @@ impl Workspace {
             store,
             workspace_name,
             workspace_root,
+            history,
             document,
             variables,
             settings,
@@ -1331,6 +1335,7 @@ impl Render for Workspace {
                 &metrics,
                 &chrome::WorkspaceChip {
                     root: self.workspace_root.clone(),
+                    history: self.history,
                 },
                 &status,
                 left_toggle,
@@ -1714,7 +1719,10 @@ mod tests {
                     .child(chrome::status_bar(
                         &palette,
                         &metrics,
-                        &chrome::WorkspaceChip { root: None },
+                        &chrome::WorkspaceChip {
+                            root: None,
+                            history: crate::workspace::storage::HistoryMode::Encrypted,
+                        },
                         &chrome::Status::default(),
                         left_toggle,
                         right_toggle,
