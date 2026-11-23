@@ -11,14 +11,14 @@ use gpui_kit::base::{
 };
 use gpui_kit::component::button::*;
 use gpui_kit::component::highlighter::{HighlightTheme, SyntaxHighlighter};
-use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::tab::{TabBar, TabVariant};
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, WindowExt as _};
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Disableable as _, WindowExt as _};
 use gpui_kit::*;
 
-use restbook_core::{HistoryHit, Origin, ResponseRecord, Store};
+use restbook_core::{HistoryHit, Origin, ResponseRecord, Store, Transport};
 
 use std::ops::Range;
 use std::rc::Rc;
@@ -50,6 +50,10 @@ const HISTORY_ROWS: u32 = 20;
 pub(crate) enum Event {
     /// Show the prior sends of the request on screen.
     ShowHistory { hits: Vec<HistoryHit> },
+    /// Forget one cookie in the shared jar.
+    DeleteCookie { name: String },
+    /// Replace one cookie's value in the shared jar.
+    UpdateCookie { name: String, value: String },
 }
 
 /// One line for the interaction log. Exhaustive, so a new variant must name
@@ -59,6 +63,10 @@ impl Event {
         match self {
             Event::ShowHistory { hits } => {
                 format!("event: response history with {} rows", hits.len())
+            }
+            Event::DeleteCookie { name } => format!("event: response cookie delete {name}"),
+            Event::UpdateCookie { name, .. } => {
+                format!("event: response cookie update {name}")
             }
         }
     }
@@ -88,6 +96,27 @@ impl ResponseTab {
     }
 }
 
+/// One row of the Cookies tab: a cookie the session would send to the URL, or,
+/// when the session holds none for it, one the stored response set.
+struct CookieRow {
+    /// Element identity: index plus name, because two cookies can share a name
+    /// across paths.
+    key: String,
+    name: String,
+    value: String,
+    attributes: String,
+    /// Whether the row is in the live jar, which is what makes it editable.
+    live: bool,
+}
+
+/// An in-place edit of one cookie's value. The field is dropped with the edit,
+/// which also drops its subscription.
+struct CookieEdit {
+    name: String,
+    value: Entity<InputState>,
+    _subscription: Subscription,
+}
+
 pub(crate) struct ResponsePanel {
     palette: Palette,
     metrics: Metrics,
@@ -95,6 +124,12 @@ pub(crate) struct ResponsePanel {
     /// The history store, so the header can list the prior sends of the
     /// request whose response is showing.
     store: Arc<dyn Store>,
+    /// The shared session jar, read for the Cookies tab. Mutations go through
+    /// the workspace, which owns the transport.
+    transport: Arc<dyn Transport>,
+    /// The cookie row whose value is being edited, with its field. `None` when
+    /// every row is read-only.
+    cookie_edit: Option<CookieEdit>,
     /// The cached rows behind the history control. Refreshed when the request
     /// or the response changes; see [`ResponsePanel::sync_history`].
     history: Vec<HistoryHit>,
@@ -704,6 +739,7 @@ impl ResponsePanel {
     pub(crate) fn new(
         document: Entity<Document>,
         store: Arc<dyn Store>,
+        transport: Arc<dyn Transport>,
         settings: Entity<Settings>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -738,6 +774,8 @@ impl ResponsePanel {
             metrics: Metrics::current(cx),
             document,
             store,
+            transport,
+            cookie_edit: None,
             history: Vec::new(),
             history_query: String::new(),
             history_origin: Origin::default(),
@@ -1611,14 +1649,60 @@ impl ResponsePanel {
             .into_any_element()
     }
 
-    fn render_cookies(&self, response: &ResponseRecord) -> AnyElement {
+    /// The Cookies tab: what the session would send to this URL, one row
+    /// editable and removable at a time. A response restored from history has
+    /// no jar entries, so its cookies are listed read-only rather than offering
+    /// an edit that would change nothing.
+    fn render_cookies(&self, response: &ResponseRecord, cx: &mut Context<Self>) -> AnyElement {
         let palette = &self.palette;
-        let cookies = util::cookies(&response.headers);
-        if cookies.is_empty() {
+        let stored = util::cookies(&response.headers);
+        let session = self.transport.cookies(&self.document.read(cx).url());
+        let live = !session.is_empty();
+
+        let rows = if live {
+            session
+                .iter()
+                .enumerate()
+                .filter_map(|(index, pair)| {
+                    let (name, value) = pair.split_once('=')?;
+                    Some(CookieRow {
+                        key: format!("{index}-{name}"),
+                        attributes: stored
+                            .iter()
+                            .find(|cookie| cookie.name == name)
+                            .map(|cookie| cookie.attributes.clone())
+                            .unwrap_or_default(),
+                        name: name.to_owned(),
+                        value: value.to_owned(),
+                        live: true,
+                    })
+                })
+                .collect::<Vec<_>>()
+        } else {
+            stored
+                .into_iter()
+                .enumerate()
+                .map(|(index, cookie)| CookieRow {
+                    key: format!("{index}-{}", cookie.name),
+                    name: cookie.name,
+                    value: cookie.value,
+                    attributes: cookie.attributes,
+                    live: false,
+                })
+                .collect()
+        };
+
+        if rows.is_empty() {
             return empty_state("No cookies received.", palette);
         }
 
-        div()
+        let note = if live {
+            "The session sends these to this URL."
+        } else {
+            "This stored response is not in the session, so its cookies cannot be changed."
+        };
+
+        v_flex()
             .id("response-cookies")
             .debug_selector(|| "response-cookies".to_owned())
             .flex_1()
@@ -1628,31 +1712,191 @@ impl ResponsePanel {
             .py(px(self.metrics.space_sm))
             .font_family(palette.mono_font.clone())
             .text_size(px(self.metrics.font_small))
-            .children(cookies.into_iter().enumerate().map(|(index, cookie)| {
-                h_flex()
-                    .id(("response-cookie", index))
-                    .gap(px(self.metrics.space_md))
-                    .py(px(self.metrics.space_xs))
-                    .items_start()
-                    .border_b_1()
-                    .border_color(palette.border)
-                    .child(
-                        div()
-                            .w(px(160.))
-                            .flex_none()
-                            .text_color(palette.info)
-                            .child(cookie.name),
-                    )
-                    .child(div().w(px(200.)).flex_none().child(cookie.value))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_color(palette.muted)
-                            .child(cookie.attributes),
-                    )
-            }))
+            .child(
+                div()
+                    .pb(px(self.metrics.space_sm))
+                    .text_xs()
+                    .text_color(palette.muted)
+                    .child(note),
+            )
+            .children(rows.into_iter().map(|row| self.render_cookie_row(row, cx)))
             .into_any_element()
+    }
+
+    fn render_cookie_row(&self, row: CookieRow, cx: &mut Context<Self>) -> AnyElement {
+        let palette = &self.palette;
+        let metrics = &self.metrics;
+        let editing = self
+            .cookie_edit
+            .as_ref()
+            .is_some_and(|edit| edit.name == row.name);
+
+        let value: AnyElement = match (editing, self.cookie_edit.as_ref()) {
+            (true, Some(edit)) => div()
+                .flex_1()
+                .min_w_0()
+                .child(Input::new(&edit.value).id(format!("cookie-value-{}", row.key)))
+                .into_any_element(),
+            _ => div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .child(row.value.clone())
+                .into_any_element(),
+        };
+
+        let actions: AnyElement = if editing {
+            h_flex()
+                .flex_none()
+                .gap(px(metrics.space_xs))
+                .items_center()
+                .child(
+                    Button::new(format!("cookie-save-{}", row.key))
+                        .icon(IconName::Check)
+                        .ghost()
+                        .compact()
+                        .tooltip("Save cookie value")
+                        .on_click(cx.listener(|this, _, _, cx| this.commit_cookie_edit(cx))),
+                )
+                .child(
+                    Button::new(format!("cookie-cancel-{}", row.key))
+                        .icon(IconName::X)
+                        .ghost()
+                        .compact()
+                        .tooltip("Cancel")
+                        .on_click(cx.listener(|this, _, _, cx| this.cancel_cookie_edit(cx))),
+                )
+                .into_any_element()
+        } else {
+            let live = row.live;
+            let edit_name = row.name.clone();
+            let edit_value = row.value.clone();
+            let delete_name = row.name.clone();
+            let why = if live {
+                "Edit this cookie's value"
+            } else {
+                "This cookie is not in the session"
+            };
+            h_flex()
+                .flex_none()
+                .gap(px(metrics.space_xs))
+                .items_center()
+                .child(
+                    Button::new(format!("cookie-edit-{}", row.key))
+                        .icon(IconName::Pencil)
+                        .ghost()
+                        .compact()
+                        .disabled(!live)
+                        .tooltip(why)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.start_cookie_edit(
+                                edit_name.clone(),
+                                edit_value.clone(),
+                                window,
+                                cx,
+                            );
+                        })),
+                )
+                .child(
+                    Button::new(format!("cookie-delete-{}", row.key))
+                        .icon(IconName::Trash)
+                        .ghost()
+                        .compact()
+                        .disabled(!live)
+                        .tooltip("Delete this cookie")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.cookie_edit = None;
+                            cx.emit(Event::DeleteCookie {
+                                name: delete_name.clone(),
+                            });
+                        })),
+                )
+                .into_any_element()
+        };
+
+        h_flex()
+            .id(format!("response-cookie-{}", row.key))
+            .debug_selector({
+                let key = row.key.clone();
+                move || format!("response-cookie-{key}")
+            })
+            .gap(px(metrics.space_md))
+            .py(px(metrics.space_xs))
+            .items_center()
+            .border_b_1()
+            .border_color(palette.border)
+            .child(
+                div()
+                    .w(px(160.))
+                    .flex_none()
+                    .truncate()
+                    .text_color(palette.info)
+                    .child(row.name),
+            )
+            .child(value)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(palette.muted)
+                    .child(row.attributes),
+            )
+            .child(actions)
+            .into_any_element()
+    }
+
+    /// Begin editing one row in place. The field is created here, once, so the
+    /// caret survives a repaint; Enter commits through the subscription.
+    fn start_cookie_edit(
+        &mut self,
+        name: String,
+        value: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("cookie value"));
+        input.update(cx, |state, cx| {
+            state.set_value(value, window, cx);
+            state.focus(window, cx);
+        });
+        let subscription = cx.subscribe_in(&input, window, {
+            move |this, _input, event: &InputEvent, _window, cx| {
+                if matches!(
+                    event,
+                    InputEvent::PressEnter {
+                        secondary: false,
+                        shift: false
+                    }
+                ) {
+                    this.commit_cookie_edit(cx);
+                }
+            }
+        });
+        self.cookie_edit = Some(CookieEdit {
+            name,
+            value: input,
+            _subscription: subscription,
+        });
+        cx.notify();
+    }
+
+    /// Hand the edited value to the workspace, which owns the jar.
+    fn commit_cookie_edit(&mut self, cx: &mut Context<Self>) {
+        let Some(edit) = self.cookie_edit.take() else {
+            return;
+        };
+        let value = edit.value.read(cx).value().to_string();
+        cx.emit(Event::UpdateCookie {
+            name: edit.name,
+            value,
+        });
+        cx.notify();
+    }
+
+    fn cancel_cookie_edit(&mut self, cx: &mut Context<Self>) {
+        self.cookie_edit = None;
+        cx.notify();
     }
 
     fn render_response(
@@ -1672,7 +1916,7 @@ impl ResponsePanel {
                     .child(self.render_body(response, window, cx))
                     .into_any_element(),
                 ResponseTab::Headers => self.render_headers(response),
-                ResponseTab::Cookies => self.render_cookies(response),
+                ResponseTab::Cookies => self.render_cookies(response, cx),
             })
             .into_any_element()
     }
@@ -2143,6 +2387,7 @@ mod render_tests {
     use std::sync::Arc;
 
     use gpui_kit::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+    use restbook_core::testing::{FakeTransport, Reply};
     use restbook_core::{HistoryEntry, Method, Origin, RequestDef, ResponseRecord, Store};
     use restbook_store::MemoryStore;
 
@@ -2374,7 +2619,25 @@ mod render_tests {
         store: Arc<dyn Store>,
         last_url: Option<String>,
     ) -> (Entity<ResponsePanel>, &mut VisualTestContext) {
-        open_owned(cx, response, store, last_url, Origin::default())
+        open_owned(
+            cx,
+            response,
+            store,
+            last_url,
+            Origin::default(),
+            FakeTransport::always(Reply::Status(200)),
+        )
+    }
+
+    /// A session jar seeded with `cookies`, for the Cookies tab.
+    fn jar(cookies: &[(&str, &str)]) -> Arc<dyn restbook_core::Transport> {
+        let transport = FakeTransport::always(Reply::Status(200));
+        transport.set_cookies(
+            cookies
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned())),
+        );
+        transport
     }
 
     /// [`open_with`] plus the owner the document reports, so the history scope
@@ -2385,6 +2648,7 @@ mod render_tests {
         store: Arc<dyn Store>,
         last_url: Option<String>,
         origin: Origin,
+        transport: Arc<dyn restbook_core::Transport>,
     ) -> (Entity<ResponsePanel>, &mut VisualTestContext) {
         let (view, cx) = cx.add_window_view(|window, cx| {
             let document = cx.new(|_| {
@@ -2397,7 +2661,7 @@ mod render_tests {
                 document
             });
             let settings = cx.new(|_| Settings::new(PathBuf::from("restbook-render-test.json")));
-            ResponsePanel::new(document, store, settings, window, cx)
+            ResponsePanel::new(document, store, transport, settings, window, cx)
         });
         (view, cx)
     }
@@ -2676,7 +2940,66 @@ mod render_tests {
         cx.quit();
     }
 
-    /// One stored send of the sample URL, for the history tests.
+    /// The Cookies tab draws the session jar when it has entries for this URL,
+    /// because those are the cookies a send would actually carry. With no jar
+    /// entries — a response restored from history — it falls back to the rows
+    /// that response set, read-only.
+    #[test]
+    fn the_cookies_tab_draws_the_session_before_the_stored_response() {
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+
+        let mut stored = response_with(200, Some("application/json"), "{}");
+        stored.headers.push((
+            "set-cookie".to_owned(),
+            "sid=abc; Path=/; HttpOnly".to_owned(),
+        ));
+        stored
+            .headers
+            .push(("set-cookie".to_owned(), "theme=dark; Path=/".to_owned()));
+
+        fn open_session(
+            cx: &mut TestAppContext,
+            response: ResponseRecord,
+            transport: Arc<dyn restbook_core::Transport>,
+        ) -> (Entity<ResponsePanel>, &mut VisualTestContext) {
+            open_owned(
+                cx,
+                Some(response),
+                Arc::new(MemoryStore::new()),
+                Some("http://sample/one-line".to_owned()),
+                Origin::default(),
+                transport,
+            )
+        }
+
+        let (view, vcx) = open_session(
+            &mut cx,
+            stored.clone(),
+            jar(&[("sid", "xyz"), ("theme", "light")]),
+        );
+        view.update(vcx, |panel, cx| {
+            panel.tab = ResponseTab::Cookies;
+            cx.notify();
+        });
+        draw(vcx);
+        assert!(vcx.debug_bounds("response-cookie-0-sid").is_some());
+        assert!(vcx.debug_bounds("response-cookie-1-theme").is_some());
+
+        let (view, vcx) = open_session(&mut cx, stored.clone(), jar(&[]));
+        view.update(vcx, |panel, cx| {
+            panel.tab = ResponseTab::Cookies;
+            cx.notify();
+        });
+        draw(vcx);
+        assert!(
+            vcx.debug_bounds("response-cookie-0-sid").is_some(),
+            "a stored response's cookies should still be listed without a jar"
+        );
+        assert!(vcx.debug_bounds("response-cookie-1-theme").is_some());
+
+        cx.quit();
+    }
     fn seed_history(store: &MemoryStore, url: &str, status: u16) {
         seed_owned_history(store, url, status, Origin::default());
     }
@@ -2755,7 +3078,7 @@ mod render_tests {
             },
         );
 
-        let (view, vcx) = open_owned(&mut cx, None, store.clone(), None, first);
+        let (view, vcx) = open_owned(&mut cx, None, store.clone(), None, first, jar(&[]));
         assert_eq!(
             view.update(vcx, |panel, _| panel.history.len()),
             2,
@@ -2772,6 +3095,7 @@ mod render_tests {
             Origin::Saved {
                 node: "node-c".to_owned(),
             },
+            jar(&[]),
         );
         assert_eq!(
             other.update(vcx, |panel, _| panel.history.len()),
@@ -2804,7 +3128,7 @@ mod render_tests {
             .expect("one seeded send")
             .id;
 
-        let (view, vcx) = open_owned(&mut cx, None, store.clone(), None, owner);
+        let (view, vcx) = open_owned(&mut cx, None, store.clone(), None, owner, jar(&[]));
         assert_eq!(view.update(vcx, |panel, _| panel.history.len()), 1);
 
         store.delete_history(id).unwrap();

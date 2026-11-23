@@ -152,6 +152,15 @@ impl Document {
         self.history_revision = self.history_revision.wrapping_add(1);
     }
 
+    /// The URL this document is about: the one last sent, else the one in the
+    /// editor. The cookie jar and the history scope both read it, so they agree
+    /// about which request is on screen.
+    pub(crate) fn url(&self) -> String {
+        self.last_url
+            .clone()
+            .unwrap_or_else(|| self.request.url.clone())
+    }
+
     /// The state the response pane renders, derived from the fields above. One
     /// source of truth: the pane never caches its own copy.
     pub(crate) fn response_state(&self) -> ResponseState {

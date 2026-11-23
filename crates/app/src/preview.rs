@@ -29,6 +29,7 @@ use chrono::{Duration, Utc};
 use gpui_kit::component::{h_flex, v_flex, TitleBar};
 use gpui_kit::*;
 
+use restbook_core::testing::{FakeTransport, Reply};
 use restbook_core::{
     Body, Collection, CollectionItem, Draft, Environment, Folder, HistoryEntry, Kv, Method, Origin,
     RequestDef, ResponseRecord, SavedRequest, Store,
@@ -486,9 +487,17 @@ fn build_pane(
             )
         })),
         Pane::Response => PaneView::Response(cx.new(|cx| {
+            // The pane reads a session jar for its Cookies tab; a seeded fake
+            // keeps the tab populated without a network or a real store.
+            let transport = FakeTransport::always(Reply::Status(200));
+            transport.set_cookies([
+                ("sid".to_owned(), "preview-session".to_owned()),
+                ("theme".to_owned(), "dark".to_owned()),
+            ]);
             ResponsePanel::new(
                 fixture.document.clone(),
                 fixture.store.clone(),
+                transport,
                 fixture.settings.clone(),
                 window,
                 cx,

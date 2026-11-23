@@ -159,6 +159,20 @@ pub trait Transport: Send + Sync + 'static {
     /// Drop every stored cookie. The jar is process-wide, so this is the only
     /// way to start a clean session short of restarting the app.
     fn clear_cookies(&self) {}
+
+    /// Remove one cookie the jar would send to `url`, leaving the rest.
+    ///
+    /// Returns whether a cookie of that name was there. A transport that keeps
+    /// no jar ignores this and answers `false`.
+    fn delete_cookie(&self, _url: &str, _name: &str) -> bool {
+        false
+    }
+
+    /// Replace one cookie's value, keeping its other attributes and the rest of
+    /// the jar. Returns whether a cookie of that name was there to change.
+    fn update_cookie(&self, _url: &str, _name: &str, _value: &str) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
