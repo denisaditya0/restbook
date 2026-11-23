@@ -12,6 +12,7 @@ pub mod model;
 pub mod net;
 pub mod oauth;
 pub mod prepare;
+pub mod secrets;
 pub mod store;
 pub mod template;
 pub mod testing;

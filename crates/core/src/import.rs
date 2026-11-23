@@ -88,18 +88,35 @@ impl ExportFormat {
     }
 }
 
+/// How much of the data an exported file may carry.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ExportOptions {
+    /// Write API keys, tokens, and `secret` variable values in plaintext.
+    ///
+    /// Off by default: a file leaving the app should be one the user can hand
+    /// to someone else. Redaction uses the same slots as the folder workspace
+    /// ([`crate::secrets`]), so a secret cannot be hidden in one and shipped in
+    /// the other.
+    pub include_secrets: bool,
+}
+
 /// Write `collections` and `environments` in `format`.
 ///
 /// Postman and HAR hold one collection at a time; the bundle holds them all.
+/// Secret values are redacted unless `options` asks for them, and every value
+/// stays intact when it is already a `{{variable}}`.
 pub fn export(
     format: ExportFormat,
     collections: &[Collection],
     environments: &[Environment],
+    options: ExportOptions,
 ) -> crate::Result<String> {
+    let collections = exported_collections(collections, options);
+    let environments = exported_environments(environments, options);
     match format {
-        ExportFormat::Bundle => Bundle::new(collections.to_vec(), environments.to_vec()).to_json(),
-        ExportFormat::Har => har::export(collections),
-        ExportFormat::Postman => match collections {
+        ExportFormat::Bundle => Bundle::new(collections, environments).to_json(),
+        ExportFormat::Har => har::export(&collections),
+        ExportFormat::Postman => match collections.as_slice() {
             [one] => postman::export(one),
             [] => Err(crate::Error::Other("there is nothing to export".to_owned())),
             _ => Err(crate::Error::Other(
@@ -107,6 +124,26 @@ pub fn export(
             )),
         },
     }
+}
+
+fn exported_collections(collections: &[Collection], options: ExportOptions) -> Vec<Collection> {
+    let mut collections = collections.to_vec();
+    if !options.include_secrets {
+        collections
+            .iter_mut()
+            .for_each(crate::secrets::redact_collection);
+    }
+    collections
+}
+
+fn exported_environments(environments: &[Environment], options: ExportOptions) -> Vec<Environment> {
+    let mut environments = environments.to_vec();
+    if !options.include_secrets {
+        environments
+            .iter_mut()
+            .for_each(crate::secrets::redact_environment);
+    }
+    environments
 }
 
 /// What an import produced, and what it could not read.
@@ -281,7 +318,7 @@ impl Bundle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CollectionItem, Method, RequestDef, SavedRequest};
+    use crate::model::{CollectionItem, Kv, Method, RequestDef, SavedRequest};
 
     fn collection_with(name: &str, requests: usize) -> Collection {
         let items = (0..requests)
@@ -362,22 +399,167 @@ mod tests {
             vars: Vec::new(),
         }];
 
-        let bundle = export(ExportFormat::Bundle, &collections, &environments).unwrap();
+        let bundle = export(
+            ExportFormat::Bundle,
+            &collections,
+            &environments,
+            ExportOptions::default(),
+        )
+        .unwrap();
         assert!(bundle.contains("\"dev\""));
 
         // A HAR and a Postman collection describe requests only; an
         // environment would have no place to go.
-        let har = export(ExportFormat::Har, &collections, &environments).unwrap();
+        let har = export(
+            ExportFormat::Har,
+            &collections,
+            &environments,
+            ExportOptions::default(),
+        )
+        .unwrap();
         assert!(!har.contains("\"dev\""));
-        let postman = export(ExportFormat::Postman, &collections, &environments).unwrap();
+        let postman = export(
+            ExportFormat::Postman,
+            &collections,
+            &environments,
+            ExportOptions::default(),
+        )
+        .unwrap();
         assert!(!postman.contains("\"dev\""));
     }
 
     #[test]
     fn postman_export_refuses_several_collections_rather_than_picking_one() {
         let collections = vec![collection_with("a", 1), collection_with("b", 1)];
-        let error = export(ExportFormat::Postman, &collections, &[]).unwrap_err();
+        let error = export(
+            ExportFormat::Postman,
+            &collections,
+            &[],
+            ExportOptions::default(),
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("one collection"));
+    }
+
+    fn secret(value: &str, key: &str) -> Kv {
+        Kv {
+            key: key.to_owned(),
+            value: value.to_owned(),
+            enabled: true,
+            secret: true,
+        }
+    }
+
+    fn request_with(request: RequestDef) -> Collection {
+        Collection {
+            id: "col-1".to_owned(),
+            name: "Acme".to_owned(),
+            items: vec![CollectionItem::Request(SavedRequest {
+                id: "r1".to_owned(),
+                name: "Login".to_owned(),
+                request,
+            })],
+        }
+    }
+
+    /// A file leaving the app must not carry a credential unless the caller
+    /// asked for one, and it must use the same slots the folder workspace
+    /// redacts so the two lists cannot drift.
+    #[test]
+    fn an_export_redacts_credentials_and_secret_rows_by_default() {
+        let mut login = RequestDef::new(Method::Post, "https://example.com/login");
+        login.auth = crate::Auth::Bearer {
+            token: "bearer-token".to_owned(),
+        };
+        login.headers.push(secret("header-value", "X-Api-Key"));
+        login.params.push(secret("param-value", "token"));
+
+        let environments = vec![Environment {
+            name: "dev".to_owned(),
+            vars: vec![secret("env-value", "TOKEN")],
+        }];
+
+        let bundle = export(
+            ExportFormat::Bundle,
+            &[request_with(login)],
+            &environments,
+            ExportOptions::default(),
+        )
+        .unwrap();
+        for leaked in ["bearer-token", "header-value", "param-value", "env-value"] {
+            assert!(!bundle.contains(leaked), "`{leaked}` leaked:\n{bundle}");
+        }
+        assert!(bundle.contains(crate::secrets::REDACTED));
+        // The shape survives: a reviewer still sees which row and which auth.
+        assert!(bundle.contains("bearer"));
+        assert!(bundle.contains("X-Api-Key"));
+    }
+
+    #[test]
+    fn an_oauth_client_secret_is_redacted_like_any_other_credential() {
+        let mut request = RequestDef::new(Method::Post, "https://example.com/token");
+        request.auth = crate::Auth::OAuth2 {
+            config: crate::OAuthConfig {
+                client_id: "client".to_owned(),
+                client_secret: "oauth-secret".to_owned(),
+                token_url: "https://example.com/token".to_owned(),
+                ..crate::OAuthConfig::default()
+            },
+            access_token: None,
+        };
+
+        let bundle = export(
+            ExportFormat::Bundle,
+            &[request_with(request)],
+            &[],
+            ExportOptions::default(),
+        )
+        .unwrap();
+        assert!(!bundle.contains("oauth-secret"), "{bundle}");
+        assert!(bundle.contains(crate::secrets::REDACTED));
+    }
+
+    #[test]
+    fn include_secrets_writes_the_literal_values() {
+        let mut request = RequestDef::new(Method::Get, "https://example.com");
+        request.auth = crate::Auth::Bearer {
+            token: "bearer-token".to_owned(),
+        };
+        let environments = vec![Environment {
+            name: "dev".to_owned(),
+            vars: vec![secret("env-value", "TOKEN")],
+        }];
+
+        let bundle = export(
+            ExportFormat::Bundle,
+            &[request_with(request)],
+            &environments,
+            ExportOptions {
+                include_secrets: true,
+            },
+        )
+        .unwrap();
+        assert!(bundle.contains("bearer-token"));
+        assert!(bundle.contains("env-value"));
+        assert!(!bundle.contains(crate::secrets::REDACTED));
+    }
+
+    #[test]
+    fn an_export_leaves_a_variable_reference_alone() {
+        let mut request = RequestDef::new(Method::Get, "https://example.com");
+        request.auth = crate::Auth::Bearer {
+            token: "{{TOKEN}}".to_owned(),
+        };
+
+        let postman = export(
+            ExportFormat::Postman,
+            &[request_with(request)],
+            &[],
+            ExportOptions::default(),
+        )
+        .unwrap();
+        assert!(postman.contains("{{TOKEN}}"), "{postman}");
+        assert!(!postman.contains(crate::secrets::REDACTED));
     }
 
     #[test]

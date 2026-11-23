@@ -11,6 +11,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use restbook_core::secrets::{self, SecretSlot, REDACTED};
 use restbook_core::store::Draft;
 use restbook_core::{
     Collection, Environment, Error, HistoryEntry, HistoryHit, Kv, Origin, Result, Store,
@@ -277,7 +278,9 @@ impl Store for FolderStore {
                         .local
                         .lock()
                         .map_err(|_| Error::Store("local workspace lock poisoned".to_owned()))?;
-                    restore_collection(&mut collection, &local.secrets);
+                    secrets::visit_collection_secrets(&mut collection, &mut |slot| {
+                        restore_from(slot, &local.secrets)
+                    });
                     collections.push(collection);
                 }
                 Err(error) => {
@@ -323,7 +326,9 @@ impl Store for FolderStore {
                 .local
                 .lock()
                 .map_err(|_| Error::Store("local workspace lock poisoned".to_owned()))?;
-            redact_collection(&mut redacted, &mut local.secrets);
+            secrets::visit_collection_secrets(&mut redacted, &mut |slot| {
+                redact_into(slot, &mut local.secrets)
+            });
             local.normalize();
             write_json(&self.root.join(LOCAL_FILE), &*local)?;
         }
@@ -367,12 +372,9 @@ impl Store for FolderStore {
                         .local
                         .lock()
                         .map_err(|_| Error::Store("local workspace lock poisoned".to_owned()))?;
-                    restore_kvs(
-                        &mut environment.vars,
-                        "env",
-                        &environment.name,
-                        &local.secrets,
-                    );
+                    secrets::visit_environment_secrets(&mut environment, &mut |slot| {
+                        restore_from(slot, &local.secrets)
+                    });
                     environments.push(environment);
                 }
                 Err(error) => log::warn!(
@@ -419,12 +421,9 @@ impl Store for FolderStore {
                 .local
                 .lock()
                 .map_err(|_| Error::Store("local workspace lock poisoned".to_owned()))?;
-            redact_kvs(
-                &mut redacted.vars,
-                "env",
-                &environment.name,
-                &mut local.secrets,
-            );
+            secrets::visit_environment_secrets(&mut redacted, &mut |slot| {
+                redact_into(slot, &mut local.secrets)
+            });
             local.normalize();
             write_json(&self.root.join(LOCAL_FILE), &*local)?;
         }
@@ -589,142 +588,30 @@ fn read_local(path: &Path) -> Result<Local> {
     }
 }
 
-/// What a secret value is replaced with inside a tracked file. It is written out
-/// literally so a reviewer sees the shape of the request and knows a real value
-/// is needed locally, and so `restbook.local.json` is the only place the value
-/// ever appears.
-const REDACTED: &str = "<restbook:redacted>";
-
 /// The `Local::secrets` key for one secret value.
 ///
-/// `kind` is the file the secret came from (`env` or `req`), `owner` names the
-/// environment or collection, and `row` names the key or the auth field. The
-/// key is only used to look a value back up, so it must be stable across
-/// renames of the tracked file — hence `name`/`id` rather than a path.
+/// The tuple is only used to look a value back up, so it must stay stable
+/// across a rename of the workspace path — hence a collection id, an
+/// environment name, or a row's key rather than a path.
 fn secret_key(kind: &str, owner: &str, row: &str) -> String {
     format!("{kind}:{owner}:{row}")
 }
 
-/// Replace every `secret` row's value with [`REDACTED`], recording the real
-/// value in `secrets` under `owner_prefix` + the row's key.
-fn redact_kvs(kvs: &mut [Kv], kind: &str, owner: &str, secrets: &mut BTreeMap<String, String>) {
-    for kv in kvs.iter_mut() {
-        if !kv.secret || kv.value.is_empty() || is_template(&kv.value) {
-            continue;
-        }
-        secrets.insert(secret_key(kind, owner, &kv.key), kv.value.clone());
-        kv.value = REDACTED.to_owned();
-    }
+/// Take one credential out of the tracked file and into `secrets`.
+fn redact_into(slot: SecretSlot<'_>, secrets: &mut BTreeMap<String, String>) {
+    let value = std::mem::take(slot.value);
+    secrets.insert(secret_key(slot.kind, slot.owner, slot.row), value);
+    *slot.value = REDACTED.to_owned();
 }
 
-/// The inverse of [`redact_kvs`]: put back any value this machine knows for a
-/// row that a tracked file left as [`REDACTED`].
-fn restore_kvs(kvs: &mut [Kv], kind: &str, owner: &str, secrets: &BTreeMap<String, String>) {
-    for kv in kvs.iter_mut() {
-        if !kv.secret || kv.value != REDACTED {
-            continue;
-        }
-        if let Some(value) = secrets.get(&secret_key(kind, owner, &kv.key)) {
-            kv.value = value.clone();
-        }
-    }
-}
-
-/// The `row` half of every auth secret key. Auth is a single value per request,
-/// so one fixed row name is enough to keep the key shape uniform.
-const AUTH_ROW: &str = "auth";
-
-/// True when a value is already indirection — a whole-string `{{variable}}`.
-/// Redacting one of these would break the sharing story it exists to support:
-/// the token lives in a local variable, and the tracked file names it.
-fn is_template(value: &str) -> bool {
-    let trimmed = value.trim();
-    trimmed.starts_with("{{") && trimmed.ends_with("}}") && trimmed.len() > 4
-}
-
-/// Take the literal credential out of an [`Auth`] and into `secrets`, leaving a
-/// placeholder behind so the tracked file still shows *that* the request is
-/// authenticated and *how*, without shipping the credential.
-///
-/// `{{var}}` values are left alone: they are already indirection, and the whole
-/// sharing story is that a token lives in a variable rather than in the request.
-fn redact_auth(
-    auth: &mut restbook_core::Auth,
-    owner: &str,
-    secrets: &mut BTreeMap<String, String>,
-) {
-    use restbook_core::Auth;
-    let slot = match auth {
-        Auth::Basic { password, .. } if !password.is_empty() => password,
-        Auth::Bearer { token } if !token.is_empty() => token,
-        Auth::ApiKey { value, .. } if !value.is_empty() => value,
-        _ => return,
-    };
-    if is_template(slot) {
+/// The inverse of [`redact_into`]: put back any value this machine knows for a
+/// slot the tracked file left as [`REDACTED`].
+fn restore_from(slot: SecretSlot<'_>, secrets: &BTreeMap<String, String>) {
+    if *slot.value != REDACTED {
         return;
     }
-    secrets.insert(secret_key("req", owner, AUTH_ROW), slot.clone());
-    *slot = REDACTED.to_owned();
-}
-
-/// The inverse of [`redact_auth`].
-fn restore_auth(auth: &mut restbook_core::Auth, owner: &str, secrets: &BTreeMap<String, String>) {
-    use restbook_core::Auth;
-    let Some(value) = secrets.get(&secret_key("req", owner, AUTH_ROW)) else {
-        return;
-    };
-    let placeholder = match auth {
-        Auth::Basic { password, .. } => password,
-        Auth::Bearer { token } => token,
-        Auth::ApiKey { value, .. } => value,
-        // `OAuth2` keeps its access token out of the file (`serde(skip)`) and
-        // is not redacted by [`redact_auth`], so there is nothing to restore.
-        Auth::OAuth2 { .. } | Auth::None => return,
-    };
-    if *placeholder == REDACTED {
-        *placeholder = value.clone();
-    }
-}
-
-/// Redact every request in a collection, recursing into folders. The owner in
-/// the secret key is the *collection* id, not the request id: the collection is
-/// the file that gets renamed and copied, so its id is the stable handle.
-fn redact_collection(collection: &mut Collection, secrets: &mut BTreeMap<String, String>) {
-    let owner = collection.id.clone();
-    redact_items(&mut collection.items, &owner, secrets);
-}
-
-fn redact_items(
-    items: &mut [restbook_core::CollectionItem],
-    owner: &str,
-    secrets: &mut BTreeMap<String, String>,
-) {
-    use restbook_core::CollectionItem;
-    for item in items.iter_mut() {
-        match item {
-            CollectionItem::Folder(folder) => redact_items(&mut folder.items, owner, secrets),
-            CollectionItem::Request(saved) => redact_auth(&mut saved.request.auth, owner, secrets),
-        }
-    }
-}
-
-/// The inverse of [`redact_collection`].
-fn restore_collection(collection: &mut Collection, secrets: &BTreeMap<String, String>) {
-    let owner = collection.id.clone();
-    restore_items(&mut collection.items, &owner, secrets);
-}
-
-fn restore_items(
-    items: &mut [restbook_core::CollectionItem],
-    owner: &str,
-    secrets: &BTreeMap<String, String>,
-) {
-    use restbook_core::CollectionItem;
-    for item in items.iter_mut() {
-        match item {
-            CollectionItem::Folder(folder) => restore_items(&mut folder.items, owner, secrets),
-            CollectionItem::Request(saved) => restore_auth(&mut saved.request.auth, owner, secrets),
-        }
+    if let Some(value) = secrets.get(&secret_key(slot.kind, slot.owner, slot.row)) {
+        *slot.value = value.clone();
     }
 }
 
@@ -1212,6 +1099,58 @@ mod tests {
             .join(COLLECTION_FILE);
         let on_disk = fs::read_to_string(&file).unwrap();
         assert!(on_disk.contains("{{TOKEN}}"), "templating was clobbered");
+    }
+
+    #[test]
+    fn a_secret_header_is_redacted_and_restored() {
+        let dir = temp_dir("header-secret");
+        let mut collection = sample_collection("col-1", "Example");
+        let CollectionItem::Folder(folder) = &mut collection.items[0] else {
+            unreachable!();
+        };
+        let CollectionItem::Request(saved) = &mut folder.items[0] else {
+            unreachable!();
+        };
+        saved.request.headers = vec![
+            Kv::new("Accept", "application/json"),
+            Kv {
+                key: "X-Api-Key".to_owned(),
+                value: "header-secret".to_owned(),
+                enabled: true,
+                secret: true,
+            },
+        ];
+        saved.request.params = vec![Kv {
+            key: "token".to_owned(),
+            value: "param-secret".to_owned(),
+            enabled: true,
+            secret: true,
+        }];
+
+        {
+            let store = FolderStore::open(&dir).unwrap();
+            store.save_collection(&collection).unwrap();
+        }
+
+        let file = dir
+            .join(COLLECTIONS_DIR)
+            .join("example-col1")
+            .join(COLLECTION_FILE);
+        let on_disk = fs::read_to_string(&file).unwrap();
+        assert!(!on_disk.contains("header-secret"), "leaked:\n{on_disk}");
+        assert!(!on_disk.contains("param-secret"), "leaked:\n{on_disk}");
+        assert!(on_disk.contains("application/json"), "a plain row is kept");
+
+        let reopened = FolderStore::open(&dir).unwrap();
+        let collections = reopened.collections().unwrap();
+        let CollectionItem::Folder(folder) = &collections[0].items[0] else {
+            unreachable!();
+        };
+        let CollectionItem::Request(saved) = &folder.items[0] else {
+            unreachable!();
+        };
+        assert_eq!(saved.request.headers[1].value, "header-secret");
+        assert_eq!(saved.request.params[0].value, "param-secret");
     }
 
     #[test]
