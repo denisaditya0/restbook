@@ -165,6 +165,11 @@ pub(crate) struct RequestPanel {
     /// render, which would be O(body) per frame.
     live_stamp: String,
     live_unresolved: Vec<String>,
+    /// The document's `is_pending` the URL row was last drawn with. A send
+    /// starting or resolving changes no request field, so the observer below
+    /// would find nothing stale and leave the button saying "Sending" until an
+    /// unrelated repaint — a dock with nothing else moving has none.
+    pending_painted: bool,
     /// The URL bar's `{{…}}` completion list. `InputState` has no completion
     /// hook the way `EditorState` does, so the pane keeps the state and draws
     /// the list under the field itself.
@@ -390,21 +395,39 @@ impl RequestPanel {
         // `RequestEditor::adopt`, which leaves the input alone when the URL
         // already matches.
         cx.observe(&document, |this, document, cx| {
-            let (method, url) = {
+            let (method, url, pending) = {
                 let document = document.read(cx);
-                (document.request.method, document.request.url.clone())
+                (
+                    document.request.method,
+                    document.request.url.clone(),
+                    document.is_pending(),
+                )
             };
-            // Only repaint when the document actually differs from the editor,
+            // Only adopt when the document actually differs from the editor,
             // so the editor's own write-through does not trigger a second frame.
             let stale = {
                 let editor = this.editor.read(cx);
                 editor.url_value(cx) != url || editor.method() != method
             };
-            if !stale {
+            // The Send button is not a request field: `begin_send` and the
+            // resolution touch `pending` alone, so `stale` stays false while the
+            // row still says "Sending". Ask for that frame here for the same
+            // reason the response pane keys its redraw on the send state.
+            let repaint = pending != this.pending_painted;
+            this.pending_painted = pending;
+            if repaint {
+                log::debug!(
+                    target: "restbook_app::perf",
+                    "request pane send state change: pending={pending}",
+                );
+            }
+            if !stale && !repaint {
                 return;
             }
-            this.editor
-                .update(cx, |editor, cx| editor.adopt(method, &url, cx));
+            if stale {
+                this.editor
+                    .update(cx, |editor, cx| editor.adopt(method, &url, cx));
+            }
             // The adopted URL lands in the input on the next render.
             cx.notify();
         })
@@ -429,6 +452,9 @@ impl RequestPanel {
                 .filter(|name| scoped.lookup(name).is_none())
                 .collect()
         };
+        // Seeded from the document, or a pane built while a send is running
+        // would draw "Send" until the request resolved.
+        let pending_painted = document.read(cx).is_pending();
 
         Self {
             palette: Palette::new(cx),
@@ -440,6 +466,7 @@ impl RequestPanel {
             active_tab: 0,
             live_stamp,
             live_unresolved,
+            pending_painted,
             url_popup: Autocomplete::default(),
             tabs_scroll: ScrollHandle::new(),
             editor_tabs_scroll: ScrollHandle::new(),
