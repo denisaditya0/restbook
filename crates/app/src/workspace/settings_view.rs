@@ -14,6 +14,7 @@ use std::path::PathBuf;
 
 use gpui_kit::base::Selectable as _;
 use gpui_kit::component::button::*;
+use gpui_kit::component::notification::Notification;
 use gpui_kit::component::setting::{
     NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage,
     Settings as SettingsPanel,
@@ -201,6 +202,7 @@ fn storage_page(
     workspace: &WeakEntity<Workspace>,
 ) -> SettingPage {
     let mut group = SettingGroup::new().item(storage_item(workspace_root));
+    group = group.item(debug_capture_item());
     if workspace_root.is_none() {
         group = group.item(enable_workspace_item(workspace.clone()));
     }
@@ -766,6 +768,92 @@ fn storage_rows(workspace_root: &Option<PathBuf>) -> Vec<(String, String)> {
     // path a bug report wants, and the one users otherwise have to guess.
     rows.push(("Log file".to_owned(), log_path.display().to_string()));
     rows
+}
+
+/// The log capture control. It is not a preference: the file is temporary, and
+/// the next launch removes it, so a capture cannot quietly become permanent.
+fn debug_capture_item() -> SettingItem {
+    SettingItem::render(move |_, _, cx| {
+        let metrics = Metrics::current(cx);
+        let palette = Palette::new(cx);
+        let mut row = h_flex().items_center().gap(px(metrics.space_xs));
+
+        if let Some(left) = logging::debug_remaining() {
+            let minutes = left.as_secs().div_ceil(60);
+            row = row
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(palette.muted)
+                        .child(format!("{minutes} min left")),
+                )
+                .child(
+                    Button::new("settings-delete-debug-log")
+                        .label("Delete debug log")
+                        .outline()
+                        .on_click(|_, window, cx| {
+                            let deleted = logging::delete_debug_capture();
+                            let message = match deleted {
+                                Some(path) => format!("Deleted {}", path.display()),
+                                None => "No debug capture was running".to_owned(),
+                            };
+                            window.push_notification(Notification::success(message), cx);
+                        }),
+                )
+                .child(
+                    Button::new("settings-copy-debug-path")
+                        .label("Copy path")
+                        .ghost()
+                        .on_click(|_, window, cx| match logging::debug_capture_path() {
+                            Some(path) => {
+                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                    path.display().to_string(),
+                                ));
+                                window.push_notification(
+                                    Notification::success("Copied the debug log path"),
+                                    cx,
+                                );
+                            }
+                            None => window.push_notification(
+                                Notification::error("No debug capture is running"),
+                                cx,
+                            ),
+                        }),
+                );
+        } else {
+            row = row.child(
+                Button::new("settings-capture-debug")
+                    .label("Capture for 10 minutes")
+                    .outline()
+                    .on_click(|_, window, cx| match logging::start_debug_capture() {
+                        Ok(path) => window.push_notification(
+                            Notification::success(format!(
+                                "Debug logs on for 10 minutes: {}",
+                                path.display()
+                            )),
+                            cx,
+                        ),
+                        Err(message) => window.push_notification(Notification::error(message), cx),
+                    }),
+            );
+        }
+
+        row.into_any_element()
+    })
+    .description(
+        "Record the detailed log for a bug report for 10 minutes. Secrets stay \
+         redacted, and the capture file is removed on the next launch. \
+         RUST_LOG set in the environment takes precedence.",
+    )
+    .keywords([
+        "debug",
+        "log",
+        "capture",
+        "report",
+        "bug",
+        "storage",
+        "troubleshoot",
+    ])
 }
 
 fn storage_item(workspace_root: &Option<PathBuf>) -> SettingItem {

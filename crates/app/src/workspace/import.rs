@@ -25,6 +25,7 @@ struct Report {
     environments: Vec<String>,
     duplicates: Vec<String>,
     skipped: Vec<Skip>,
+    notes: Vec<Skip>,
 }
 
 impl Report {
@@ -49,6 +50,10 @@ impl Report {
         }
         if !self.skipped.is_empty() {
             parts.push(format!("{} skipped", self.skipped.len()));
+        }
+        if !self.notes.is_empty() {
+            let plural = if self.notes.len() == 1 { "" } else { "s" };
+            parts.push(format!("{} note{}", self.notes.len(), plural));
         }
         format!("Imported {}", parts.join(", "))
     }
@@ -130,6 +135,7 @@ fn land(store: &dyn Store, file: &str, text: &str) -> Result<Report, String> {
         environments,
         duplicates,
         skipped: parsed.skipped,
+        notes: parsed.notes,
     })
 }
 
@@ -216,7 +222,7 @@ impl Workspace {
             return;
         }
 
-        log::info!(target: "restbook_app::ui", "import: {}", report.summary());
+        log::debug!(target: "restbook_app::ui", "import: {}", report.summary());
         self.panes
             .collections
             .update(cx, |panel, cx| panel.reload(Some(window), cx));
@@ -243,6 +249,11 @@ impl Workspace {
             .iter()
             .map(|skip| format!("{} — {}", skip.at, skip.reason))
             .collect::<Vec<_>>();
+        let notes = report
+            .notes
+            .iter()
+            .map(|note| format!("{} — {}", note.at, note.reason))
+            .collect::<Vec<_>>();
 
         window.open_dialog(cx, move |dialog, _window, _cx| {
             let mut body = v_flex()
@@ -254,6 +265,7 @@ impl Workspace {
                 ("Environments", &environments),
                 ("Already present", &duplicates),
                 ("Skipped", &skipped),
+                ("Notes", &notes),
             ] {
                 if !rows.is_empty() {
                     body = body.child(section(heading, rows, &palette, metrics));

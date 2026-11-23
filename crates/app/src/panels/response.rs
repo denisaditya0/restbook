@@ -158,8 +158,10 @@ pub(crate) struct ResponsePanel {
     /// stay inside the header band at a narrow pane instead of pushing the
     /// actions beside them out of the window.
     tabs_scroll: ScrollHandle,
-    /// The find query and its field (U56). Empty means the find row is closed.
+    /// The find query and its field (U56). The row is open while `find_open`,
+    /// or while the field still holds a query after a restore.
     find: Entity<InputState>,
+    find_open: bool,
     /// Matches for `query` in the body rows, recomputed when the query or the
     /// decoded body changes rather than per frame. `(row, byte offset in row)`
     /// for each match start, plus the index the arrows are centred on.
@@ -782,6 +784,7 @@ impl ResponsePanel {
             display: None,
             tabs_scroll: ScrollHandle::new(),
             find,
+            find_open: false,
             finding: None,
             focus_handle: cx.focus_handle(),
         };
@@ -1059,7 +1062,7 @@ impl ResponsePanel {
                 let panel = panel.clone();
                 menu = menu.item(PopupMenuItem::new(label).checked(checked).on_click(
                     move |_, _, cx: &mut App| {
-                        log::info!(target: "restbook_app::ui", "response format: {label}");
+                        log::debug!(target: "restbook_app::ui", "response format: {label}");
                         // A menu item has no entity handle of its own, so the
                         // weak handle captured here is how the click reaches
                         // the panel that owns the mode.
@@ -1118,7 +1121,7 @@ impl ResponsePanel {
             )
             .on_click(cx.listener(|this, index, _, cx| {
                 if let Some(&tab) = ResponseTab::ALL.get(*index) {
-                    log::info!(target: "restbook_app::ui", "response tab: index {index}");
+                    log::debug!(target: "restbook_app::ui", "response tab: index {index}");
                     this.tab = tab;
                     cx.notify();
                 }
@@ -1176,8 +1179,35 @@ impl ResponsePanel {
         });
     }
 
+    /// Open the find row, or close it and clear the query. The row used to be
+    /// rendered only once the query was non-empty, so the button focused an
+    /// input that was not in the tree and nothing visibly happened.
+    fn toggle_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let open = self.find_open || !self.find.read(cx).value().is_empty();
+        if open {
+            self.close_find(window, cx);
+            return;
+        }
+
+        self.find_open = true;
+        let find = self.find.clone();
+        cx.notify();
+        // Focus after the row exists: focusing the same frame it is added is a
+        // no-op, which is what made the old button do nothing.
+        window.defer(cx, move |window, cx| {
+            find.update(cx, |state, cx| state.focus_handle(cx).focus(window, cx));
+        });
+    }
+
+    fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.find_open = false;
+        self.finding = None;
+        self.find
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        cx.notify();
+    }
+
     /// Move to the next or previous match and return it, wrapping at the ends.
-    ///
     /// The first press after typing picks the first match rather than the
     /// second, which is what makes Enter behave like the field's own "go".
     fn step_match(
@@ -1269,6 +1299,15 @@ impl ResponsePanel {
                         this.step_match(true, cx);
                     })),
             )
+            .child(
+                Button::new("find-close")
+                    .icon(IconName::Close)
+                    .ghost()
+                    .compact()
+                    .debug_selector(|| "response-find-close".to_owned())
+                    .tooltip("Close find")
+                    .on_click(cx.listener(|this, _, window, cx| this.close_find(window, cx))),
+            )
     }
 
     /// The body's own toolbar: the format switch and both copy controls.
@@ -1286,7 +1325,7 @@ impl ResponsePanel {
         let (summary, _) = summary_for(response, palette);
         let copy_text = summary;
 
-        let find_open = !self.find.read(cx).value().is_empty();
+        let find_open = self.find_open || !self.find.read(cx).value().is_empty();
         let find_button = Button::new("find-body")
             .icon(IconName::Search)
             .ghost()
@@ -1294,10 +1333,8 @@ impl ResponsePanel {
             .debug_selector(|| "response-find-toggle".to_owned())
             .tooltip("Find in the body")
             .on_click(cx.listener(|this, _, window, cx| {
-                log::info!(target: "restbook_app::ui", "response: find");
-                this.find.update(cx, |state, cx| {
-                    state.focus_handle(cx).focus(window, cx);
-                });
+                log::debug!(target: "restbook_app::ui", "response: find");
+                this.toggle_find(window, cx);
             }));
 
         v_flex()
@@ -1322,7 +1359,7 @@ impl ResponsePanel {
                             .debug_selector(|| "response-copy-body".to_owned())
                             .tooltip("Copy the body as displayed")
                             .on_click(cx.listener(|this, _, window, cx| {
-                                log::info!(target: "restbook_app::ui", "response: copy body");
+                                log::debug!(target: "restbook_app::ui", "response: copy body");
                                 let response = this.document.read(cx).response.clone();
                                 if let Some(response) = response {
                                     let (body, _) = this.body_for_display(&response, window, cx);
@@ -1343,7 +1380,7 @@ impl ResponsePanel {
                             .debug_selector(|| "response-copy-summary".to_owned())
                             .tooltip("Copy the status, time, and size")
                             .on_click(cx.listener(move |_, _, _, cx| {
-                                log::info!(target: "restbook_app::ui", "response: copy summary");
+                                log::debug!(target: "restbook_app::ui", "response: copy summary");
                                 cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
                             })),
                     ),
@@ -2088,6 +2125,27 @@ impl ResponsePanel {
                 // The evidence for the failure is in the log, and the file is
                 // not obvious. Put the copy action where the error is, instead
                 // of asking the user to find it in a menu afterwards.
+                .child(
+                    Button::new("debug-capture-on-error")
+                        .icon(IconName::Bug)
+                        .ghost()
+                        .compact()
+                        .tooltip("Record detailed logs for 10 minutes, for a report")
+                        .on_click(cx.listener(|_, _, window, cx| {
+                            match crate::logging::start_debug_capture() {
+                                Ok(path) => window.push_notification(
+                                    Notification::success(format!(
+                                        "Debug logs on for 10 minutes: {}",
+                                        path.display()
+                                    )),
+                                    cx,
+                                ),
+                                Err(message) => {
+                                    window.push_notification(Notification::error(message), cx)
+                                }
+                            }
+                        })),
+                )
                 .child(
                     Button::new("copy-log-on-error")
                         .icon(IconName::ClipboardCopy)
@@ -3212,6 +3270,35 @@ mod render_tests {
         });
         assert_eq!(truncated, Some(true), "the banner would not be drawn");
 
+        cx.quit();
+    }
+
+    /// The toolbar button used to focus an input that was not rendered until
+    /// the query was non-empty, so clicking Find showed nothing at all. The
+    /// row now opens before focus is handed to it.
+    #[gpui_kit::test]
+    fn the_find_button_opens_the_row(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (_view, cx) = open(cx, Some(json_response("{\"a\":1}")));
+        draw(cx);
+        assert!(
+            cx.debug_bounds("response-find-row").is_none(),
+            "the row starts closed"
+        );
+
+        let target = cx
+            .debug_bounds("response-find-toggle")
+            .expect("the find button is in the body toolbar")
+            .center();
+        cx.simulate_mouse_down(target, gpui_kit::MouseButton::Left, Default::default());
+        cx.simulate_mouse_up(target, gpui_kit::MouseButton::Left, Default::default());
+        cx.run_until_parked();
+        draw(cx);
+
+        assert!(
+            cx.debug_bounds("response-find-row").is_some(),
+            "clicking Find must render the row it focuses"
+        );
         cx.quit();
     }
 }

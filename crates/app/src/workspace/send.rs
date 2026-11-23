@@ -62,7 +62,7 @@ impl Workspace {
                             Some(expires) => format!("Token ready; expires in {expires}s."),
                             None => "Token ready.".to_owned(),
                         };
-                        log::info!(target: "restbook_app::send", "oauth: token fetched");
+                        log::debug!(target: "restbook_app::send", "oauth: token fetched");
                         editor.set_oauth_token(Some(token.access_token), status, cx);
                     }
                     Err(error) => {
@@ -116,7 +116,7 @@ impl Workspace {
         let cancel = CancelToken::new();
         let progress = Progress::new();
         let sent_url = prepared.url.to_string();
-        log::info!(
+        log::debug!(
             target: "restbook_app::send",
             "{} {} (environment: {})",
             request.method,
@@ -205,9 +205,13 @@ impl Workspace {
                     done.store(true, Ordering::Relaxed);
                     let canceled = matches!(error, Error::Cancelled);
                     if canceled {
-                        log::info!(target: "restbook_app::send", "cancelled: {sent_url}");
+                        log::debug!(target: "restbook_app::send", "cancelled: {sent_url}");
                     } else {
-                        log::error!(target: "restbook_app::send", "failed: {sent_url}: {error}");
+                        log::error!(
+                            target: "restbook_app::send",
+                            "failed: {}: {error}",
+                            crate::logging::redact_url(&sent_url)
+                        );
                     }
                     let message = if canceled {
                         None
@@ -258,15 +262,15 @@ impl Workspace {
                 target: "restbook_app::send",
                 "{} {} -> {} in {}ms, {} bytes",
                 request.method,
-                sent_url,
+                crate::logging::redact_url(&sent_url),
                 response.status,
                 response.duration_ms,
                 response.body.len(),
             );
             // The outcome above is not enough to see *what* came back when a
-            // user attaches the log, so a bounded single-line body preview
+            // user attaches a capture, so a bounded single-line body preview
             // follows it. Binary is named, never dumped.
-            log::info!(
+            log::debug!(
                 target: "restbook_app::send",
                 "  response body: {}",
                 body_preview(response.body.as_bytes(), 400),

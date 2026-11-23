@@ -86,7 +86,7 @@ fn main() {
     // A developer flag on a binary that otherwise takes none. It is parsed from
     // the plain arguments so a normal launch cannot change shape by accident.
     let preview = preview::invocation(std::env::args());
-    log::info!(target: "restbook_app::ui", "{}", preview::summary(&preview));
+    log::debug!(target: "restbook_app::ui", "{}", preview::summary(&preview));
 
     // The icon bundle the components draw from. Without a source registered
     // every `Icon` paints nothing, so this is a startup requirement, not a

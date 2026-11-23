@@ -172,19 +172,27 @@ attached) and a file:
 
 The directory is the same one `RESTBOOK_DATA_DIR` overrides, so a portable run's
 log moves with its data. `RESTBOOK_LOG_FILE` names the file directly. The file
-is appended to and truncated at startup once it passes 4 MiB. A failure to open
-it is not fatal: the app warns on stderr and runs with stderr alone.
+is appended to; a start that finds it over 1 MiB renames it to `restbook.log.1`
+and begins a fresh file, keeping one previous log. A failure to open it is not
+fatal: the app warns on stderr and runs with stderr alone.
 
-`RUST_LOG` is the filter, and is the *only* thing that turns on levels below
-`info` — the point of the default is that a bug report's file stays small:
+The file is deliberately quiet: startup facts, `warn`/`error`, panics, and one
+send outcome. The play-by-play is not in it. When a user needs to report a
+problem, **Settings → Storage → Capture for 10 minutes** (also on a failed send's
+error banner) opens a separate `restbook-debug-<timestamp>.log`; that capture
+carries the interaction transcript, full URLs, headers, bodies, and import/export
+reasons, and is deleted on the next launch. Secrets stay redacted in both files.
+
+`RUST_LOG` is the developer switch and the *only* thing that makes the ordinary
+file verbose. It outranks the 10-minute window in both directions: when it is
+set, the UI capture is inert and the log follows exactly what was asked for.
 
 ```sh
-# the default when RUST_LOG is unset (also what scripts/dev.cmd --logs sets)
+# the default when RUST_LOG is unset (quiet)
 warn,restbook_app=info,restbook_core=info,restbook_store=info,restbook_transport=info
 
-RUST_LOG=restbook_app=debug sh ../../scripts/dev.sh run   # this crate, verbose
-RUST_LOG=debug           sh ../../scripts/dev.sh run     # GPUI and wgpu too
-RUST_LOG=wgpu=info       sh ../../scripts/dev.sh run     # just the GPU adapter
+# developer: full transcript in restbook.log, no timer, no deletion
+RUST_LOG=warn,restbook_app=debug,restbook_core=debug,restbook_store=debug,restbook_transport=debug sh ../../scripts/dev.sh run
 ```
 
 Targets are crate names, so the hyphen in `restbook-app` becomes an underscore
@@ -194,15 +202,16 @@ setting `RUST_LOG` will **not** appear — that is the first thing to check when
 new line seems missing. Write `log::*` rather than `eprintln!`: only the logger
 reaches the file.
 
-A run reads as a transcript at the default level, so a log attached to a bug
-report shows what was done and what came back:
+A capture reads as a transcript, so a file attached to a bug report shows what
+was done and what came back:
 
-- `restbook_app::ui` (info) — every command, tab open/close/select, history
+- `restbook_app::ui` (debug) — every command, tab open/close/select, history
   pick, sidebar reveal, saved-request/draft open, response tab and format
   switch, and the copy buttons.
-- `restbook_app::send` (info) — the request that went out, its outcome
-  (`status in Nms, N bytes`), and a bounded single-line body preview (binary
-  payloads are named, not dumped).
+- `restbook_app::send` (debug) — the request that went out, its full URL, and
+  a bounded single-line body preview (binary payloads are named, not dumped).
+  The ordinary file keeps the outcome line only: method, redacted URL, status,
+  duration, and size.
 
 Panel events are not logged by the subscriber by hand. Each pane's `Event` has a
 `summary()` that is an **exhaustive `match`**, so adding a variant does not
@@ -221,11 +230,11 @@ Get-Content "$env:APPDATA\restbook\restbook.log" -Tail 80 -Wait
 
 You do not have to know that path in advance: the titlebar menu has **Copy log
 path** and **Copy recent log** (the last 200 lines to the clipboard, with a
-confirmation flash), a failed send's error banner has its own copy-log button,
-and **Settings → Storage** prints the log file that is actually open — including
-a `RESTBOOK_LOG_FILE` override. The error itself is a normal UI event already
-(the response pane and the status bar), so the file is the *evidence*, not the
-only notification.
+confirmation flash), a failed send's error banner has its own copy-log and
+capture-debug buttons, and **Settings → Storage** prints the log file that is
+actually open — including a `RESTBOOK_LOG_FILE` override. The error itself is a
+normal UI event already (the response pane and the status bar), so the file is
+the *evidence*, not the only notification.
 
 A panic is not a `log` call, so `logging::init` also installs a panic hook. The
 line arrives through the same sink (`panicked: panicked at <file>:<line>:` plus

@@ -283,7 +283,7 @@ impl Workspace {
     /// deleting, renaming, and any store failure a bug report needs.
     pub(crate) fn notice(&mut self, notice: &Notice, cx: &mut Context<Self>) {
         match notice {
-            Notice::Done(message) => log::info!(target: "restbook_app::action", "{message}"),
+            Notice::Done(message) => log::debug!(target: "restbook_app::action", "{message}"),
             Notice::Failed(message) => log::error!(target: "restbook_app::action", "{message}"),
         }
         let flash = chrome::Flash::from_notice(notice);
@@ -336,7 +336,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        log::info!(target: "restbook_app::ui", "close panel: {}", name.as_str());
+        log::debug!(target: "restbook_app::ui", "close panel: {}", name.as_str());
         match name {
             PanelName::History => {
                 let pane = self.panes.history.clone();
@@ -425,7 +425,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        log::info!(target: "restbook_app::ui", "reveal panel: {}", name.as_str());
+        log::debug!(target: "restbook_app::ui", "reveal panel: {}", name.as_str());
 
         match name {
             PanelName::Collections => {
@@ -488,7 +488,7 @@ impl Workspace {
     /// always visible rather than living in a menu.
     pub(crate) fn toggle_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let open = self.dock_showing(DockPlacement::Left, cx);
-        log::info!(target: "restbook_app::ui", "titlebar: sidebar toggle, open={open}");
+        log::debug!(target: "restbook_app::ui", "titlebar: sidebar toggle, open={open}");
         if open {
             self.dock.update(cx, |dock, cx| {
                 dock.toggle_dock(DockPlacement::Left, window, cx)
@@ -507,7 +507,7 @@ impl Workspace {
     /// of the two is in front.
     pub(crate) fn toggle_tools(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let open = self.dock_showing(DockPlacement::Right, cx);
-        log::info!(target: "restbook_app::ui", "titlebar: tools toggle, open={open}");
+        log::debug!(target: "restbook_app::ui", "titlebar: tools toggle, open={open}");
         if open {
             self.dock.update(cx, |dock, cx| {
                 dock.toggle_dock(DockPlacement::Right, window, cx)
@@ -516,7 +516,7 @@ impl Workspace {
         }
         self.reveal_panel(PanelName::History, window, cx);
         let now_open = self.dock.read(cx).is_dock_open(DockPlacement::Right);
-        log::info!(target: "restbook_app::ui", "titlebar: tools revealed, open={now_open}");
+        log::debug!(target: "restbook_app::ui", "titlebar: tools revealed, open={now_open}");
         // `reveal_panel` opened the dock, but only a live read says so; if it
         // stayed shut, the flash reports that instead of claiming success.
         let message = if now_open {
