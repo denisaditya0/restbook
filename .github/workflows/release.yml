@@ -496,9 +496,8 @@ jobs:
             echo "release $TAG already exists; updating it"
             gh release edit "$TAG" --notes "$body"
           else
-            printf '%s\n' "$body" > body.md
             gh release create "$TAG" --draft --verify-tag \
-              --title "restbook $VERSION" --notes-file body.md
+              --title "restbook $VERSION" --notes "$body"
           fi
 
           # The manifest is derived, never hand-written: the URL follows the
@@ -506,7 +505,10 @@ jobs:
           # about to be uploaded. Its `notes` is the changelog entry alone — the
           # update dialog is not the place for a contributor list or PR links.
           assets='{}'
-          for file in *; do
+          # Only the package artifacts define the manifest. Anything else that
+          # happens to be in this directory (release notes, a stray debug log)
+          # must never become an asset key.
+          for file in restbook-*; do
             [ -f "$file" ] || continue
             rest=${file#"restbook-${VERSION}-"}
             # One key per platform, so `.deb` must be stripped to give Linux the
@@ -528,7 +530,7 @@ jobs:
             '{version: $version, notes: $notes, assets: $assets}' > "$manifest"
           cat "$manifest"
 
-          gh release upload "$TAG" ./* --clobber
+          gh release upload "$TAG" latest.json restbook-* --clobber
 
           # Only now is anything visible: the draft becomes the release and takes
           # the `latest` marker, which is what `releases/latest` — and so the

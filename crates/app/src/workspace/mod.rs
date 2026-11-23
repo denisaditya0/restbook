@@ -370,7 +370,7 @@ impl Workspace {
     /// the workspace knows who can.
     fn listen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.subscribe(&self.panes.history, |this, _, event: &HistoryEvent, cx| {
-            log::info!(target: "restbook_app::ui", "{}", event.summary());
+            log::debug!(target: "restbook_app::ui", "{}", event.summary());
             let id = match event {
                 HistoryEvent::Picked { id } => *id,
                 HistoryEvent::Delete { id } => {
@@ -428,7 +428,7 @@ impl Workspace {
         cx.subscribe(
             &self.panes.response,
             |this, _, event: &ResponseEvent, cx| {
-                log::info!(target: "restbook_app::ui", "{}", event.summary());
+                crate::logging::event(event.summary());
                 match event {
                     // The pane reports the intent; where the result appears is
                     // the canvas's decision. Render defers the reveal, because
@@ -448,7 +448,7 @@ impl Workspace {
 
         cx.subscribe(&self.panes.request, |this, _, event: &RequestEvent, cx| {
             if let Some(line) = event.summary() {
-                log::info!(target: "restbook_app::ui", "{line}");
+                crate::logging::event(line);
             }
             match event {
                 RequestEvent::Send => this.send(cx),
@@ -481,7 +481,7 @@ impl Workspace {
             &self.panes.collections,
             |this, _, event: &CollectionsEvent, cx| {
                 if let Some(line) = event.summary() {
-                    log::info!(target: "restbook_app::ui", "{line}");
+                    crate::logging::event(line);
                 }
                 match event {
                     CollectionsEvent::Open { node, request } => {
@@ -743,7 +743,7 @@ impl Workspace {
     }
 
     fn run_command(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
-        log::info!(target: "restbook_app::ui", "command: {command:?}");
+        log::debug!(target: "restbook_app::ui", "command: {command:?}");
         match command {
             Command::Send => self.send(cx),
             Command::NewTab => self.new_tab(cx),
@@ -823,7 +823,7 @@ impl Workspace {
         // socket anyway; cancelling lets the transport close it deliberately.
         if self.document.read(cx).is_pending() {
             let url = self.document.read(cx).last_url.clone().unwrap_or_default();
-            log::info!(target: "restbook_app::ui", "closing with a request in flight: {url}");
+            log::debug!(target: "restbook_app::ui", "closing with a request in flight: {url}");
             self.document.update(cx, |document, cx| document.cancel(cx));
         }
 
@@ -837,7 +837,7 @@ impl Workspace {
         }
         self.flush_draft(draft_dirty, cx);
 
-        log::info!(target: "restbook_app::ui", "window closing; last state written");
+        log::debug!(target: "restbook_app::ui", "window closing; last state written");
         // From here the process is teardown only. gpui-pre logs target-less
         // errors while it destroys the window; the sink drops them once told
         // (see `logging::mark_closing`).

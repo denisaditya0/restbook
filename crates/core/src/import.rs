@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{Collection, Environment};
 
+pub mod bruno;
 pub mod curl;
 pub mod har;
 pub mod openapi;
@@ -36,6 +37,7 @@ pub fn parse(format: ImportFormat, text: &str, options: Options<'_>) -> crate::R
             options.har_limit.unwrap_or(har::DEFAULT_LIMIT),
         ),
         ImportFormat::OpenApi => openapi::parse(text, options.fallback_name),
+        ImportFormat::Bruno => bruno::parse(text, options.fallback_name),
         ImportFormat::Bundle => {
             let bundle = Bundle::from_json(text)?;
             Ok(BulkImport {
@@ -166,6 +168,10 @@ pub struct BulkImport {
     /// Names that were already present when the caller started saving.
     pub duplicates: Vec<String>,
     pub skipped: Vec<Skip>,
+    /// Things that were imported but need the user's attention — an inherited
+    /// auth with nothing to inherit from, for example. Not a skip: the request
+    /// is in the result.
+    pub notes: Vec<Skip>,
 }
 
 /// One item some format described but this one could not turn into a request.
@@ -202,6 +208,13 @@ impl BulkImport {
         if !self.skipped.is_empty() {
             parts.push(format!("{} skipped", self.skipped.len()));
         }
+        if !self.notes.is_empty() {
+            parts.push(format!(
+                "{} note{}",
+                self.notes.len(),
+                plural(self.notes.len())
+            ));
+        }
         format!("Imported {}", parts.join(", "))
     }
 }
@@ -236,6 +249,8 @@ pub enum ImportFormat {
     Har,
     /// An OpenAPI 3 document.
     OpenApi,
+    /// A Bruno request file: the YAML shape newer Bruno writes per request.
+    Bruno,
     /// This app's own bundle: every collection and environment.
     Bundle,
 }
@@ -247,10 +262,13 @@ impl ImportFormat {
         if name.ends_with(".har") {
             return Some(Self::Har);
         }
+        if name.ends_with(".bru") {
+            return Some(Self::Bruno);
+        }
         if name.ends_with(".yaml") || name.ends_with(".yml") {
-            // A YAML file is an OpenAPI document in practice; the parser says
-            // so plainly if it is not.
-            return Some(Self::OpenApi);
+            // OpenAPI and a Bruno request are both YAML, so the suffix cannot
+            // decide; `detect` reads the envelope instead.
+            return None;
         }
         if name.ends_with(".json") {
             // All three JSON formats are distinguished by content, not suffix.
@@ -268,6 +286,16 @@ impl ImportFormat {
     pub fn detect(text: &str) -> Self {
         let trimmed = text.trim_start();
         if !trimmed.starts_with('{') {
+            let lower = text.to_ascii_lowercase();
+            let has = |key: &str| lower.starts_with(key) || lower.contains(&format!("\n{key}"));
+            if has("openapi:") || has("swagger:") || has("paths:") {
+                return Self::OpenApi;
+            }
+            // A Bruno request file is `info` + `http`; an OpenAPI document has
+            // `info` + `paths` and was claimed above.
+            if has("http:") && has("info:") {
+                return Self::Bruno;
+            }
             return Self::Curl;
         }
         if text.contains("\"log\"") && text.contains("\"entries\"") {
@@ -362,6 +390,7 @@ mod tests {
             }],
             duplicates: Vec::new(),
             skipped: Vec::new(),
+            notes: Vec::new(),
         };
         assert_eq!(import.request_count(), 3);
         assert_eq!(import.summary(), "Imported 3 requests, 1 environment");
@@ -377,6 +406,7 @@ mod tests {
                 at: "a/x".into(),
                 reason: "no url".into(),
             }],
+            notes: Vec::new(),
         };
         assert_eq!(
             import.summary(),
@@ -625,6 +655,16 @@ mod tests {
             ImportFormat::detect("curl -X POST https://example.com"),
             ImportFormat::Curl
         );
+        assert_eq!(
+            ImportFormat::detect(
+                "info:\n  name: Ping\nhttp:\n  method: GET\n  url: https://x.test\n"
+            ),
+            ImportFormat::Bruno
+        );
+        assert_eq!(
+            ImportFormat::detect("openapi: 3.0.0\ninfo:\n  title: Acme\npaths: {}\n"),
+            ImportFormat::OpenApi
+        );
     }
 
     #[test]
@@ -646,9 +686,11 @@ mod tests {
             Some(ImportFormat::Har)
         );
         assert_eq!(
-            ImportFormat::from_file_name("api.yaml"),
-            Some(ImportFormat::OpenApi)
+            ImportFormat::from_file_name("request.bru"),
+            Some(ImportFormat::Bruno)
         );
+        // YAML is OpenAPI or a Bruno request, so the name does not decide.
+        assert_eq!(ImportFormat::from_file_name("api.yaml"), None);
         // JSON could be any of the three, so the name does not decide.
         assert_eq!(ImportFormat::from_file_name("things.json"), None);
     }

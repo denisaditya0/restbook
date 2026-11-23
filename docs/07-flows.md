@@ -160,7 +160,9 @@ This is the "intent as event" rule in action.
 | Cookies: edit a value | `ResponseEvent::UpdateCookie { name, value }` | write the value into the shared jar, then redraw the tab | Center (Response, Cookies tab) | `Workspace::update_cookie` |
 | Cookies: delete a row | `ResponseEvent::DeleteCookie { name }` | remove that cookie from the shared jar, leaving the rest | Center (Response, Cookies tab) | `Workspace::delete_cookie` |
 | Body / Headers / Cookies tab | (local) | switch the response view | Center (Response) | `response.rs` |
+| Body toolbar: find | (local) | open or close the find row, then focus it; the row reports the match count and next/previous | Center (Response) | `ResponsePanel::toggle_find` |
 | Body toolbar: format switch, copy body, copy summary | (local) | pretty/raw, or write the body or the status line to the clipboard | Center (Response) | `ResponsePanel::render_body_toolbar` |
+| Error banner: capture debug | (local) | start a ten-minute `restbook-debug-<timestamp>.log` capture and name its path in a notification | Overlay (notification) | `logging::start_debug_capture` |
 
 The Cookies tab draws the session jar for the request's URL, because those are
 the cookies a send would carry. A response restored from history has no jar
@@ -228,7 +230,7 @@ with `window.defer`.
 | Command palette | `secondary-shift-p`, titlebar menu | centered dialog, 520px | `command_palette::open` |
 | Settings | palette `Settings…`, titlebar menu | centered dialog, 880px, category rail | `settings_view::open` |
 | Save request | Save on an unbound tab | centered dialog, 460px | `Workspace::open_save_dialog` |
-| Import result | an import that landed something | centered dialog, 448px; counts, saved names, duplicates, and every skipped item with its reason | `Workspace::open_import_report` |
+| Import result | an import that landed something | centered dialog, 448px; counts, saved names, duplicates, every skipped item with its reason, and any notes (an imported row that needs attention, such as inherited auth) | `Workspace::open_import_report` |
 | Export picker | `secondary-shift-e`, palette `Export…`, titlebar menu | centered dialog, 448px; scope, format, *Include secrets* | `Workspace::open_export_dialog` |
 | Delete confirmation | a row's trash button (Collections) or Delete (Environment) | centered **alert** dialog, 420px | `Workspace::open_delete_dialog` |
 | Update offer | the launch check finding a newer release that is not skipped | centered dialog, 448px; *Install now* / *Later* / *Skip this version* | `Workspace::open_update_offer_dialog` |

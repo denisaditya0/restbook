@@ -302,7 +302,7 @@ impl Workspace {
         if index == self.tabs.active() || index >= self.tabs.len() {
             return;
         }
-        log::info!(target: "restbook_app::ui", "select tab {index}");
+        log::debug!(target: "restbook_app::ui", "select tab {index}");
         // Flush before the selection moves: the debounced writer reads the
         // active tab, so an edit-and-switch inside `SAVE_DEBOUNCE` would
         // otherwise be written against the tab being switched to.
@@ -696,7 +696,7 @@ impl Workspace {
         let index = self.tabs.push(Tab::blank());
         self.tabs.set_active(index);
         self.adopt_active(cx);
-        log::info!(target: "restbook_app::ui", "new tab: {} open", self.tabs.len());
+        log::debug!(target: "restbook_app::ui", "new tab: {} open", self.tabs.len());
     }
 
     /// Open a stored draft as a new tab. Used when the sidebar's Unsaved row is
@@ -826,7 +826,7 @@ impl Workspace {
         self.tabs.insert(index + 1, copy);
         self.tabs.set_active(index + 1);
         self.adopt_active(cx);
-        log::info!(target: "restbook_app::ui", "duplicated tab {id}");
+        log::debug!(target: "restbook_app::ui", "duplicated tab {id}");
     }
 
     /// Move a tab one place left (`delta = -1`) or right (`delta = 1`), taking
@@ -847,7 +847,7 @@ impl Workspace {
             self.tabs.set_active(index);
         }
         self.push_tabs(cx);
-        log::info!(target: "restbook_app::ui", "moved tab {id} to {target}");
+        log::debug!(target: "restbook_app::ui", "moved tab {id} to {target}");
     }
 
     /// Reopen the most recently closed tab. The stack is process-local and
@@ -867,7 +867,7 @@ impl Workspace {
         let index = self.tabs.push(tab.reopened());
         self.tabs.set_active(index);
         self.adopt_active(cx);
-        log::info!(target: "restbook_app::ui", "reopened a closed tab");
+        log::debug!(target: "restbook_app::ui", "reopened a closed tab");
     }
 
     /// Whether closing the tab at `index` would lose work: it has a saved

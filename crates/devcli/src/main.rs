@@ -277,6 +277,7 @@ fn read_import(file: &std::path::Path, format: Option<&str>) -> Result<Parsed> {
             "postman" => ImportFormat::Postman,
             "har" => ImportFormat::Har,
             "openapi" => ImportFormat::OpenApi,
+            "bruno" => ImportFormat::Bruno,
             "bundle" => ImportFormat::Bundle,
             other => return Err(Error::Other(format!("unknown format `{other}`"))),
         },

@@ -370,9 +370,11 @@ Most of this is code that either exists or fails, so the list stays short:
 - **Redirects.** No `Authorization`, `Cookie`, or `Proxy-Authorization` crosses a
   host change, and an `https → http` downgrade is refused unless the request is
   `insecure` (`B27`, a rider on `0.1.6`).
-- **Logs.** No secret reaches `restbook.log` at `info`: the sent URL is elided
-  and the response-body preview is `debug` only. The file is offered for bug
-  reports, so it has to be safe to attach (`0.2.7`).
+- **Logs.** `restbook.log` stays at `info`: the sent URL is elided to scheme,
+  host, and path, and no body preview or interaction transcript is written. An
+  opt-in ten-minute capture adds those details in a separate timestamped file,
+  still with credentials redacted, and that file is removed on the next launch.
+  Both are offered for bug reports, so both have to be safe to attach (`0.2.7`).
 - **Exports.** The export dialog redacts secret values by default; “include
   secrets” is an explicit, warned choice (`B28`).
 - **Storage mode.** The release notes name the history mode the build uses. A

@@ -162,7 +162,7 @@ impl Workspace {
     /// otherwise schedule the same write, but this runs once, synchronously,
     /// so a reset followed by a quit still leaves the default arrangement.
     pub(crate) fn reset_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        log::info!(target: "restbook_app::ui", "reset layout");
+        log::debug!(target: "restbook_app::ui", "reset layout");
         self.default_layout(window, cx);
         self::save(&self.layout_path, &self.dock.read(cx).dump(cx));
         self.flash(super::chrome::FlashKind::Success, "Layout reset", cx);

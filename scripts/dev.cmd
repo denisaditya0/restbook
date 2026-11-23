@@ -114,11 +114,10 @@ if defined LOGS (
     if not defined STAMP set "STAMP=run"
     set "LOG_FILE=!LOG_DIR!\!STAMP!-cargo.log"
 
-    rem The app already logs its own actions at `info` by default, but a run
-    rem through `--logs` should not bury them under dependency chatter. This
-    rem matches the fallback in `crates/app/src/logging.rs` so both paths agree;
-    rem a caller's own `RUST_LOG` always wins.
-    if not defined RUST_LOG set "RUST_LOG=warn,restbook_app=info,restbook_core=info,restbook_store=info,restbook_transport=info"
+    rem `--logs` is the developer path, so it runs the full debug transcript
+    rem (the app's own capture window is for release builds). A caller's own
+    rem `RUST_LOG` always wins.
+    if not defined RUST_LOG set "RUST_LOG=warn,restbook_app=debug,restbook_core=debug,restbook_store=debug,restbook_transport=debug"
 
     echo dev: logging to !LOG_FILE! 1>&2
     echo dev: RUST_LOG=!RUST_LOG! 1>&2

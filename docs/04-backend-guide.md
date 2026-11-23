@@ -363,11 +363,19 @@ the following send; there is nothing else to call.
 ### Import a format
 
 Add the file to `import/`, return a `BulkImport`, and declare the module in
-`import.rs`. Keep two rules:
+`import.rs`. Keep three rules:
 
 - do not touch the `Store` — the caller saves what came back;
 - report a bad item as `Skip { at, reason }`, and only refuse the whole file when
-  there is nothing to import at all.
+  there is nothing to import at all;
+- put a caveat on something that *did* import in `notes`, not in `skipped`. An
+  inherited auth with no collection (a single Bruno request file) is the
+  example: the request is there, but the user has to set its auth.
+
+`ImportFormat::from_file_name` may only answer where the suffix is unambiguous.
+`.yml` is not: OpenAPI and a Bruno request are both YAML, so the name returns
+`None` and `detect` reads the envelope (`openapi:`/`swagger:`/`paths:` versus
+`info:` + `http:`). A new YAML format belongs in that shape test too.
 
 ```rust
 let import = import::parse(ImportFormat::Har, &text, Options::default())?;
