@@ -213,7 +213,13 @@ impl Workspace {
                     // Paint first. The log sink writes synchronously to stderr
                     // and a file, and doing that before the document update
                     // puts a slow console between the failure and the view.
+                    let queued_at = std::time::Instant::now();
                     this.update(cx, |this, cx| {
+                        log::debug!(
+                            target: "restbook_app::perf",
+                            "failure update entered {}ms after transport returned",
+                            queued_at.elapsed().as_millis(),
+                        );
                         // The transfer is over, whichever tab is on screen.
                         if this.sending == Some(send_id) {
                             this.sending = None;
@@ -248,6 +254,11 @@ impl Workspace {
                         }
                     })
                     .ok();
+                    log::debug!(
+                        target: "restbook_app::perf",
+                        "failure update returned after {}ms",
+                        queued_at.elapsed().as_millis(),
+                    );
 
                     // The timestamp separates "the wire took 2.5 s" from "the
                     // pane took 2.5 s"; the log write itself is off the

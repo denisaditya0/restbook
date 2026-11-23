@@ -321,7 +321,14 @@ impl Workspace {
         // close before the background had bound it would otherwise insert the
         // same draft a second time.
         if existing.is_none() {
-            match self.store.save_draft(&draft) {
+            let started = std::time::Instant::now();
+            let result = self.store.save_draft(&draft);
+            log::debug!(
+                target: "restbook_app::perf",
+                "first draft save took {}ms",
+                started.elapsed().as_millis(),
+            );
+            match result {
                 Ok(id) => {
                     self.tabs[index].draft = Some(id);
                     self.refresh_drafts(cx);

@@ -176,6 +176,9 @@ pub(crate) struct ResponsePanel {
     /// were opened. Loaded on demand, not on every paint.
     failure_details: bool,
     failure_log: Option<String>,
+    /// `true` once the failure view has been painted, so the perf probe logs a
+    /// frame and not every repaint.
+    failure_painted: bool,
     focus_handle: FocusHandle,
 }
 
@@ -798,6 +801,7 @@ impl ResponsePanel {
             finding: None,
             failure_details: false,
             failure_log: None,
+            failure_painted: false,
             focus_handle: cx.focus_handle(),
         };
         panel.sync_history(cx);
@@ -847,7 +851,13 @@ impl ResponsePanel {
             self.history_origin = origin;
             self.history_stamp = stamp;
             self.history_revision = revision;
+            let started = std::time::Instant::now();
             self.reload_history();
+            log::debug!(
+                target: "restbook_app::perf",
+                "response history reload took {}ms",
+                started.elapsed().as_millis(),
+            );
         }
 
         // While pending the clock has to advance on every heartbeat; once the
@@ -2117,11 +2127,15 @@ impl ResponsePanel {
     }
 
     fn render_failure(
-        &self,
+        &mut self,
         state: ResponseState,
         failure: Option<&Failure>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if !self.failure_painted {
+            self.failure_painted = true;
+            log::debug!(target: "restbook_app::perf", "failure view painted");
+        }
         let palette = self.palette.clone();
         let metrics = self.metrics;
         let (method, url) = {
@@ -2538,6 +2552,7 @@ impl Render for ResponsePanel {
         if !matches!(state, ResponseState::Error { .. }) {
             self.failure_details = false;
             self.failure_log = None;
+            self.failure_painted = false;
         }
 
         v_flex()

@@ -202,6 +202,15 @@ setting `RUST_LOG` will **not** appear — that is the first thing to check when
 new line seems missing. Write `log::*` rather than `eprintln!`: only the logger
 reaches the file.
 
+The send path also emits `restbook_app::perf` debug lines when a failure is
+handled (how long the foreground took to pick it up, and how long the response
+history and draft readers took). They exist to localise a stall between the
+transport returning and the error view painting:
+
+```sh
+RUST_LOG=restbook_app::perf=debug sh ../../scripts/dev.sh run
+```
+
 A capture reads as a transcript, so a file attached to a bug report shows what
 was done and what came back:
 
