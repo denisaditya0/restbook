@@ -523,6 +523,24 @@ intentional (no registry, no reconstruction).
    panel will not see it; add an observer like the one on `url_input`, or make
    `Workspace::send` read the live tree (it already does).
 
+### Show a `Kv` list as rows or as text
+
+The Params tab and a `Form` body each offer a Table/Raw switch. The table's rows
+stay authoritative; the text is generated from them when Raw opens and parsed
+back when it closes or when the request is sent (`RequestEditor::request`,
+`body`). `editor/kv_raw.rs` owns the field, and `core::kv_text` owns the format
+(see `04-backend-guide.md`): one pair per line, `&` accepted, `%XX`/`+` decoded,
+and a disabled row written as `# key=value` so the toggle cannot enable a row the
+user switched off.
+
+Rules that keep the two sides honest:
+
+- parse before leaving the view, not only at send time, so a body-kind change
+  does not discard edits (`fold_form_raw`);
+- never keep a second copy of the rows: the text is a view over them, and
+  `request()` reads whichever surface is showing;
+- the height is `metrics.body_row_height * 8`, so zoom scales it like the tables.
+
 ### Show a header the user did not write
 
 Two kinds of header exist and they live in different places on purpose. The user
