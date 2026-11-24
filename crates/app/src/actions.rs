@@ -159,7 +159,7 @@ mod tests {
 
     /// Build the table through an App so secondary- resolves for this host.
     fn app_bindings() -> Vec<super::KeyBinding> {
-        let mut cx = gpui_kit::TestAppContext::single();
+        let cx = gpui_kit::TestAppContext::single();
         cx.update(gpui_kit::init);
         cx.update(|cx| bindings(cx))
     }
@@ -167,7 +167,7 @@ mod tests {
     /// The semantic secondary modifier depends on the platform, which the
     /// modifier value now asks an App for.
     fn secondary(stroke: &gpui_kit::Keystroke) -> bool {
-        let mut cx = gpui_kit::TestAppContext::single();
+        let cx = gpui_kit::TestAppContext::single();
         cx.update(|cx| stroke.modifiers.secondary(cx))
     }
 
@@ -250,7 +250,7 @@ mod tests {
             .as_keystroke();
 
         assert_eq!(stroke.key, ",", "settings opens on cmd/ctrl + comma");
-        assert!(secondary(&stroke), "settings keeps its cmd/ctrl modifier");
+        assert!(secondary(stroke), "settings keeps its cmd/ctrl modifier");
     }
 
     /// The shortcuts sheet opens on `?`, but `?` is printable, so the binding
@@ -303,7 +303,7 @@ mod tests {
             .as_keystroke();
 
         assert_eq!(stroke.key, "f");
-        assert!(secondary(&stroke), "find keeps its cmd/ctrl modifier");
+        assert!(secondary(stroke), "find keeps its cmd/ctrl modifier");
     }
 
     /// Tab rotation has to stay reachable from any pane, and both spellings —
@@ -366,7 +366,7 @@ mod tests {
         // parser rather than being dropped.
         for stroke in [&sidebar, &tools] {
             assert!(
-                secondary(&stroke),
+                secondary(stroke),
                 "the toggle must keep its cmd/ctrl modifier"
             );
             // Not `shift`, for the reason in the test's own doc comment: a
