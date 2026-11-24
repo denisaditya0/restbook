@@ -60,7 +60,9 @@ Versions are chosen by what an upgrade can cost, not by how much code moved:
 | The 1.0 compatibility promise, or a break after it | major — `1.0.0` |
 
 A patch can carry a whole feature — most of this app shipped in `0.1.x`. What a
-patch never does is move something an installed build cannot roll back.
+patch never does is move something an installed build cannot roll back. An
+additive, optional field that older builds ignore is still a patch; a field older
+builds cannot read, or a migration, is the minor.
 
 A beta channel used to exist for the cases where a bad release cannot be undone
 for someone who already installed it — a `history.db` migration, an installer

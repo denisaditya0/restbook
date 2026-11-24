@@ -24,6 +24,25 @@ Contributors and pull requests are added to the release page by `release.yml`;
 do not write them here.
 -->
 
+## 0.1.10
+
+- **Every shortcut in one place.** Press `?` outside a text field, or choose
+*Keyboard shortcuts* from the palette or the window menu, to see every binding
+built from the live keymap. A question mark typed into a URL or body still
+inserts a question mark.
+- **Find the response body.** `Ctrl+F` opens a find row over the body: every
+match is marked, the current one is stronger, and Enter, Shift+Enter, or the
+arrows step through them. Escape closes the row, and the match set refreshes
+when a response finishes decoding.
+- **Return to a recent workspace.** Settings › Storage lists the workspace
+folders this install has opened, marks the current one, and reopens another in a
+fresh window.
+- **Long menus stay reachable.** The history filter, the window menu, and a
+collection row menu now scroll instead of losing their last entries when the
+window is at its minimum height.
+- **A current window toolkit.** The app now builds on GPUI Kit 0.11, with no
+intended change to how the window looks or behaves.
+
 ## 0.1.9
 
 - **A folder workspace encrypts its history.** History in a workspace now lives
