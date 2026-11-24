@@ -548,14 +548,6 @@ impl SelectableLine {
     }
 }
 
-impl IntoElement for SelectableLine {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
 impl Element for SelectableLine {
     type RequestLayoutState = TextSelectionHandle;
     type PrepaintState = Hitbox;

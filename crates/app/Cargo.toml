@@ -68,7 +68,7 @@ log = "0.4"
 # `tree-sitter` brings the JSON grammar and the incremental highlighter that
 # `gpui-component` exposes. HTML is the only other response type the pane
 # labels, so it gets a grammar; everything else stays plain text.
-gpui-kit = { version = "0.7", features = ["tree-sitter", "tree-sitter-html"] }
+gpui-kit = { version = "0.11", features = ["tree-sitter", "tree-sitter-html"] }
 restbook-core = { path = "../core" }
 restbook-store = { path = "../store" }
 restbook-transport = { path = "../transport" }
@@ -90,7 +90,7 @@ sha2 = "0.10"
 # Completion for `{{name}}` speaks the editor's own protocol: the kit's
 # `CompletionProvider` hands back `lsp_types` items read out of a `ropey`
 # document and wrapped in `anyhow`. These versions are pinned to the ones
-# `gpui-base 0.7.3` links — a second copy of any of them would not typecheck
+# `gpui-base 0.11.0` links — a second copy of any of them would not typecheck
 # against the trait.
 anyhow = "1"
 lsp-types = { version = "0.97", features = ["proposed"] }
@@ -103,7 +103,7 @@ ropey = "=2.0.0-beta.1"
 # `test-support` pulls in a `gpui-fast` chain whose pinned `cocoa` conflicts
 # with the one `gpui-pre-macos` links. `gpui-kit` re-exports all of `gpui`, so
 # the test types are still reached through it.
-gpui-pre = { version = "=0.3.9", features = ["test-support"] }
+gpui-pre = { version = "=0.3.14", features = ["test-support"] }
 
 # Branding, per target. Only Windows embeds an icon in the binary; see
 # `build.rs`. Nothing is added for macOS or Linux because neither reads an icon
