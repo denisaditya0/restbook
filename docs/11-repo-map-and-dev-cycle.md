@@ -110,6 +110,7 @@ runner. Build commands are `cargo` plus the `scripts/dev.*` wrappers.
 │           │   ├── send.rs          prepare -> transport -> record history
 │           │   ├── persistence.rs   layout.json and draft writes
 │           │   ├── save_dialog.rs   the first-save dialog: name + destination
+│           │   ├── move_dialog.rs   the move dialog: the same picker
 │           │   ├── updates.rs       the launch update check and its offer
 │           │   ├── storage.rs       data directory + which store
 │           │   ├── settings.rs      settings state

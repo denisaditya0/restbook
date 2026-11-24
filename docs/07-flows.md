@@ -150,8 +150,9 @@ This is the "intent as event" rule in action.
 |---|---|---|---|---|
 | Collections: request row click | `CollectionsEvent::Open { node, request }` | select the tab already holding `node`, else open the request in its own tab (taking over only the lone pristine placeholder), bind the tab to the node, delete any stale draft | Center | `Workspace::open_saved` |
 | Collections: draft row click | `CollectionsEvent::OpenDraft { id }` | select the tab holding that draft, or open it | Center | `Workspace::open_draft` |
-| Collections: any mutation | `CollectionsEvent::Notice(_)` | report a notification (create/delete/rename/save) | Overlay (notification) | `Workspace::notice` |
+| Collections: any mutation | `CollectionsEvent::Notice(_)` | report a notification (create/delete/rename/save/move) | Overlay (notification) | `Workspace::notice` |
 | Collections: delete a row | `CollectionsEvent::ConfirmDelete(target)` | open the delete alert dialog; delete on confirm | Overlay (alert dialog) | `Workspace::open_delete_dialog` |
+| Collections: Move to… | `CollectionsEvent::Move { node }` | open the destination picker; its confirm rewrites the target collection, then the source | Overlay (dialog) | `Workspace::open_move_dialog` |
 | Environment: delete | `EnvironmentEvent::ConfirmDelete(name)` | open the delete alert dialog; delete on confirm | Overlay (alert dialog) | `Workspace::open_delete_dialog` |
 
 ### Response panel → workspace
@@ -183,7 +184,7 @@ offered a copy of payload the current tab does not show.
 | Collection switcher → a collection | select it | Left dock |
 | `+` menu → New Request / New Folder / New Collection | create (New Request needs a selection) | Left dock |
 | Sort → Manual / Name A-Z / Name Z-A | re-sort the tree | Left dock |
-| Row tools: up / down / rename / delete | move, rename (label only), or delete (opens the alert dialog) | Left dock → Overlay |
+| Row tools: up / down / rename / move / delete | move within the siblings, rename (label only), pick a new home, or delete (opens the alert dialog) | Left dock → Overlay |
 
 ### Environment panel (in-pane)
 
@@ -238,6 +239,7 @@ with `window.defer`.
 | Import result | an import that landed something | centered dialog, 448px; counts, saved names, duplicates, every skipped item with its reason, and any notes (an imported row that needs attention, such as inherited auth) | `Workspace::open_import_report` |
 | Export picker | `secondary-shift-e`, palette `Export…`, titlebar menu | centered dialog, 448px; scope, format, *Include secrets* | `Workspace::open_export_dialog` |
 | Delete confirmation | a row's trash button (Collections) or Delete (Environment) | centered **alert** dialog, 420px | `Workspace::open_delete_dialog` |
+| Move request | a saved request row's *Move to…* | centered dialog, 448px; the same destination picker the save dialog uses, with *Move* disabled while the choice is the request's current home | `Workspace::open_move_dialog` |
 | Update offer | the launch check finding a newer release that is not skipped | centered dialog, 448px; *Install now* / *Later* / *Skip this version* | `Workspace::open_update_offer_dialog` |
 | Flash toast | any `Notice` / `flash`, including the two dock toggles | park in `pending_notice`, then a kit notification above dialogs | `Workspace::issue_notice` |
 

@@ -24,9 +24,49 @@ use gpui_kit::component::{h_flex, v_flex, Disableable as _, WindowExt as _};
 use gpui_kit::*;
 
 use crate::icons::IconName;
+use crate::panels::collections::{Destination, DestinationRow};
 use crate::theme::{Metrics, Palette};
 
 use super::Workspace;
+
+/// What a picked destination does. Each dialog owns its own state, so the menu
+/// itself only says *which* place was chosen.
+pub(super) type DestinationPick = Rc<dyn Fn(&mut Workspace, &Destination)>;
+
+/// Append every collection and folder to `menu`, checking `current`.
+///
+/// Shared by the save and move dialogs: a request's home is one `Destination`,
+/// and the two lists must not disagree about which places exist or how they are
+/// spelled.
+pub(super) fn with_destinations(
+    mut menu: PopupMenu,
+    rows: &[DestinationRow],
+    current: Option<&Destination>,
+    workspace: &Entity<Workspace>,
+    pick: &DestinationPick,
+) -> PopupMenu {
+    if rows.is_empty() {
+        return menu.item(PopupMenuItem::new("No collections yet.").disabled(true));
+    }
+    for row in rows {
+        let checked = current == Some(&row.target);
+        let target = row.target.clone();
+        let workspace = workspace.clone();
+        let pick = pick.clone();
+        menu = menu.item(
+            PopupMenuItem::new(row.label.clone())
+                .icon(IconName::Folder)
+                .checked(checked)
+                .on_click(move |_, _, cx| {
+                    workspace.update(cx, |workspace, cx| {
+                        pick(workspace, &target);
+                        cx.notify();
+                    });
+                }),
+        );
+    }
+    menu
+}
 
 impl Workspace {
     /// Ask for a name and a destination, then save. Called from render once
@@ -106,29 +146,22 @@ impl Workspace {
 
             let menu_workspace = workspace.clone();
             let menu_rows = rows.clone();
-            let menu_current = current.clone();
+            let menu_current = if creating { None } else { current.clone() };
             let menu_creating = creating;
-            let menu = move |mut menu: PopupMenu, _: &mut Window, _: &mut Context<PopupMenu>| {
-                if menu_rows.is_empty() {
-                    menu = menu.item(PopupMenuItem::new("No collections yet.").disabled(true));
-                }
-                for row in &menu_rows {
-                    let target = row.target.clone();
-                    let checked = !menu_creating && menu_current.as_ref() == Some(&target);
-                    let workspace = menu_workspace.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new(row.label.clone())
-                            .icon(IconName::Folder)
-                            .checked(checked)
-                            .on_click(move |_, _, cx| {
-                                workspace.update(cx, |workspace, cx| {
-                                    workspace.save_target = Some(target.clone());
-                                    workspace.save_new_collection = false;
-                                    cx.notify();
-                                });
-                            }),
-                    );
-                }
+            let menu_pick: DestinationPick = Rc::new(|workspace, target| {
+                workspace.save_target = Some(target.clone());
+                workspace.save_new_collection = false;
+            });
+            let menu = move |menu: PopupMenu, _: &mut Window, _: &mut Context<PopupMenu>| {
+                let menu = with_destinations(
+                    menu,
+                    &menu_rows,
+                    menu_current.as_ref(),
+                    &menu_workspace,
+                    &menu_pick,
+                );
+                // Only the save dialog can create a collection; a move needs a
+                // place that already exists.
                 let workspace = menu_workspace.clone();
                 menu.item(PopupMenuItem::separator())
                     .item(

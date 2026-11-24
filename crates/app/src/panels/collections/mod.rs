@@ -57,6 +57,10 @@ pub(crate) enum Event {
     /// dock panel with no window on every path), so it names the row and the
     /// workspace raises the confirmation and performs the delete.
     ConfirmDelete(RowTarget),
+    /// The user asked to move a saved request elsewhere. Like `ConfirmDelete`,
+    /// the destination picker is a window-level dialog, so the pane only names
+    /// the node; the workspace opens the picker and calls back.
+    Move { node: String },
 }
 
 /// One line for the interaction log, derived from the event itself. Exhaustive,
@@ -70,6 +74,7 @@ impl Event {
             )),
             Event::OpenDraft { id } => Some(format!("event: open draft id={id}")),
             Event::ConfirmDelete(target) => Some(format!("event: confirm delete {}", target.id())),
+            Event::Move { node } => Some(format!("event: move request {node}")),
             // Logged by `Workspace::notice`, which owns the flash too.
             Event::Notice(_) => None,
         }
@@ -132,18 +137,24 @@ impl RowTarget {
     }
 }
 
+/// Which row verbs apply, decided by the caller because it holds the tree.
+#[derive(Clone, Copy)]
+struct RowVerbs {
+    can_up: bool,
+    can_down: bool,
+    can_move: bool,
+    can_rename: bool,
+}
+
 /// The verbs a row offers, appended to `menu`.
 ///
 /// One builder for the row's own context menu and the dock's pane menu, so the
-/// two cannot disagree about what a row can do. `can_up`/`can_down` are decided
-/// by the caller, which holds the tree.
+/// two cannot disagree about what a row can do.
 fn row_items(
     menu: PopupMenu,
     id: String,
     target: RowTarget,
-    can_up: bool,
-    can_down: bool,
-    allow_rename: bool,
+    verbs: RowVerbs,
     panel: Entity<CollectionsPanel>,
 ) -> PopupMenu {
     let mut menu = menu;
@@ -152,7 +163,7 @@ fn row_items(
     menu = menu.item(
         PopupMenuItem::new("Move up")
             .icon(IconName::ArrowUp)
-            .disabled(!can_up)
+            .disabled(!verbs.can_up)
             .on_click(move |_, window, cx| {
                 up_panel.update(cx, |this, cx| this.move_row(&up_id, true, window, cx));
             }),
@@ -163,13 +174,29 @@ fn row_items(
     menu = menu.item(
         PopupMenuItem::new("Move down")
             .icon(IconName::ArrowDown)
-            .disabled(!can_down)
+            .disabled(!verbs.can_down)
             .on_click(move |_, window, cx| {
                 down_panel.update(cx, |this, cx| this.move_row(&down_id, false, window, cx));
             }),
     );
 
-    if allow_rename {
+    if verbs.can_move {
+        let move_panel = panel.clone();
+        let move_id = id.clone();
+        menu = menu.item(
+            PopupMenuItem::new("Move to…")
+                .icon(IconName::Folder)
+                .on_click(move |_, _, cx| {
+                    move_panel.update(cx, |_, cx| {
+                        cx.emit(Event::Move {
+                            node: move_id.clone(),
+                        })
+                    });
+                }),
+        );
+    }
+
+    if verbs.can_rename {
         let rename_panel = panel.clone();
         let rename_id = id;
         menu = menu.item(PopupMenuItem::separator()).item(
@@ -346,8 +373,20 @@ impl gpui_kit::component::dock::Panel for CollectionsPanel {
             let id = target.id().to_owned();
             let can_up = has_move_target(&self.collections, &id, true);
             let can_down = has_move_target(&self.collections, &id, false);
+            let allow_move = self.is_request(&id);
             menu = menu.separator();
-            menu = row_items(menu, id, target, can_up, can_down, true, panel);
+            menu = row_items(
+                menu,
+                id,
+                target,
+                RowVerbs {
+                    can_up,
+                    can_down,
+                    can_move: allow_move,
+                    can_rename: true,
+                },
+                panel,
+            );
         }
 
         menu
@@ -456,14 +495,25 @@ impl CollectionsPanel {
     /// actually happened. Failures are reported here too, since a `Ctrl+S` save
     /// has no window to notify.
     fn persist(&mut self, id: &str, window: Option<&mut Window>, cx: &mut Context<Self>) -> bool {
-        let Some(collection) = self.collections.iter().find(|each| each.id == id).cloned() else {
+        if !self.write_collection(id, cx) {
+            return false;
+        }
+        self.reload(window, cx);
+        true
+    }
+
+    /// Write one collection without re-reading the tree.
+    ///
+    /// A move changes two collections, and reloading between the writes would
+    /// hand the second write the store's copy of the first — which still holds
+    /// the request the move just took out of it, so the request would be written
+    /// back where it started.
+    fn write_collection(&self, id: &str, cx: &mut Context<Self>) -> bool {
+        let Some(collection) = self.collections.iter().find(|each| each.id == id) else {
             return false;
         };
-        match self.store.save_collection(&collection) {
-            Ok(()) => {
-                self.reload(window, cx);
-                true
-            }
+        match self.store.save_collection(collection) {
+            Ok(()) => true,
             Err(error) => {
                 self.notice(Notice::Failed(error.to_string().into()), cx);
                 false
@@ -663,6 +713,43 @@ impl CollectionsPanel {
     /// Every place a save can land, for the first-save dialog's picker.
     pub(crate) fn destinations(&self) -> Vec<DestinationRow> {
         tree::destination_rows(&self.collections)
+    }
+
+    /// Where a saved request currently lives, for the move dialog's prefill.
+    pub(crate) fn destination_of(&self, id: &str) -> Option<Destination> {
+        tree::destination_of(&self.collections, id)
+    }
+
+    /// Whether `id` names a saved request rather than a folder. Only a request
+    /// moves between collections: a folder would take its children with it,
+    /// which is a different feature.
+    fn is_request(&self, id: &str) -> bool {
+        matches!(
+            find_in_items_all(&self.collections, id),
+            Some(CollectionItem::Request(_))
+        )
+    }
+
+    /// Move a saved request to `target` and write both collections, target
+    /// first. Returns the ids that changed; `None` when the move was a no-op or a
+    /// write failed (the pane has already said why, and the tree is reloaded from
+    /// whatever did land).
+    pub(crate) fn move_request(
+        &mut self,
+        id: &str,
+        target: &Destination,
+        cx: &mut Context<Self>,
+    ) -> Option<(String, String)> {
+        let (target_id, source_id) = tree::move_to(&mut self.collections, id, target)?;
+        self.revision += 1;
+        self.prune_selection();
+        if !self.write_collection(&target_id, cx) || !self.write_collection(&source_id, cx) {
+            self.reload(None, cx);
+            return None;
+        }
+        self.notice(Notice::Done("Request moved.".into()), cx);
+        self.reload(None, cx);
+        Some((target_id, source_id))
     }
 
     /// Where the save dialog opens on: the selection, or the first collection so
@@ -1576,19 +1663,18 @@ impl CollectionsPanel {
         let id = target.id().to_owned();
         let can_up = has_move_target(&self.collections, &id, true);
         let can_down = has_move_target(&self.collections, &id, false);
+        let allow_move = self.is_request(&id);
         let panel = cx.entity();
         let target = target.clone();
+        let verbs = RowVerbs {
+            can_up,
+            can_down,
+            can_move: allow_move,
+            can_rename: allow_rename,
+        };
 
         move |menu: PopupMenu, _: &mut Window, _: &mut Context<PopupMenu>| {
-            row_items(
-                menu,
-                id.clone(),
-                target.clone(),
-                can_up,
-                can_down,
-                allow_rename,
-                panel.clone(),
-            )
+            row_items(menu, id.clone(), target.clone(), verbs, panel.clone())
         }
     }
 
@@ -1658,9 +1744,9 @@ mod tests {
 
     use gpui_kit::{AppContext as _, TestAppContext};
     use restbook_core::{Collection, CollectionItem, Folder, Store};
-    use restbook_store::MemoryStore;
+    use restbook_store::{FolderStore, MemoryStore};
 
-    use super::{selection_target, CollectionsPanel, RowTarget, Selection};
+    use super::{selection_target, CollectionsPanel, Destination, RowTarget, Selection};
     use crate::document::Document;
 
     fn into_folder(id: &str) -> Selection {
@@ -1743,5 +1829,113 @@ mod tests {
             1,
             "the request went to the root"
         );
+    }
+
+    fn two_collections() -> (Collection, Collection) {
+        let request = restbook_core::SavedRequest {
+            id: "req-a".to_owned(),
+            name: "Request A".to_owned(),
+            request: restbook_core::RequestDef::new(restbook_core::Method::Get, "https://a"),
+        };
+        (
+            Collection {
+                id: "col-a".to_owned(),
+                name: "A".to_owned(),
+                items: vec![CollectionItem::Request(request)],
+            },
+            Collection {
+                id: "col-b".to_owned(),
+                name: "B".to_owned(),
+                items: Vec::new(),
+            },
+        )
+    }
+
+    /// One window view per test, since `Palette::new` snapshots the theme.
+    fn open(
+        cx: &mut TestAppContext,
+        store: Arc<dyn Store>,
+    ) -> (
+        gpui_kit::Entity<CollectionsPanel>,
+        &mut gpui_kit::VisualTestContext,
+    ) {
+        let document = cx.update(|cx| cx.new(|_| Document::new()));
+        cx.add_window_view(|window, cx| CollectionsPanel::new(store, document, window, cx))
+    }
+
+    /// A move writes both collections; the store is what proves the request left
+    /// one and arrived in the other.
+    #[gpui_kit::test]
+    fn moving_a_request_reaches_both_collections_in_the_store(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        crate::test_support::init_ui(cx);
+
+        let store = Arc::new(MemoryStore::new());
+        let (a, b) = two_collections();
+        store.save_collection(&a).unwrap();
+        store.save_collection(&b).unwrap();
+
+        let (panel, cx) = open(cx, store.clone());
+        let target = Destination {
+            collection: "col-b".to_owned(),
+            folders: Vec::new(),
+        };
+        let moved = panel.update(cx, |panel, cx| panel.move_request("req-a", &target, cx));
+        assert_eq!(
+            moved,
+            Some(("col-b".to_owned(), "col-a".to_owned())),
+            "the changed collections come back target first",
+        );
+
+        let saved = store.collections().unwrap();
+        let source = saved.iter().find(|each| each.id == "col-a").unwrap();
+        assert!(
+            source.items.is_empty(),
+            "the request stayed in its old home"
+        );
+        let target = saved.iter().find(|each| each.id == "col-b").unwrap();
+        assert!(matches!(
+            target.items.first(),
+            Some(CollectionItem::Request(request)) if request.id == "req-a"
+        ));
+    }
+
+    /// The folder-workspace half: a move is two collection files, and a fresh
+    /// handle reading them back is what proves both were rewritten.
+    #[gpui_kit::test]
+    fn a_move_rewrites_both_collection_files_in_a_workspace(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        crate::test_support::init_ui(cx);
+
+        let root = std::env::temp_dir().join(format!("restbook-move-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let store = Arc::new(FolderStore::open(&root).unwrap());
+        let (a, b) = two_collections();
+        store.save_collection(&a).unwrap();
+        store.save_collection(&b).unwrap();
+
+        let (panel, cx) = open(cx, store.clone());
+        let target = Destination {
+            collection: "col-b".to_owned(),
+            folders: Vec::new(),
+        };
+        assert!(panel
+            .update(cx, |panel, cx| panel.move_request("req-a", &target, cx))
+            .is_some());
+
+        // Read the files back rather than the handle that wrote them.
+        let reopened = FolderStore::open(&root).unwrap();
+        let saved = reopened.collections().unwrap();
+        let source = saved.iter().find(|each| each.id == "col-a").unwrap();
+        assert!(source.items.is_empty(), "col-a still lists the request");
+        let target = saved.iter().find(|each| each.id == "col-b").unwrap();
+        assert!(matches!(
+            target.items.first(),
+            Some(CollectionItem::Request(request)) if request.id == "req-a"
+        ));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
