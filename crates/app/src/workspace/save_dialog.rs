@@ -5,9 +5,13 @@
 //! save should not fail because nothing was clicked last, and the highlight is
 //! navigation again.
 //!
-//! The choice lives on the workspace (`save_name`, `save_target`) because the
-//! dialog's content closure is rebuilt on every notify, so state created inside
-//! it would be lost between builds.
+//! The choice lives on the workspace (`save_name`, `save_target`,
+//! `save_new_collection`) because the dialog's content closure is rebuilt on every
+//! notify, so state created inside it would be lost between builds.
+//!
+//! *New collection…* is part of the picker rather than a separate flow: a first
+//! run has no collection to save into, and making one elsewhere would cost the
+//! typed request name and the dialog.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -34,19 +38,25 @@ impl Workspace {
         let default_name = format!("{} {}", request.method, request.url);
         self.save_name
             .update(cx, |state, cx| state.set_value(default_name, window, cx));
+        self.save_new_collection_name
+            .update(cx, |state, cx| state.set_value("", window, cx));
         // The selection is only the starting point: the picker can change it, and
-        // an unselected sidebar still opens on the first collection.
+        // an unselected sidebar still opens on the first collection. With no
+        // collection at all, the dialog opens ready to make one.
         self.save_target = self.panes.collections.read(cx).default_destination();
+        self.save_new_collection = self.save_target.is_none();
 
         let workspace = cx.entity();
         let name_input = self.save_name.clone();
         let field = self.save_name.clone();
         let focus_input = self.save_name.clone();
+        let new_name_input = self.save_new_collection_name.clone();
+        let new_name_field = self.save_new_collection_name.clone();
         let first_build = Cell::new(true);
         let palette = Palette::new(cx);
         let metrics = Metrics::current(cx);
 
-        // One confirm for the footer button and for Enter: it reads the field and
+        // One confirm for the footer button and for Enter: it reads the fields and
         // the picker at the moment of the click, not when the dialog was built.
         type Confirm = Rc<dyn Fn(&mut Window, &mut App) -> bool>;
         let confirm_workspace = workspace.clone();
@@ -57,9 +67,15 @@ impl Workspace {
                 // dialog open rather than saving something the user has to fix.
                 return false;
             }
+            let creating = confirm_workspace.read(cx).save_new_collection;
+            let collection_name = new_name_input.read(cx).value().trim().to_owned();
+            if creating && collection_name.is_empty() {
+                return false;
+            }
             confirm_workspace.update(cx, |workspace, cx| {
                 let target = workspace.save_target.clone();
-                workspace.commit_save(None, Some(&name), target, cx)
+                let create = workspace.save_new_collection.then_some(collection_name);
+                workspace.commit_save(None, Some(&name), target, create.as_deref(), cx)
             })
         });
         let for_button = confirm.clone();
@@ -77,22 +93,28 @@ impl Workspace {
 
             let rows = workspace.read(cx).panes.collections.read(cx).destinations();
             let current = workspace.read(cx).save_target.clone();
-            let current_label = current
-                .as_ref()
-                .and_then(|target| rows.iter().find(|row| &row.target == target))
-                .map(|row| row.label.clone())
-                .unwrap_or_else(|| "Choose a collection".to_owned());
+            let creating = workspace.read(cx).save_new_collection;
+            let current_label = if creating {
+                "New collection".to_owned()
+            } else {
+                current
+                    .as_ref()
+                    .and_then(|target| rows.iter().find(|row| &row.target == target))
+                    .map(|row| row.label.clone())
+                    .unwrap_or_else(|| "Choose a collection".to_owned())
+            };
 
             let menu_workspace = workspace.clone();
             let menu_rows = rows.clone();
             let menu_current = current.clone();
+            let menu_creating = creating;
             let menu = move |mut menu: PopupMenu, _: &mut Window, _: &mut Context<PopupMenu>| {
                 if menu_rows.is_empty() {
                     menu = menu.item(PopupMenuItem::new("No collections yet.").disabled(true));
                 }
                 for row in &menu_rows {
                     let target = row.target.clone();
-                    let checked = menu_current.as_ref() == Some(&target);
+                    let checked = !menu_creating && menu_current.as_ref() == Some(&target);
                     let workspace = menu_workspace.clone();
                     menu = menu.item(
                         PopupMenuItem::new(row.label.clone())
@@ -101,14 +123,28 @@ impl Workspace {
                             .on_click(move |_, _, cx| {
                                 workspace.update(cx, |workspace, cx| {
                                     workspace.save_target = Some(target.clone());
+                                    workspace.save_new_collection = false;
                                     cx.notify();
                                 });
                             }),
                     );
                 }
-                // The list is every folder in every collection, so it can be
-                // taller than a minimum-height window.
-                menu.scrollable(true)
+                let workspace = menu_workspace.clone();
+                menu.item(PopupMenuItem::separator())
+                    .item(
+                        PopupMenuItem::new("New collection…")
+                            .icon(IconName::Plus)
+                            .checked(menu_creating)
+                            .on_click(move |_, _, cx| {
+                                workspace.update(cx, |workspace, cx| {
+                                    workspace.save_new_collection = true;
+                                    cx.notify();
+                                });
+                            }),
+                    )
+                    // The list is every folder in every collection, so it can be
+                    // taller than a minimum-height window.
+                    .scrollable(true)
             };
 
             let into = h_flex()
@@ -133,6 +169,20 @@ impl Workspace {
                 .child(div().text_xs().text_color(palette.muted).child("Name"))
                 .child(Input::new(&field).id("save-request-name"));
 
+            // Only while *New collection…* is the destination: the field is the
+            // one thing that step adds, so it cannot be mistaken for a rename.
+            let collection_row = creating.then(|| {
+                v_flex()
+                    .gap(px(metrics.space_xs))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(palette.muted)
+                            .child("Collection"),
+                    )
+                    .child(Input::new(&new_name_field).id("save-request-collection"))
+            });
+
             let cancel = Button::new("save-request-cancel")
                 .label("Cancel")
                 .ghost()
@@ -140,7 +190,7 @@ impl Workspace {
             let save = Button::new("save-request-confirm")
                 .label("Save")
                 .primary()
-                .disabled(current.is_none())
+                .disabled(!creating && current.is_none())
                 .on_click({
                     let confirm = for_button.clone();
                     move |_, window, cx| {
@@ -160,7 +210,8 @@ impl Workspace {
                         .gap(px(metrics.space_md))
                         .py(px(metrics.space_sm))
                         .child(name_row)
-                        .child(into),
+                        .child(into)
+                        .children(collection_row),
                 )
                 .footer(DialogFooter::new().child(cancel).child(save))
                 .on_ok({

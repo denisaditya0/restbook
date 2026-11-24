@@ -133,6 +133,10 @@ pub(crate) struct Workspace {
     /// same reason: the dialog is rebuilt on every notify, so a pick made in one
     /// build has to survive into the next.
     save_target: Option<Destination>,
+    /// Whether the save dialog is creating a collection rather than saving into
+    /// an existing one, and the name field for it.
+    save_new_collection: bool,
+    save_new_collection_name: Entity<InputState>,
     /// A draft asked to be saved, but the dialog needs a window and the event the
     /// request arrived on had none. The next render opens the dialog.
     pending_save: bool,
@@ -290,6 +294,8 @@ impl Workspace {
         let document = cx.new(|_| Document::new());
         let variables = cx.new(|cx| Variables::new(store.clone(), cx));
         let save_name = cx.new(|cx| InputState::new(window, cx).placeholder("Request name"));
+        let save_new_collection_name =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Collection name"));
         let settings = cx.new(|_| settings::Settings::new(state_dir.join(settings::SETTINGS_FILE)));
         if let Some(root) = &workspace_root {
             settings.update(cx, |settings, cx| settings.record_workspace(root, cx));
@@ -359,6 +365,8 @@ impl Workspace {
             focus_handle: cx.focus_handle(),
             save_name,
             save_target: None,
+            save_new_collection: false,
+            save_new_collection_name,
             pending_save: false,
             pending_import: false,
             export_state: ExportState::default(),
@@ -1503,6 +1511,87 @@ mod tests {
         assert_eq!(wrap_index(2, 3, 1), 0);
         assert_eq!(wrap_index(1, 3, 1), 2);
         assert_eq!(wrap_index(1, 3, -1), 0);
+    }
+
+    /// *New collection…* is one confirm: the collection and the request land
+    /// together, and the tab binds to the new node so the next Save updates it.
+    mod save_creation {
+        use gpui_kit::{AppContext as _, TestAppContext};
+        use restbook_core::CollectionItem;
+
+        use super::super::Workspace;
+
+        /// The real window root. `gpui_kit::open_window` wraps the app in
+        /// `base::Root`, and that wrapper installs a window's component state —
+        /// notifications and dialogs need it, and a bare `add_window_view` does
+        /// not.
+        fn open(
+            cx: &mut TestAppContext,
+        ) -> (
+            gpui_kit::Entity<Workspace>,
+            &mut gpui_kit::VisualTestContext,
+        ) {
+            let mut built = None;
+            let (_root, cx) = cx.add_window_view(|window, cx| {
+                let workspace = cx.new(|cx| Workspace::new(window, cx));
+                built = Some(workspace.clone());
+                gpui_kit::base::Root::new(workspace, window, cx)
+            });
+            (built.expect("the view built the workspace"), cx)
+        }
+
+        fn collections(
+            cx: &mut gpui_kit::VisualTestContext,
+            workspace: &gpui_kit::Entity<Workspace>,
+        ) -> Vec<restbook_core::Collection> {
+            cx.update(|_, cx| workspace.read(cx).store.collections().unwrap())
+        }
+
+        #[gpui_kit::test]
+        fn creating_a_collection_and_saving_lands_both(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("save-creation");
+            let (workspace, cx) = open(cx);
+
+            // The confirmation the save raises is a window-level notification;
+            // everything asserted below is set synchronously.
+            let landed = cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.commit_save(None, Some("First request"), None, Some("My API"), cx)
+                })
+            });
+            assert!(landed, "the save did not land");
+
+            let saved = collections(cx, &workspace);
+            assert_eq!(saved.len(), 1);
+            assert_eq!(saved[0].name, "My API");
+            let CollectionItem::Request(request) = &saved[0].items[0] else {
+                panic!("the request is not at the new collection's root");
+            };
+            assert_eq!(request.name, "First request");
+
+            // The tab is bound to the node, so the next Save updates instead of
+            // appending a second copy.
+            let node = cx.update(|_, cx| workspace.read(cx).tabs[0].node.clone());
+            assert_eq!(node.as_deref(), Some(request.id.as_str()));
+        }
+
+        #[gpui_kit::test]
+        fn an_unnamed_new_collection_creates_nothing(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("save-creation-blank");
+            let (workspace, cx) = open(cx);
+
+            let landed = cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.commit_save(None, Some("R"), None, Some("  "), cx)
+                })
+            });
+            assert!(!landed);
+            assert!(collections(cx, &workspace).is_empty());
+        }
     }
 
     /// A tab keeps its own request, body included.

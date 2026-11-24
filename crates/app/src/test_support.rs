@@ -12,6 +12,13 @@
 //! a real `Workspace`, which is why the dock tests in `workspace/mod.rs` build
 //! panes by hand.
 //!
+//! A test that makes the window *raise a notification* — a save, a delete, a
+//! dock toggle — also has to give the window its root: `gpui_kit::open_window`
+//! wraps the app in `base::Root`, and that wrapper installs the component state
+//! `push_notification` and `open_dialog` look up. A bare `add_window_view` does
+//! not, and the first notice panics with "component window state is missing".
+//! `workspace::tests::save_creation` shows the shape.
+//!
 //! Test-only: declared `#[cfg(test)]` in `main.rs`.
 
 use std::path::{Path, PathBuf};

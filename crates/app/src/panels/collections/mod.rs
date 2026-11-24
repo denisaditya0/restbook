@@ -495,6 +495,30 @@ impl CollectionsPanel {
         }
     }
 
+    /// Create a top-level collection called `name`, persist it, and select it so
+    /// the tree shows where it landed. Returns its id, or `None` when the write
+    /// failed (already reported by [`Self::persist`]).
+    ///
+    /// Callers that have a window announce the creation; the save dialog does
+    /// not, because its own "Request saved." is the sentence for the step the
+    /// user asked for.
+    pub(crate) fn create_collection(
+        &mut self,
+        name: &str,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) -> Option<String> {
+        let id = new_id();
+        self.collections.push(Collection {
+            id: id.clone(),
+            name: name.to_owned(),
+            items: Vec::new(),
+        });
+        self.revision += 1;
+        self.selection = Selection::collection(&id);
+        self.persist(&id, window, cx).then_some(id)
+    }
+
     fn add_collection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let typed = self.new_collection.read(cx).value().trim().to_owned();
         let name = if typed.is_empty() {
@@ -502,29 +526,22 @@ impl CollectionsPanel {
         } else {
             typed
         };
-        let id = new_id();
-        self.collections.push(Collection {
-            id: id.clone(),
-            name,
-            items: Vec::new(),
-        });
-        self.revision += 1;
         self.new_collection
             .update(cx, |state, cx| state.set_value("", window, cx));
-        self.selection = Selection::collection(&id);
         self.composing = false;
+        let Some(id) = self.create_collection(&name, Some(window), cx) else {
+            return;
+        };
         let name = self
             .collections
             .iter()
             .find(|each| each.id == id)
             .map(|each| each.name.clone())
             .unwrap_or_else(|| "Collection".to_owned());
-        if self.persist(&id, Some(window), cx) {
-            self.notice(
-                Notice::Done(format!("Created collection \"{name}\".").into()),
-                cx,
-            );
-        }
+        self.notice(
+            Notice::Done(format!("Created collection \"{name}\".").into()),
+            cx,
+        );
     }
 
     fn add_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {

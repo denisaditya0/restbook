@@ -854,6 +854,12 @@ nothing had been clicked. `CollectionsPanel::destinations()` returns every
 collection and folder as `Destination` rows; the first one is the prefill when
 nothing is selected (`tree::default_destination`).
 
+*New collection…* is the last item of that picker, not a separate flow: it turns
+the same dialog into a name dialog and the confirm creates the collection and
+saves the request into its root (`Workspace::commit_save` takes the collection
+name and creates it first). It is also what a first run gets, because a
+workspace with no collection has nowhere else to send the save.
+
 A rename that is not a creation does not deserve a modal: the collections pane
 puts a Rename button in the row tools that shows an inline input in the tree.
 Both paths end in the same place — `request.name` is a **label**, so renaming a
