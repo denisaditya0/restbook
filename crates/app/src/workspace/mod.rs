@@ -152,6 +152,8 @@ pub(crate) struct Workspace {
     /// window, so the picker opens from the next render, the same way a save is
     /// deferred.
     pending_import: bool,
+    /// The Collections pane asked to export. Same deferral as `pending_import`.
+    pending_export: bool,
     /// The export picker's choices. Rebuilt each time the dialog opens so
     /// "include secrets" is always off and a stale scope cannot leak a file.
     pub(crate) export_state: ExportState,
@@ -380,6 +382,7 @@ impl Workspace {
             move_target: None,
             pending_save: false,
             pending_import: false,
+            pending_export: false,
             export_state: ExportState::default(),
             pending_history: false,
             pending_delete: None,
@@ -547,6 +550,15 @@ impl Workspace {
                     }
                     CollectionsEvent::Move { node } => {
                         this.pending_move = Some(node.clone());
+                        cx.notify();
+                    }
+                    CollectionsEvent::SaveRequest => this.save_active_as(cx),
+                    CollectionsEvent::Import => {
+                        this.pending_import = true;
+                        cx.notify();
+                    }
+                    CollectionsEvent::Export => {
+                        this.pending_export = true;
                         cx.notify();
                     }
                 }
@@ -1073,6 +1085,13 @@ impl Render for Workspace {
             });
         }
 
+        if std::mem::take(&mut self.pending_export) {
+            let this = cx.entity();
+            window.defer(cx, move |window, cx| {
+                this.update(cx, |workspace, cx| workspace.open_export_dialog(window, cx));
+            });
+        }
+
         // Same deferral as the save dialog: the History pane has to be revealed,
         // and a dock change needs the frame to settle first.
         if std::mem::take(&mut self.pending_history) {
@@ -1222,25 +1241,6 @@ impl Render for Workspace {
                                 });
                             }),
                     );
-                    let import = workspace.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new("Import\u{2026}")
-                            .icon(IconName::Upload)
-                            .on_click(move |_, window, cx| {
-                                import
-                                    .update(cx, |workspace, cx| workspace.import_file(window, cx));
-                            }),
-                    );
-                    let export = workspace.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new("Export\u{2026}")
-                            .icon(IconName::Download)
-                            .on_click(move |_, window, cx| {
-                                export.update(cx, |workspace, cx| {
-                                    workspace.open_export_dialog(window, cx)
-                                });
-                            }),
-                    );
                     let copy = workspace.clone();
                     menu = menu.item(
                         PopupMenuItem::new("Copy as cURL")
@@ -1249,17 +1249,9 @@ impl Render for Workspace {
                                 copy.update(cx, |workspace, cx| workspace.copy_curl(cx));
                             }),
                     );
-                    // Save as creates a new collection entry even when the tab
-                    // came from one, so an experiment can be branched without
-                    // overwriting the request it was opened from.
-                    let save_as = workspace.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new("Save request as\u{2026}")
-                            .icon(IconName::Save)
-                            .on_click(move |_, _, cx| {
-                                save_as.update(cx, |workspace, cx| workspace.save_active_as(cx));
-                            }),
-                    );
+                    // Save, import, and export are commands about collections, so
+                    // they live on the Collections pane. The window menu keeps
+                    // only what this window is: commands, panes, and diagnostics.
                     // The View section: the panes with no other pointer route.
                     // Collections and the tools dock each have a toggle in the
                     // status bar's corners, so repeating them here would be a

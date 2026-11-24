@@ -61,6 +61,15 @@ pub(crate) enum Event {
     /// the destination picker is a window-level dialog, so the pane only names
     /// the node; the workspace opens the picker and calls back.
     Move { node: String },
+    /// The header asked for the save dialog. Saving is a collection verb, so it
+    /// lives here now instead of in the window menu; the pane has no window, so
+    /// the workspace raises the dialog.
+    SaveRequest,
+    /// The header asked for a file to import. Deferred like the request pane's
+    /// empty-state button, for the same reason: a picker needs a window.
+    Import,
+    /// The header asked to export. The workspace owns the picker and the write.
+    Export,
 }
 
 /// One line for the interaction log, derived from the event itself. Exhaustive,
@@ -75,6 +84,9 @@ impl Event {
             Event::OpenDraft { id } => Some(format!("event: open draft id={id}")),
             Event::ConfirmDelete(target) => Some(format!("event: confirm delete {}", target.id())),
             Event::Move { node } => Some(format!("event: move request {node}")),
+            Event::SaveRequest => Some("event: save request from collections".to_owned()),
+            Event::Import => Some("event: import file".to_owned()),
+            Event::Export => Some("event: export".to_owned()),
             // Logged by `Workspace::notice`, which owns the flash too.
             Event::Notice(_) => None,
         }
@@ -973,7 +985,7 @@ impl CollectionsPanel {
         let menu = move |mut menu: PopupMenu, _: &mut Window, _: &mut Context<PopupMenu>| {
             menu = menu
                 .item(
-                    PopupMenuItem::new("New Request")
+                    PopupMenuItem::new("Save request here")
                         .icon(IconName::FileText)
                         .disabled(!has_collection)
                         .on_click({
@@ -993,6 +1005,42 @@ impl CollectionsPanel {
                             let panel = panel.clone();
                             move |_, window, cx| {
                                 panel.update(cx, |this, cx| this.add_folder(window, cx));
+                            }
+                        }),
+                )
+                // Saving is a collection verb: the dialog asks for a name and a
+                // destination, so it belongs here rather than in the window menu.
+                .item(PopupMenuItem::separator())
+                .item(
+                    PopupMenuItem::new("Save request\u{2026}")
+                        .icon(IconName::Save)
+                        .on_click({
+                            let panel = panel.clone();
+                            move |_, _, cx| {
+                                panel.update(cx, |_, cx| cx.emit(Event::SaveRequest));
+                            }
+                        }),
+                )
+                // Import and export move collections in and out of the app, so
+                // they sit beside the tree they act on.
+                .item(PopupMenuItem::separator())
+                .item(
+                    PopupMenuItem::new("Import\u{2026}")
+                        .icon(IconName::Upload)
+                        .on_click({
+                            let panel = panel.clone();
+                            move |_, _, cx| {
+                                panel.update(cx, |_, cx| cx.emit(Event::Import));
+                            }
+                        }),
+                )
+                .item(
+                    PopupMenuItem::new("Export\u{2026}")
+                        .icon(IconName::Download)
+                        .on_click({
+                            let panel = panel.clone();
+                            move |_, _, cx| {
+                                panel.update(cx, |_, cx| cx.emit(Event::Export));
                             }
                         }),
                 )

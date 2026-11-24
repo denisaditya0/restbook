@@ -1315,27 +1315,6 @@ impl RequestPanel {
             }))
             .children(labels);
 
-        let import = Button::new("request-menu")
-            .icon(IconName::Ellipsis)
-            .ghost()
-            .compact()
-            .tooltip("More actions")
-            .dropdown_menu({
-                let panel = cx.entity();
-                move |mut menu: PopupMenu, _, _| {
-                    // A menu click does not focus the pane, so the action is run
-                    // through the entity instead of being dispatched. The outer
-                    // closure rebuilds the menu, so it clones per build.
-                    let paste = panel.clone();
-                    menu = menu.item(PopupMenuItem::new("Paste cURL").on_click(
-                        move |_, window, cx| {
-                            paste.update(cx, |this, cx| this.paste_curl(window, cx));
-                        },
-                    ));
-                    menu
-                }
-            });
-
         let editor = self.editor.clone();
         let body = match tab {
             EditorTab::Params => editor.update(cx, |editor, cx| editor.render_params_tab(cx)),
@@ -1363,8 +1342,7 @@ impl RequestPanel {
                     // The strip takes the free width and may shrink: `TabBar` only
                     // scrolls once it has a bounded width, so this wrapper is what
                     // keeps the overflow inside the scrollport.
-                    .child(div().flex_1().min_w_0().child(tabs))
-                    .child(import),
+                    .child(div().flex_1().min_w_0().child(tabs)),
             )
             .child(
                 div()
