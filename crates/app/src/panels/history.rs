@@ -471,22 +471,27 @@ impl HistoryPanel {
                 );
             }
 
-            menu.separator().item(
-                PopupMenuItem::new("Clear filters")
-                    .disabled(!active)
-                    .on_click({
-                        let panel = panel.clone();
-                        move |_, _, cx| {
-                            panel.update(cx, |this, cx| {
-                                this.method = None;
-                                this.status_class = None;
-                                this.sent_within = SentWithin::Any;
-                                this.reload(cx);
-                                cx.notify();
-                            });
-                        }
-                    }),
-            )
+            menu.separator()
+                .item(
+                    PopupMenuItem::new("Clear filters")
+                        .disabled(!active)
+                        .on_click({
+                            let panel = panel.clone();
+                            move |_, _, cx| {
+                                panel.update(cx, |this, cx| {
+                                    this.method = None;
+                                    this.status_class = None;
+                                    this.sent_within = SentWithin::Any;
+                                    this.reload(cx);
+                                    cx.notify();
+                                });
+                            }
+                        }),
+                )
+                // The menu is taller than a 640x480 window when every section
+                // is shown. `scrollable` gives it the kit's max height and a
+                // vertical scrollbar instead of clipping the last choices.
+                .scrollable(true)
         };
 
         Button::new("history-filter")
