@@ -5,69 +5,128 @@
 //! live beside the pane rather than inside it so the file that draws the tree
 //! and the file that changes it can be read apart.
 
-use restbook_core::{Collection, CollectionItem, Folder, Method, SavedRequest};
+use restbook_core::{Collection, CollectionItem, Method, SavedRequest};
 
 use super::{Selection, SortOrder};
 
-/// The tree a search shows: a saved request matches on its name or its stored
-/// URL, and any ancestor of a match stays visible; a collection or folder whose
-/// own name matches keeps its whole subtree. An empty query keeps everything.
-pub(super) fn filter_tree(collections: &[Collection], query: &str) -> Vec<Collection> {
+/// The rows a search shows, as index paths into `collections`.
+///
+/// Each inner vec is a path `[collection_index, item_index, …]` naming one
+/// visible row, in pre-order and in display order. A saved request matches on
+/// its name or its stored URL, and any ancestor of a match stays visible; a
+/// collection or folder whose own name matches keeps its whole subtree. An
+/// empty query returns nothing, because the caller borrows the tree in place.
+///
+/// Paths rather than owned copies are what keep typing in the filter from
+/// deep-cloning every match: the pane walks `&collections` by these indices.
+pub(super) fn filter_paths(
+    collections: &[Collection],
+    query: &str,
+    order: SortOrder,
+) -> Vec<Vec<usize>> {
     let needle = query.trim().to_ascii_lowercase();
     if needle.is_empty() {
-        return collections.to_vec();
+        return Vec::new();
     }
-    collections
-        .iter()
-        .filter_map(|collection| filter_collection(collection, &needle))
-        .collect()
+    let mut roots: Vec<usize> = (0..collections.len()).collect();
+    if order != SortOrder::Manual {
+        roots.sort_by(|&a, &b| order.compare(&collections[a].name, &collections[b].name));
+    }
+    let mut paths = Vec::new();
+    for index in roots {
+        push_collection(&collections[index], index, &needle, order, &mut paths);
+    }
+    paths
 }
 
-fn filter_collection(collection: &Collection, needle: &str) -> Option<Collection> {
-    if contains(&collection.name, needle) {
-        return Some(collection.clone());
+fn push_collection(
+    collection: &Collection,
+    index: usize,
+    needle: &str,
+    order: SortOrder,
+    paths: &mut Vec<Vec<usize>>,
+) {
+    let whole = contains(&collection.name, needle);
+    if !whole
+        && !collection
+            .items
+            .iter()
+            .any(|each| item_visible(each, needle))
+    {
+        return;
     }
-    let items = collection
-        .items
-        .iter()
-        .filter_map(|item| filter_item(item, needle))
-        .collect::<Vec<_>>();
-    if items.is_empty() {
-        None
+    paths.push(vec![index]);
+    let mut prefix = vec![index];
+    if whole {
+        push_all(&collection.items, &mut prefix, order, paths);
     } else {
-        Some(Collection {
-            id: collection.id.clone(),
-            name: collection.name.clone(),
-            items,
-        })
+        push_matches(&collection.items, &mut prefix, needle, order, paths);
     }
 }
 
-fn filter_item(item: &CollectionItem, needle: &str) -> Option<CollectionItem> {
+/// Whether a row keeps itself: a request on name/URL, a folder on its own name
+/// or on any descendant that matches.
+fn item_visible(item: &CollectionItem, needle: &str) -> bool {
     match item {
         CollectionItem::Request(request) => {
-            let matches = contains(&request.name, needle) || contains(&request.request.url, needle);
-            matches.then(|| item.clone())
+            contains(&request.name, needle) || contains(&request.request.url, needle)
         }
         CollectionItem::Folder(folder) => {
+            contains(&folder.name, needle)
+                || folder.items.iter().any(|each| item_visible(each, needle))
+        }
+    }
+}
+
+/// Walk a filtered level: keep only the matching rows and their ancestors, in
+/// display order.
+fn push_matches(
+    items: &[CollectionItem],
+    prefix: &mut Vec<usize>,
+    needle: &str,
+    order: SortOrder,
+    paths: &mut Vec<Vec<usize>>,
+) {
+    let mut visible: Vec<usize> = (0..items.len())
+        .filter(|&index| item_visible(&items[index], needle))
+        .collect();
+    sort_indices(&mut visible, items, order);
+    for index in visible {
+        prefix.push(index);
+        paths.push(prefix.clone());
+        if let CollectionItem::Folder(folder) = &items[index] {
             if contains(&folder.name, needle) {
-                return Some(item.clone());
-            }
-            let items = folder
-                .items
-                .iter()
-                .filter_map(|each| filter_item(each, needle))
-                .collect::<Vec<_>>();
-            if items.is_empty() {
-                None
+                push_all(&folder.items, prefix, order, paths);
             } else {
-                Some(CollectionItem::Folder(Folder {
-                    id: folder.id.clone(),
-                    name: folder.name.clone(),
-                    items,
-                }))
+                push_matches(&folder.items, prefix, needle, order, paths);
             }
         }
+        prefix.pop();
+    }
+}
+
+/// Walk a whole subtree, every row visible, in display order.
+fn push_all(
+    items: &[CollectionItem],
+    prefix: &mut Vec<usize>,
+    order: SortOrder,
+    paths: &mut Vec<Vec<usize>>,
+) {
+    let mut indices: Vec<usize> = (0..items.len()).collect();
+    sort_indices(&mut indices, items, order);
+    for index in indices {
+        prefix.push(index);
+        paths.push(prefix.clone());
+        if let CollectionItem::Folder(folder) = &items[index] {
+            push_all(&folder.items, prefix, order, paths);
+        }
+        prefix.pop();
+    }
+}
+
+fn sort_indices(indices: &mut [usize], items: &[CollectionItem], order: SortOrder) {
+    if order != SortOrder::Manual {
+        indices.sort_by(|&a, &b| order.compare(item_name(&items[a]), item_name(&items[b])));
     }
 }
 
@@ -82,28 +141,6 @@ pub(super) fn sort_refs(collections: &mut [&Collection], order: SortOrder) {
         return;
     }
     collections.sort_by(|left, right| order.compare(&left.name, &right.name));
-}
-
-/// Sort a copy of the tree for display. Every level is ordered by name; a
-/// request's stored name already starts with its method, so the method groups
-/// together under the same order the tree shows.
-pub(super) fn sort_tree(collections: &mut [Collection], order: SortOrder) {
-    if order == SortOrder::Manual {
-        return;
-    }
-    collections.sort_by(|left, right| order.compare(&left.name, &right.name));
-    for collection in collections.iter_mut() {
-        sort_items(&mut collection.items, order);
-    }
-}
-
-fn sort_items(items: &mut [CollectionItem], order: SortOrder) {
-    items.sort_by(|left, right| order.compare(item_name(left), item_name(right)));
-    for item in items.iter_mut() {
-        if let CollectionItem::Folder(folder) = item {
-            sort_items(&mut folder.items, order);
-        }
-    }
 }
 
 pub(super) fn item_name(item: &CollectionItem) -> &str {
@@ -550,10 +587,10 @@ mod tests {
     use restbook_core::{Collection, CollectionItem, Folder, Method, RequestDef, SavedRequest};
 
     use super::{
-        default_destination, destination_of, destination_rows, display_name, filter_tree,
+        default_destination, destination_of, destination_rows, display_name, filter_paths,
         find_in_items_all, has_move_target, initial, insert_into, item_id, move_item, move_to,
         node_name, owner_collection, remove_item, rename_item, resolve_selection, Destination,
-        Selection,
+        Selection, SortOrder,
     };
 
     fn destination(collection: &str, folders: &[&str]) -> Destination {
@@ -615,15 +652,14 @@ mod tests {
     fn a_three_thousand_request_tree_filters_without_a_stall() {
         let tree = large_tree(3_000);
         let started = std::time::Instant::now();
-        let filtered = filter_tree(&tree, "needle-2999");
+        let paths = filter_paths(&tree, "needle-2999", SortOrder::Manual);
         let elapsed = started.elapsed();
 
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].items.len(), 1);
-        assert!(
-            matches!(&filtered[0].items[0], CollectionItem::Request(request) if request.id == "req-2999"),
-            "the filter kept the wrong row",
-        );
+        // The collection stays as the match's ancestor; only the matching row is
+        // kept under it, and the path points straight at it without a clone.
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths[0], vec![0]);
+        assert_eq!(paths[1], vec![0, 2999]);
         assert!(
             elapsed < std::time::Duration::from_millis(250),
             "filtering 3,000 requests took {elapsed:?}",
@@ -795,46 +831,73 @@ mod tests {
     #[test]
     fn filter_keeps_ancestors_of_a_match() {
         let tree = sample();
-        let filtered = filter_tree(&tree, "b");
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].items.len(), 1);
-
-        let CollectionItem::Folder(fold) = &filtered[0].items[0] else {
-            panic!("expected the folder to survive as an ancestor");
-        };
-        assert_eq!(fold.items.len(), 1);
-        assert!(matches!(&fold.items[0], CollectionItem::Request(r) if r.id == "req-2"));
+        // Only `req-2` matches "b"; its collection and folder survive as
+        // ancestors above it.
+        assert_eq!(
+            filter_paths(&tree, "b", SortOrder::Manual),
+            vec![vec![0], vec![0, 0], vec![0, 0, 1]],
+        );
     }
 
     #[test]
     fn filter_matches_a_request_url() {
         let tree = sample();
-        let filtered = filter_tree(&tree, "/top");
-        let CollectionItem::Request(request) = &filtered[0].items[0] else {
-            panic!("expected the top-level request");
-        };
-        assert_eq!(request.id, "req-3");
+        // `/top` is only in `req-3`, the collection's second child.
+        assert_eq!(
+            filter_paths(&tree, "/top", SortOrder::Manual),
+            vec![vec![0], vec![0, 1]],
+        );
     }
 
     #[test]
     fn filter_keeps_a_matching_collections_whole_subtree() {
         let tree = sample();
-        let filtered = filter_tree(&tree, "sam");
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].items.len(), 2);
+        // "Sample" matches the collection, so every row beneath it is visible.
+        assert_eq!(
+            filter_paths(&tree, "sam", SortOrder::Manual),
+            vec![
+                vec![0],
+                vec![0, 0],
+                vec![0, 0, 0],
+                vec![0, 0, 1],
+                vec![0, 1]
+            ],
+        );
+    }
+
+    #[test]
+    fn filter_orders_visible_rows_by_name() {
+        // Two matching siblings, stored "two" then "one", so a name sort flips
+        // them: the filter must order rows, not just pick them.
+        let tree = vec![Collection {
+            id: "c".to_owned(),
+            name: "C".to_owned(),
+            items: vec![
+                CollectionItem::Request(saved("r-two", Method::Get, "https://x/two")),
+                CollectionItem::Request(saved("r-one", Method::Get, "https://x/one")),
+            ],
+        }];
+        assert_eq!(
+            filter_paths(&tree, "x/", SortOrder::Manual),
+            vec![vec![0], vec![0, 0], vec![0, 1]],
+        );
+        assert_eq!(
+            filter_paths(&tree, "x/", SortOrder::NameAsc),
+            vec![vec![0], vec![0, 1], vec![0, 0]],
+        );
     }
 
     #[test]
     fn filter_returns_nothing_when_nothing_matches() {
         let tree = sample();
-        assert!(filter_tree(&tree, "zzz").is_empty());
+        assert!(filter_paths(&tree, "zzz", SortOrder::Manual).is_empty());
     }
 
     #[test]
-    fn an_empty_query_keeps_everything() {
+    fn an_empty_query_yields_no_paths() {
         let tree = sample();
-        assert_eq!(filter_tree(&tree, "").len(), 1);
-        assert_eq!(filter_tree(&tree, "  ").len(), 1);
+        assert!(filter_paths(&tree, "", SortOrder::Manual).is_empty());
+        assert!(filter_paths(&tree, "  ", SortOrder::Manual).is_empty());
     }
 
     #[test]
