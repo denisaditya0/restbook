@@ -2,6 +2,7 @@
 name = "restbook-app"
 version = "0.1.10"
 edition = "2021"
+license = "MIT OR Apache-2.0"
 publish = false
 # The resource compiler needs the icon before the crate compiles, and it is the
 # only per-OS branding the build itself owns: Windows embeds `icons/restbook.ico`

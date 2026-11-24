@@ -146,9 +146,12 @@ runner. Build commands are `cargo` plus the `scripts/dev.*` wrappers.
 │   └── sample-server.py     local response fixtures for the UI
 ├── docs/                    the numbered documents listed above
 ├── CHANGELOG.md             what shipped for the user; the manifest's notes
+├── LICENSE-MIT              dual-licensed: MIT or Apache-2.0
+├── LICENSE-APACHE
 ├── .github/workflows/
 │   ├── ci.yml               pull requests: fmt, clippy, tests, encrypted store
 │   └── release.yml          tag → build 3 native targets → draft release + manifest
+├── .github/dependabot.yml   the only thing that moves a pinned action
 ├── .github/pull_request_template.md   the shape a pull request is reviewed in
 ├── .agents/skills/          GPUI Kit coding/design guides for agents
 ├── .refs/                   ignored reference checkouts

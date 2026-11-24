@@ -36,6 +36,11 @@ patched; upgrade instead.
 - **No account, no telemetry.** Nothing about your usage leaves the machine. The
   two outbound paths the app owns are your own requests and the update check
   against the release channel.
+- **CI and release runs execute pinned code.** Every action in
+  `.github/workflows/` names a full commit SHA, with its release tag in a
+  trailing comment. A retagged or moved upstream version cannot change what runs
+  on a pull request or a release; bumping an action is an edit that shows up in
+  review, and the tag comment is what a dependency tool reads.
 - **Workspace files separate structure from secrets.** In a folder workspace the
   tracked files (`collection.json`, `environments/*.json`) hold structure with
   secret values redacted; the real values live in `restbook.local.json` and the

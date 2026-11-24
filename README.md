@@ -428,3 +428,9 @@ engine. GPUI compiles and links under GNU, but its build scripts call
 If Build Tools with the "Desktop development with C++" workload are ever
 installed, the app can be built with MSVC instead by changing the channel in
 that file to `stable-x86_64-pc-windows-msvc`.
+
+## License
+
+MIT or Apache-2.0, at your option: [`LICENSE-MIT`](LICENSE-MIT) and
+[`LICENSE-APACHE`](LICENSE-APACHE). Contributions are accepted under the same
+pair.
