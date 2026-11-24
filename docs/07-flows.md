@@ -234,7 +234,7 @@ with `window.defer`.
 | Command palette | `secondary-shift-p`, titlebar menu | centered dialog, 520px | `command_palette::open` |
 | Settings | palette `Settings…`, titlebar menu | centered dialog, 880px, category rail | `settings_view::open` |
 | Keyboard shortcuts | `?`, palette `Keyboard shortcuts`, titlebar menu | centered dialog, 448px; one row per bound command | `Workspace::open_shortcuts` |
-| Save request | Save on an unbound tab | centered dialog, 460px | `Workspace::open_save_dialog` |
+| Save request | Save on an unbound tab, or Save As | centered dialog, 448px; a name and a destination picker listing every collection and its folders. The sidebar selection only pre-fills the picker, so a save no longer needs one; *Save* is disabled only when there is no collection at all | `Workspace::open_save_dialog` |
 | Import result | an import that landed something | centered dialog, 448px; counts, saved names, duplicates, every skipped item with its reason, and any notes (an imported row that needs attention, such as inherited auth) | `Workspace::open_import_report` |
 | Export picker | `secondary-shift-e`, palette `Export…`, titlebar menu | centered dialog, 448px; scope, format, *Include secrets* | `Workspace::open_export_dialog` |
 | Delete confirmation | a row's trash button (Collections) or Delete (Environment) | centered **alert** dialog, 420px | `Workspace::open_delete_dialog` |

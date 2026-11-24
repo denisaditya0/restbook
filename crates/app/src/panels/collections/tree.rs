@@ -113,20 +113,20 @@ pub(super) fn item_name(item: &CollectionItem) -> &str {
     }
 }
 
-/// Insert `item` under the container named by `selection`. An unknown
+/// Insert `item` under the container named by `destination`. An unknown
 /// collection or folder path leaves the tree untouched.
 pub(super) fn insert_into(
     collections: &mut [Collection],
-    selection: &Selection,
+    destination: &Destination,
     item: CollectionItem,
 ) -> bool {
-    let Some(collection_id) = selection.collection.as_deref() else {
+    let Some(collection) = collections
+        .iter_mut()
+        .find(|each| each.id == destination.collection)
+    else {
         return false;
     };
-    let Some(collection) = collections.iter_mut().find(|each| each.id == collection_id) else {
-        return false;
-    };
-    insert_in_items(&mut collection.items, &selection.folders, item)
+    insert_in_items(&mut collection.items, &destination.folders, item)
 }
 
 fn insert_in_items(items: &mut Vec<CollectionItem>, path: &[String], item: CollectionItem) -> bool {
@@ -390,15 +390,97 @@ pub(super) fn initial(name: &str) -> String {
         .unwrap_or_else(|| "?".to_owned())
 }
 
+/// Where a save lands: the top-level collection and the folder path inside it.
+///
+/// One value for both "what the sidebar has selected" and "what the dialog was
+/// told", so a save is given a destination instead of reading a highlight.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Destination {
+    pub(crate) collection: String,
+    pub(crate) folders: Vec<String>,
+}
+
+/// One line of the destination picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DestinationRow {
+    /// The full path, `Collection › Folder`, because the menu is flat.
+    pub(crate) label: String,
+    pub(crate) target: Destination,
+}
+
+/// Every place a request can be saved, in tree order: each collection, then its
+/// folders depth-first.
+pub(crate) fn destination_rows(collections: &[Collection]) -> Vec<DestinationRow> {
+    let mut rows = Vec::new();
+    for collection in collections {
+        let mut target = Destination {
+            collection: collection.id.clone(),
+            folders: Vec::new(),
+        };
+        rows.push(DestinationRow {
+            label: collection.name.clone(),
+            target: target.clone(),
+        });
+        push_folder_rows(&mut rows, &collection.items, &collection.name, &mut target);
+    }
+    rows
+}
+
+fn push_folder_rows(
+    rows: &mut Vec<DestinationRow>,
+    items: &[CollectionItem],
+    prefix: &str,
+    target: &mut Destination,
+) {
+    for item in items {
+        let CollectionItem::Folder(folder) = item else {
+            continue;
+        };
+        target.folders.push(folder.id.clone());
+        let label = format!("{prefix} › {}", folder.name);
+        rows.push(DestinationRow {
+            label: label.clone(),
+            target: target.clone(),
+        });
+        push_folder_rows(rows, &folder.items, &label, target);
+        target.folders.pop();
+    }
+}
+
+/// The destination a save starts on: the selection when it still names a place,
+/// else the first collection, so an unselected sidebar can still save.
+pub(crate) fn default_destination(
+    collections: &[Collection],
+    selection: &Selection,
+) -> Option<Destination> {
+    if selection.collection.is_some() && resolve_selection(collections, selection).is_some() {
+        return Some(Destination {
+            collection: selection.collection.clone()?,
+            folders: selection.folders.clone(),
+        });
+    }
+    collections.first().map(|collection| Destination {
+        collection: collection.id.clone(),
+        folders: Vec::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use restbook_core::{Collection, CollectionItem, Folder, Method, RequestDef, SavedRequest};
 
     use super::{
-        display_name, filter_tree, find_in_items_all, has_move_target, initial, insert_into,
-        item_id, move_item, node_name, owner_collection, remove_item, rename_item,
-        resolve_selection, Selection,
+        default_destination, destination_rows, display_name, filter_tree, find_in_items_all,
+        has_move_target, initial, insert_into, item_id, move_item, node_name, owner_collection,
+        remove_item, rename_item, resolve_selection, Destination, Selection,
     };
+
+    fn destination(collection: &str, folders: &[&str]) -> Destination {
+        Destination {
+            collection: collection.to_owned(),
+            folders: folders.iter().map(|id| (*id).to_owned()).collect(),
+        }
+    }
 
     fn saved(id: &str, method: Method, url: &str) -> SavedRequest {
         SavedRequest {
@@ -509,14 +591,14 @@ mod tests {
     #[test]
     fn insert_into_a_folder_lands_the_request_there() {
         let mut tree = sample();
-        let selection = into_folder("fold-1");
+        let target = destination("col-1", &["fold-1"]);
         assert!(insert_into(
             &mut tree,
-            &selection,
+            &target,
             CollectionItem::Request(saved("req-4", Method::Get, "https://example.com/new"))
         ));
 
-        let items = resolve_selection(&tree, &selection).unwrap();
+        let items = resolve_selection(&tree, &into_folder("fold-1")).unwrap();
         assert_eq!(items.len(), 3);
         assert!(matches!(&items[2], CollectionItem::Request(r) if r.id == "req-4"));
     }
@@ -524,10 +606,10 @@ mod tests {
     #[test]
     fn insert_into_the_collection_root_lands_at_the_top() {
         let mut tree = sample();
-        let selection = Selection::collection("col-1");
+        let target = destination("col-1", &[]);
         assert!(insert_into(
             &mut tree,
-            &selection,
+            &target,
             CollectionItem::Request(saved("req-5", Method::Put, "https://example.com/root"))
         ));
         assert_eq!(tree[0].items.len(), 3);
@@ -537,7 +619,7 @@ mod tests {
     #[test]
     fn insert_into_an_unknown_target_is_a_no_op() {
         let mut tree = sample();
-        let unknown_folder = into_folder("nope");
+        let unknown_folder = destination("col-1", &["nope"]);
         assert!(!insert_into(
             &mut tree,
             &unknown_folder,
@@ -545,7 +627,7 @@ mod tests {
         ));
         assert!(!insert_into(
             &mut tree,
-            &Selection::default(),
+            &destination("nope", &[]),
             CollectionItem::Request(saved("req-7", Method::Get, "https://example.com/y"))
         ));
         assert_eq!(tree[0].items.len(), 2);
@@ -742,5 +824,40 @@ mod tests {
         assert_eq!(initial("acme"), "A");
         assert_eq!(initial("  spaced"), " ");
         assert_eq!(initial(""), "?");
+    }
+
+    /// The picker lists every place a save can land, and its labels name the
+    /// path because the menu is flat.
+    #[test]
+    fn destination_rows_cover_every_collection_and_folder() {
+        let rows = destination_rows(&sample());
+        let labels: Vec<&str> = rows.iter().map(|row| row.label.as_str()).collect();
+        assert_eq!(labels, ["Sample", "Sample › Group"]);
+        assert_eq!(rows[0].target, destination("col-1", &[]));
+        assert_eq!(rows[1].target, destination("col-1", &["fold-1"]));
+    }
+
+    /// Nothing selected is not nothing to save into: the dialog opens on the
+    /// first collection instead of refusing.
+    #[test]
+    fn a_default_destination_falls_back_to_the_first_collection() {
+        let tree = sample();
+        assert_eq!(
+            default_destination(&tree, &Selection::default()),
+            Some(destination("col-1", &[])),
+        );
+        assert_eq!(
+            default_destination(&tree, &into_folder("fold-1")),
+            Some(destination("col-1", &["fold-1"])),
+        );
+
+        // A selection that no longer exists (a deleted collection) falls back
+        // rather than pointing at nothing.
+        let stale = Selection::collection("gone");
+        assert_eq!(
+            default_destination(&tree, &stale),
+            Some(destination("col-1", &[])),
+        );
+        assert_eq!(default_destination(&[], &Selection::default()), None);
     }
 }
