@@ -502,6 +502,15 @@ impl RequestPanel {
         cx.notify();
     }
 
+    /// Whether an adopted request is still queued for the editor's next frame.
+    ///
+    /// While one is queued the widgets show the *previous* request, so a caller
+    /// that folds them back into a tab (a tab switch, a draft write) would undo
+    /// the adoption it is about to make.
+    pub(crate) fn has_pending_adoption(&self, cx: &App) -> bool {
+        self.editor.read(cx).has_pending()
+    }
+
     /// Adopt a stored request from history. The editor queues the write, and
     /// its window-aware observer applies it outside render.
     pub(crate) fn adopt_request(&mut self, request: RequestDef, cx: &mut Context<Self>) {
