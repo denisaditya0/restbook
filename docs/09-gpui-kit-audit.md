@@ -527,6 +527,12 @@ Checked and deliberately left alone:
 - **§4.6 `parts_table` `.ghost()` — held back.** It is a one-word deletion, but
   it changes what a form's Add looks like, so it belongs with the same pass that
   settles §4.4.
+- **Snapshot copy writes the Windows clipboard itself
+  (`snapshot/clipboard.rs:24`).** GPUI on Windows publishes an image only under
+  its own registered `"PNG"` format, which Paint, Firefox and chat clients do not
+  paste from, so `cx.write_to_clipboard` produces a clipboard they cannot read.
+  The snapshot is written as a `CF_DIB` bitmap instead. The GPUI call stays the
+  path on every other platform.
 
 ## Suggested fix batches
 

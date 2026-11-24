@@ -16,6 +16,7 @@ mod save_dialog;
 mod send;
 pub(crate) mod settings;
 mod settings_view;
+mod snapshot;
 pub(crate) mod storage;
 mod tabs;
 mod updates;
@@ -161,6 +162,15 @@ pub(crate) struct Workspace {
     /// and consumed by render, because the event carries no window and reveal
     /// needs one.
     pending_history: bool,
+    /// Whether the response pane asked for an image snapshot. Same deferral as
+    /// `pending_history`: its event carries no window, and a dialog needs one.
+    pending_snapshot: bool,
+    /// The snapshot dialog's "include secrets" tick. Reset every time the dialog
+    /// opens, like the export picker's, so a remembered tick cannot leak.
+    pub(crate) snapshot_include_secrets: bool,
+    /// Whether the next snapshot is clipped to the compact box. Remembered for
+    /// the session: it hides nothing, so resetting it would only be annoying.
+    pub(crate) snapshot_compact: bool,
     /// What a sidebar pane asked to delete, waiting for render to raise the
     /// confirmation dialog. Events carry no window, so the ask is parked here
     /// and consumed the same way `pending_save` and `pending_history` are.
@@ -385,6 +395,9 @@ impl Workspace {
             pending_export: false,
             export_state: ExportState::default(),
             pending_history: false,
+            pending_snapshot: false,
+            snapshot_include_secrets: false,
+            snapshot_compact: false,
             pending_delete: None,
             pending_update: None,
             flushed: false,
@@ -472,6 +485,10 @@ impl Workspace {
                     // this event carries no window.
                     ResponseEvent::ShowHistory => {
                         this.pending_history = true;
+                        cx.notify();
+                    }
+                    ResponseEvent::Snapshot => {
+                        this.pending_snapshot = true;
                         cx.notify();
                     }
                     ResponseEvent::Retry => this.send(cx),
@@ -883,6 +900,7 @@ impl Workspace {
             Command::CopyCurl => self.copy_curl(cx),
             Command::ImportFile => self.import_file(window, cx),
             Command::ExportFile => self.open_export_dialog(window, cx),
+            Command::Snapshot => self.open_snapshot_dialog(window, cx),
             // Reveal first, then focus: History and Environment are not docked
             // by default, so focusing a pane no dock is showing would aim at
             // nothing. The centre panes are always mounted, so the reveal is a
@@ -1103,6 +1121,17 @@ impl Render for Workspace {
             });
         }
 
+        // A snapshot is a window-level dialog, so it opens after this element
+        // returns for the same reason the export picker does.
+        if std::mem::take(&mut self.pending_snapshot) {
+            let this = cx.entity();
+            window.defer(cx, move |window, cx| {
+                this.update(cx, |workspace, cx| {
+                    workspace.open_snapshot_dialog(window, cx);
+                });
+            });
+        }
+
         // And the same for the delete confirmation: an alert dialog is a
         // window-level overlay, so it opens after this element returns.
         if let Some(request) = self.pending_delete.take() {
@@ -1223,6 +1252,16 @@ impl Render for Workspace {
                             .on_click(move |_, window, cx| {
                                 shortcuts.update(cx, |workspace, cx| {
                                     workspace.open_shortcuts(window, cx)
+                                });
+                            }),
+                    );
+                    let snapshot = workspace.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new("Snapshot\u{2026}")
+                            .icon(IconName::Image)
+                            .on_click(move |_, window, cx| {
+                                snapshot.update(cx, |workspace, cx| {
+                                    workspace.open_snapshot_dialog(window, cx)
                                 });
                             }),
                     );

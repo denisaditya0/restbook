@@ -28,6 +28,7 @@ mod logging;
 mod notice;
 mod panels;
 mod preview;
+mod snapshot;
 #[cfg(test)]
 mod test_support;
 mod theme;

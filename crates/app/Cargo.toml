@@ -88,6 +88,11 @@ semver = "1"
 # The downloaded update is checked against the digest the manifest publishes,
 # so a truncated or swapped asset is refused before anything runs it.
 sha2 = "0.10"
+# The snapshot image is an SVG the app draws from the model; resvg is what turns
+# it into the PNG the clipboard and the save prompt need. A release build cannot
+# read pixels back from its own window (`Platform::render_to_image` is
+# test-only), so the image has to be rasterized from what the model produces.
+resvg = "0.46"
 # Completion for `{{name}}` speaks the editor's own protocol: the kit's
 # `CompletionProvider` hands back `lsp_types` items read out of a `ropey`
 # document and wrapped in `anyhow`. These versions are pinned to the ones
@@ -112,3 +117,16 @@ gpui-pre = { version = "=0.3.14", features = ["test-support"] }
 # and Linux takes it from the icon theme named by the window's `app_id`.
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
+
+# The snapshot's image has to reach the clipboard as a `CF_DIB` bitmap: GPUI on
+# Windows publishes only its own registered `"PNG"` format, which Paint, Firefox
+# and chat clients do not paste from. This is the same `windows` version GPUI
+# already builds, so the features here add to that compile rather than a second
+# copy of the crate. See `src/snapshot/clipboard.rs`.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+] }

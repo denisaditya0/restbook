@@ -6413,11 +6413,13 @@ dependencies = [
  "restbook-core",
  "restbook-store",
  "restbook-transport",
+ "resvg 0.46.0",
  "ropey",
  "semver",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "windows 0.62.2",
  "winres",
 ]
 

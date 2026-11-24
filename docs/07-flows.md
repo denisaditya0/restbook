@@ -96,6 +96,7 @@ not a registry, so this list is exhaustive.
 | Import… | `secondary-shift-i` | file picker → `import::parse` → save each collection, then a result dialog | Overlay (dialog) + Left dock | `Workspace::import_file` |
 | Export… | `secondary-shift-e` | picker → `import::export` → save prompt → write the file | Overlay (dialog) + Chrome (notification) | `Workspace::open_export_dialog` |
 | Copy as cURL | `secondary-shift-c` | live `RequestDef` → `curl::to_curl` → clipboard | Window (any pane) | `Workspace::copy_curl` |
+| Snapshot… | — (palette only) | draw the current request and response as a PNG, then copy it or save it | Overlay (dialog) | `Workspace::open_snapshot_dialog` |
 | Focus history | — (palette only) | reveal **then** focus the History pane | Right dock | `run_command` |
 | Focus collections | — (palette only) | reveal **then** focus the Collections pane | Left dock | `run_command` |
 | Focus environment | — (palette only) | reveal **then** focus the Environment pane | Right dock | `run_command` |
@@ -166,6 +167,7 @@ This is the "intent as event" rule in action.
 | Cookies: edit a value | `ResponseEvent::UpdateCookie { name, value }` | write the value into the shared jar, then redraw the tab | Center (Response, Cookies tab) | `Workspace::update_cookie` |
 | Cookies: delete a row | `ResponseEvent::DeleteCookie { name }` | remove that cookie from the shared jar, leaving the rest | Center (Response, Cookies tab) | `Workspace::delete_cookie` |
 | Body / Headers / Cookies tab | (local) | switch the response view | Center (Response) | `response.rs` |
+| Body toolbar: snapshot | `ResponseEvent::Snapshot` | open the snapshot dialog for this request and response | Overlay (dialog) | `Workspace::open_snapshot_dialog` |
 | Body toolbar: find | (local) | open or close the find row, then focus it; the row reports the match count and next/previous | Center (Response) | `ResponsePanel::toggle_find` |
 | Body toolbar: format switch, copy body, copy summary | (local) | pretty/raw, or write the body or the status line to the clipboard | Center (Response) | `ResponsePanel::render_body_toolbar` |
 | Error view: capture debug | (local) | start a ten-minute `restbook-debug-<timestamp>.log` capture and name its path in a notification | Overlay (notification) | `logging::start_debug_capture` |
@@ -241,7 +243,8 @@ with `window.defer`.
 | Keyboard shortcuts | `?`, palette `Keyboard shortcuts`, titlebar menu | centered dialog, 448px; one row per bound command | `Workspace::open_shortcuts` |
 | Save request | Save on an unbound tab, or Save As | centered dialog, 448px; a name and a destination picker listing every collection and its folders, plus *New collection…*. The sidebar selection only pre-fills the picker, so a save needs no selection; with no collection at all the dialog opens ready to create one, and that confirm leaves both behind | `Workspace::open_save_dialog` |
 | Import result | an import that landed something | centered dialog, 448px; counts, saved names, duplicates, every skipped item with its reason, and any notes (an imported row that needs attention, such as inherited auth) | `Workspace::open_import_report` |
-| Export picker | `secondary-shift-e`, palette `Export…`, the Collections pane's `+` menu | centered dialog, 448px; scope, format, *Include secrets* | `Workspace::open_export_dialog` |
+| Export picker | `secondary-shift-e`, palette `Export…`, titlebar menu | centered dialog, 448px; scope, format, *Include secrets* | `Workspace::open_export_dialog` |
+| Snapshot | palette `Snapshot…`, titlebar menu, Response body toolbar | centered dialog, 448px; *Include secrets* off by default, *Copy image* and *Save PNG…* | `Workspace::open_snapshot_dialog` |
 | Delete confirmation | a row's trash button (Collections) or Delete (Environment) | centered **alert** dialog, 420px | `Workspace::open_delete_dialog` |
 | Move request | a saved request row's *Move to…* | centered dialog, 448px; the same destination picker the save dialog uses, with *Move* disabled while the choice is the request's current home | `Workspace::open_move_dialog` |
 | Update offer | the launch check finding a newer release that is not skipped | centered dialog, 448px; *Install now* / *Later* / *Skip this version* | `Workspace::open_update_offer_dialog` |
