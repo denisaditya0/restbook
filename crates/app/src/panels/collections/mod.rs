@@ -28,7 +28,7 @@ use self::tree::{
     resolve_selection, sort_refs,
 };
 
-pub(crate) use self::tree::{Destination, DestinationRow};
+pub(crate) use self::tree::{import_into, Destination, DestinationRow, ImportOutcome};
 
 use crate::document::Document;
 use crate::icons::{self, IconName};

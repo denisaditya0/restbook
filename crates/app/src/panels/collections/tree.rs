@@ -5,6 +5,9 @@
 //! live beside the pane rather than inside it so the file that draws the tree
 //! and the file that changes it can be read apart.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use restbook_core::{Collection, CollectionItem, Method, SavedRequest};
 
 use super::{Selection, SortOrder};
@@ -183,6 +186,113 @@ fn insert_in_items(items: &mut Vec<CollectionItem>, path: &[String], item: Colle
             false
         }
     }
+}
+
+/// What an import into an existing place changed.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ImportOutcome {
+    /// The collection that was written, so the caller can save it back.
+    pub(crate) collection: String,
+    /// Requests actually added, folders counted through.
+    pub(crate) added: usize,
+    /// Names skipped because a request with that name was already there.
+    pub(crate) duplicates: Vec<String>,
+}
+
+/// Append `incoming` under `target`, giving every arriving node a fresh id.
+///
+/// A file carries ids of its own and they can collide with nodes already in the
+/// tree, so nothing keeps the id it came with. A request whose name is already
+/// a direct child of `target` is skipped and reported: the same rule a batch
+/// import applies, never an overwrite. Incoming folders are always inserted as
+/// new folders — a folder is not merged by name, so two `Auth` folders can
+/// coexist where two `GET /users` requests cannot.
+///
+/// `None` when the collection or a folder on the path is gone; the caller then
+/// has nothing safe to write.
+pub(crate) fn import_into(
+    collections: &mut [Collection],
+    target: &Destination,
+    incoming: Vec<CollectionItem>,
+) -> Option<ImportOutcome> {
+    let selection = Selection {
+        collection: Some(target.collection.clone()),
+        folders: target.folders.clone(),
+        request: None,
+    };
+    let collection_id = collections
+        .iter()
+        .find(|each| each.id == target.collection)?
+        .id
+        .clone();
+    let items = resolve_selection_mut(collections, &selection)?;
+
+    let mut names = items
+        .iter()
+        .filter_map(|item| match item {
+            CollectionItem::Request(request) => Some(request.name.clone()),
+            CollectionItem::Folder(_) => None,
+        })
+        .collect::<Vec<_>>();
+    let mut added = 0;
+    let mut duplicates = Vec::new();
+    for item in incoming {
+        match item {
+            CollectionItem::Request(request) => {
+                if names.contains(&request.name) {
+                    duplicates.push(request.name);
+                    continue;
+                }
+                names.push(request.name.clone());
+                added += 1;
+                items.push(reid(CollectionItem::Request(request)));
+            }
+            item @ CollectionItem::Folder(_) => {
+                added += count_requests(&item);
+                items.push(reid(item));
+            }
+        }
+    }
+
+    Some(ImportOutcome {
+        collection: collection_id,
+        added,
+        duplicates,
+    })
+}
+
+fn count_requests(item: &CollectionItem) -> usize {
+    match item {
+        CollectionItem::Request(_) => 1,
+        CollectionItem::Folder(folder) => folder.items.iter().map(count_requests).sum(),
+    }
+}
+
+/// Replace every id in `item`, recursively, with one this process just made.
+fn reid(item: CollectionItem) -> CollectionItem {
+    match item {
+        CollectionItem::Request(mut request) => {
+            request.id = fresh_id();
+            CollectionItem::Request(request)
+        }
+        CollectionItem::Folder(mut folder) => {
+            folder.id = fresh_id();
+            folder.items = folder.items.into_iter().map(reid).collect();
+            CollectionItem::Folder(folder)
+        }
+    }
+}
+
+/// A process-unique id, the same shape the pane's `new_id` gives a new node:
+/// a timestamp plus a counter is enough, because the stores key on the string.
+fn fresh_id() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{nanos:x}-{count:x}")
 }
 
 /// Remove the item with `id` from anywhere in the tree, and report which
@@ -407,6 +517,37 @@ pub(super) fn resolve_selection<'a>(
     Some(items)
 }
 
+/// The mutable items addressed by a selection's folder path, for an edit that
+/// appends rather than replaces.
+fn resolve_selection_mut<'a>(
+    collections: &'a mut [Collection],
+    selection: &Selection,
+) -> Option<&'a mut Vec<CollectionItem>> {
+    let collection = collections
+        .iter_mut()
+        .find(|each| Some(each.id.as_str()) == selection.collection.as_deref())?;
+    resolve_items_mut(&mut collection.items, &selection.folders)
+}
+
+fn resolve_items_mut<'a>(
+    items: &'a mut Vec<CollectionItem>,
+    path: &[String],
+) -> Option<&'a mut Vec<CollectionItem>> {
+    match path.split_first() {
+        None => Some(items),
+        Some((folder_id, rest)) => {
+            for item in items.iter_mut() {
+                if let CollectionItem::Folder(folder) = item {
+                    if &folder.id == folder_id {
+                        return resolve_items_mut(&mut folder.items, rest);
+                    }
+                }
+            }
+            None
+        }
+    }
+}
+
 /// The id of the top-level collection that holds `id`, whether `id` is the
 /// collection itself or a folder or request nested inside it.
 pub(super) fn owner_collection(collections: &[Collection], id: &str) -> Option<String> {
@@ -588,9 +729,9 @@ mod tests {
 
     use super::{
         default_destination, destination_of, destination_rows, display_name, filter_paths,
-        find_in_items_all, has_move_target, initial, insert_into, item_id, move_item, move_to,
-        node_name, owner_collection, remove_item, rename_item, resolve_selection, Destination,
-        Selection, SortOrder,
+        find_in_items_all, has_move_target, import_into, initial, insert_into, item_id, move_item,
+        move_to, node_name, owner_collection, remove_item, rename_item, resolve_selection,
+        Destination, Selection, SortOrder,
     };
 
     fn destination(collection: &str, folders: &[&str]) -> Destination {
@@ -748,6 +889,93 @@ mod tests {
             CollectionItem::Request(saved("req-7", Method::Get, "https://example.com/y"))
         ));
         assert_eq!(tree[0].items.len(), 2);
+    }
+
+    #[test]
+    fn import_into_a_folder_appends_and_gives_every_node_a_fresh_id() {
+        let mut tree = sample();
+        let target = destination("col-1", &["fold-1"]);
+        let outcome = import_into(
+            &mut tree,
+            &target,
+            vec![
+                CollectionItem::Request(saved("req-1", Method::Get, "https://example.com/c")),
+                // The same id the tree already uses: a file can carry one, and
+                // keeping it would make two nodes indistinguishable.
+                folder(
+                    "fold-1",
+                    "Nested",
+                    vec![CollectionItem::Request(saved(
+                        "req-1",
+                        Method::Get,
+                        "https://example.com/d",
+                    ))],
+                ),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(outcome.collection, "col-1");
+        assert_eq!(outcome.added, 2);
+        assert!(outcome.duplicates.is_empty());
+
+        let items = resolve_selection(&tree, &into_folder("fold-1")).unwrap();
+        assert_eq!(items.len(), 4);
+        let ids = items.iter().map(item_id).collect::<Vec<_>>();
+        assert_eq!(
+            ids[0], "req-1",
+            "the rows that were already there keep theirs"
+        );
+        assert!(ids[2..].iter().all(|id| !matches!(*id, "req-1" | "fold-1")));
+    }
+
+    #[test]
+    fn import_into_skips_a_same_name_direct_child_and_reports_it() {
+        let mut tree = sample();
+        let target = destination("col-1", &["fold-1"]);
+        let outcome = import_into(
+            &mut tree,
+            &target,
+            vec![
+                CollectionItem::Request(saved("req-1", Method::Get, "https://example.com/a")),
+                CollectionItem::Request(saved("req-9", Method::Get, "https://example.com/new")),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(outcome.added, 1);
+        assert_eq!(outcome.duplicates, ["GET https://example.com/a"]);
+        assert_eq!(
+            resolve_selection(&tree, &into_folder("fold-1"))
+                .unwrap()
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    fn import_into_an_unknown_target_writes_nothing() {
+        let mut tree = sample();
+        let incoming = vec![CollectionItem::Request(saved(
+            "req-8",
+            Method::Get,
+            "https://example.com/x",
+        ))];
+
+        assert!(import_into(
+            &mut tree,
+            &destination("col-1", &["nope"]),
+            incoming.clone()
+        )
+        .is_none());
+        assert!(import_into(&mut tree, &destination("nope", &[]), incoming).is_none());
+        assert_eq!(tree[0].items.len(), 2);
+        assert_eq!(
+            resolve_selection(&tree, &into_folder("fold-1"))
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]

@@ -93,7 +93,7 @@ not a registry, so this list is exhaustive.
 | Focus URL | `secondary-l` | focus the URL field | Center | `RequestPanel::focus_url` |
 | Find in response | `secondary-f` | open the find row and focus it; Enter steps forward, Shift+Enter back, Escape closes | Center (Response) | `ResponsePanel::open_find` |
 | Paste cURL | `secondary-shift-v` | clipboard → `RequestDef`, adopt it, then offer to save it | Center | `RequestPanel::paste_curl` |
-| Import… | `secondary-shift-i` | file picker → `import::parse` → save each collection, then a result dialog | Overlay (dialog) + Left dock | `Workspace::import_file` |
+| Import… | `secondary-shift-i` | file picker → `import::parse` → destination dialog (new collections, the default, or an existing collection or folder) → save → result dialog | Overlay (dialog) + Left dock | `Workspace::import_file` |
 | Export… | `secondary-shift-e` | picker → `import::export` → save prompt → write the file | Overlay (dialog) + Chrome (notification) | `Workspace::open_export_dialog` |
 | Copy as cURL | `secondary-shift-c` | live `RequestDef` → `curl::to_curl` → clipboard | Window (any pane) | `Workspace::copy_curl` |
 | Snapshot… | — (palette only) | draw the current request and response as a PNG, then copy it or save it | Overlay (dialog) | `Workspace::open_snapshot_dialog` |
@@ -142,7 +142,7 @@ This is the "intent as event" rule in action.
 | Tab close button / `secondary-w` | `Event::CloseTab(i)` | close that tab; a tab with unsaved edits asks through the close alert dialog first | Center, or Overlay (alert dialog) | `Workspace::confirm_close_tab` |
 | Paste-curl imported | `Event::Imported` | report a notification, then open the Save As dialog when a collection is selected | Overlay (notification, optionally a dialog) | `Workspace::imported` |
 | Paste-curl failed | `Event::Notice(_)` | report a notification with the parse error | Overlay (notification) | `Workspace::notice` |
-| Empty-state Import… button | `Event::Import` | open the file picker, land the file, show the result | Overlay (dialog) + Left dock | `Workspace::import_file` |
+| Empty-state Import… button | `Event::Import` | open the file picker, choose a destination, land the file, show the result | Overlay (dialog) + Left dock | `Workspace::import_file` |
 | Editor menu: Copy as cURL | `Event::CopyCurl` | live `RequestDef` → `curl::to_curl` → clipboard | Window (any pane) | `Workspace::copy_curl` |
 
 ### Sidebar → workspace
@@ -155,7 +155,7 @@ This is the "intent as event" rule in action.
 | Collections: delete a row | `CollectionsEvent::ConfirmDelete(target)` | open the delete alert dialog; delete on confirm | Overlay (alert dialog) | `Workspace::open_delete_dialog` |
 | Collections: Move to… | `CollectionsEvent::Move { node }` | open the destination picker; its confirm rewrites the target collection, then the source | Overlay (dialog) | `Workspace::open_move_dialog` |
 | Collections: Save request… | `CollectionsEvent::SaveRequest` | save the active request as a new entry through the save dialog | Overlay (dialog) | `Workspace::save_active_as` |
-| Collections: Import… | `CollectionsEvent::Import` | open the file picker from the next render, land the file, show the result | Overlay (dialog) + Left dock | `Workspace::import_file` |
+| Collections: Import… | `CollectionsEvent::Import` | open the file picker from the next render, choose a destination, land the file, show the result | Overlay (dialog) + Left dock | `Workspace::import_file` |
 | Collections: Export… | `CollectionsEvent::Export` | open the export picker from the next render | Overlay (dialog) | `Workspace::open_export_dialog` |
 | Environment: delete | `EnvironmentEvent::ConfirmDelete(name)` | open the delete alert dialog; delete on confirm | Overlay (alert dialog) | `Workspace::open_delete_dialog` |
 
@@ -242,6 +242,7 @@ with `window.defer`.
 | Settings | palette `Settings…`, titlebar menu | centered dialog, 880px, category rail | `settings_view::open` |
 | Keyboard shortcuts | `?`, palette `Keyboard shortcuts`, titlebar menu | centered dialog, 448px; one row per bound command | `Workspace::open_shortcuts` |
 | Save request | Save on an unbound tab, or Save As | centered dialog, 448px; a name and a destination picker listing every collection and its folders, plus *New collection…*. The sidebar selection only pre-fills the picker, so a save needs no selection; with no collection at all the dialog opens ready to create one, and that confirm leaves both behind | `Workspace::open_save_dialog` |
+| Import destination | an import whose file holds at least one collection | centered dialog, 448px; a destination picker whose first entry is *New collection(s)* — the default — followed by every collection and folder. Choosing an existing place appends into it, and a request whose name is already a direct child there is reported, not overwritten | `Workspace::open_import_dialog` |
 | Import result | an import that landed something | centered dialog, 448px; counts, saved names, duplicates, every skipped item with its reason, and any notes (an imported row that needs attention, such as inherited auth) | `Workspace::open_import_report` |
 | Export picker | `secondary-shift-e`, palette `Export…`, titlebar menu | centered dialog, 448px; scope, format, *Include secrets* | `Workspace::open_export_dialog` |
 | Snapshot | palette `Snapshot…`, titlebar menu, Response body toolbar | centered dialog, 448px; *Include secrets* off by default, *Copy image* and *Save PNG…* | `Workspace::open_snapshot_dialog` |
