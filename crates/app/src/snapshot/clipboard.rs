@@ -31,6 +31,10 @@ pub(crate) fn copy_image(_cx: &mut App, png: Vec<u8>) -> Result<(), String> {
 /// A `CF_DIB` bitmap: a 40-byte `BITMAPINFOHEADER`, then bottom-up 32-bit BGRA
 /// rows. Alpha is written opaque because the image is flat; an app that honours
 /// the fourth byte would otherwise paste the text over a see-through card.
+///
+/// Windows is the only platform that publishes it, but the byte layout is
+/// platform-independent, so the tests compile it everywhere.
+#[cfg(any(windows, test))]
 pub(crate) fn dib(pixmap: &resvg::tiny_skia::Pixmap) -> Vec<u8> {
     let width = pixmap.width();
     let height = pixmap.height();
