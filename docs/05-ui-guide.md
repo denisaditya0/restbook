@@ -377,6 +377,7 @@ src/workspace/
   chrome.rs              the custom titlebar and the status bar (chrome, not panes)
   send.rs                Workspace::send() -> prepare -> transport -> store
   persistence.rs         dock layout to/from layout.json in the data dir (names + width)
+  save_dialog.rs         the first-save dialog: a name and a destination picker
   settings.rs            app preferences (pretty-print, history limit) to/from
                          settings.json, as an observable entity
   settings_view.rs       the Settings dialog: preferences plus read-only storage facts
@@ -822,27 +823,36 @@ The rules, restated as a checklist for a new action:
 
 A flash reports what happened; sometimes the action needs an answer first. The
 `Save request` dialog (`Save As` on a draft, which has no name and no parent) is
-the pattern:
+the pattern. It lives in `workspace/save_dialog.rs`, apart from the tab model it
+saves into:
 
 1. **Set a flag in the handler, open nothing.** An event handler here
    typically has no `Window` — `Ctrl+S` arrives through `cx.subscribe`, and
    `RequestEvent::Save` carries no window either. Do the check you *can* do
-   (missing destination) and flash the error; otherwise set
+   (nothing to save into at all) and flash the error; otherwise set
    `pending_save = true`.
 2. **Consume the flag in `Render` and `window.defer` the open.**
    `window.defer(cx, |window, cx| …)` runs after this frame's element tree is
    laid out, which is exactly when `window.open_dialog` wants to be called.
-3. **Keep the inputs on the owning entity.** The dialog content closure is
-   rebuilt on every notify; an `InputState` constructed inside it is a new
-   entity each frame, and the caret jumps to the start on the first keystroke.
-   `Workspace::save_name` is one `Entity<InputState>`, prefilled before the
-   dialog opens.
+3. **Keep the inputs and the choice on the owning entity.** The dialog content
+   closure is rebuilt on every notify; an `InputState` constructed inside it is
+   a new entity each frame, and the caret jumps to the start on the first
+   keystroke. `Workspace::save_name` is one `Entity<InputState>`, prefilled
+   before the dialog opens, and `Workspace::save_target` is the destination the
+   picker writes — the same rule the export picker follows with
+   `export_state`.
 4. **Compose the footer yourself.** A plain `Dialog` draws no buttons; wrap
    the actions in a `DialogFooter`, and use `.on_ok` so Enter confirms as well
    as the Save button.
 5. **Return `false` to keep the dialog open.** The confirm closure's `bool` is
    "did this succeed?" — an empty name returns `false`, and the field stays up
    with the cursor in it instead of closing on nothing.
+
+A save's destination is a picker, not the sidebar's highlight: the highlight is
+how a user navigates, and a save that depended on it would refuse exactly when
+nothing had been clicked. `CollectionsPanel::destinations()` returns every
+collection and folder as `Destination` rows; the first one is the prefill when
+nothing is selected (`tree::default_destination`).
 
 A rename that is not a creation does not deserve a modal: the collections pane
 puts a Rename button in the row tools that shows an inline input in the tree.
