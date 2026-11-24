@@ -1296,6 +1296,10 @@ impl Render for Workspace {
                                 });
                             }),
                     )
+                    // The menu is taller than a 640x480 window. The kit's
+                    // scrollable mode caps it and shows a vertical scrollbar
+                    // rather than clipping the diagnostics rows.
+                    .scrollable(true)
                 };
                 Button::new("window-menu")
                     // `Menu`, not `Ellipsis`: the ellipsis was also the glyph on

@@ -176,13 +176,15 @@ fn row_items(
     // itself on a first click: the workspace owns window-level overlays, and a
     // red button that silently reverts on any other click was easy to miss and
     // easy to arm by accident.
-    menu.item(PopupMenuItem::separator()).item(
-        PopupMenuItem::new("Delete")
-            .icon(IconName::Trash)
-            .on_click(move |_, _, cx| {
-                panel.update(cx, |_, cx| cx.emit(Event::ConfirmDelete(target.clone())));
-            }),
-    )
+    menu.item(PopupMenuItem::separator())
+        .item(
+            PopupMenuItem::new("Delete")
+                .icon(IconName::Trash)
+                .on_click(move |_, _, cx| {
+                    panel.update(cx, |_, cx| cx.emit(Event::ConfirmDelete(target.clone())));
+                }),
+        )
+        .scrollable(true)
 }
 
 /// The order the tree is drawn in. `Manual` is the order the user arranged;

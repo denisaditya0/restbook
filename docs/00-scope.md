@@ -59,7 +59,7 @@ The scaffold milestones below are the origin of both, kept for history.
 | M4 | GPUI shell wired to the engine | done: docked panes, send, history |
 | M5 | Import/export, curl paste, code generation | import/export done (B13); curl paste in the UI |
 
-The engine's kept-current milestones are B1..B18, with B19..B24 planned, in
+The engine's kept-current milestones are B1..B18, with B19..B29 planned, in
 [`03-backend-plan.md`](03-backend-plan.md).
 
 ## Inspiration ledger
