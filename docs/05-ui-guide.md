@@ -384,7 +384,9 @@ src/workspace/
                          local database), legacy JSONL migration
 src/panels/
   history.rs             sidebar: store search, rows, Picked event
-  collections.rs         saved requests and folders, Open/Save/Rename events
+  collections/
+    mod.rs               the pane: rows, events, save, rename, delete, drafts
+    tree.rs              the tree: filter, sort, insert, remove, move, lookups
   environment.rs         environment/globals editor + variable inspector
   command_palette.rs     the fixed command table and the dialog opener
   request.rs             method dropdown, URL bar, Send/Cancel, editor tabs
