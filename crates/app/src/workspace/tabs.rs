@@ -963,11 +963,12 @@ impl Workspace {
 
     /// Store the live editor and document in the tab being left.
     pub(crate) fn snapshot_active(&mut self, cx: &App) {
-        let active = self.tabs.active();
-        let Some(tab) = self.tabs.get_mut(active) else {
-            return;
-        };
-        let request = self.panes.request.read(cx).current_request(cx);
+        // An adoption queued for the next frame means the widgets still belong
+        // to the tab being left. Folding them here would write the request on
+        // screen into whichever tab is current, so two switches inside one
+        // frame used to copy one tab's body onto another.
+        let pending = self.panes.request.read(cx).has_pending_adoption(cx);
+        let request = (!pending).then(|| self.panes.request.read(cx).current_request(cx));
         let (response, error, last_url) = {
             let document = self.document.read(cx);
             (
@@ -976,7 +977,13 @@ impl Workspace {
                 document.last_url.clone(),
             )
         };
-        tab.request = request;
+        let active = self.tabs.active();
+        let Some(tab) = self.tabs.get_mut(active) else {
+            return;
+        };
+        if let Some(request) = request {
+            tab.request = request;
+        }
         tab.response = response;
         tab.error = error;
         tab.last_url = last_url;

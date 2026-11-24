@@ -1499,6 +1499,137 @@ mod tests {
         assert_eq!(wrap_index(1, 3, -1), 0);
     }
 
+    /// A tab keeps its own request, body included.
+    ///
+    /// The editor applies an adopted request on its next frame, so a switch that
+    /// arrives before that frame has to wait rather than fold the widgets it can
+    /// still see back into the tab it is leaving. That fold is what left the
+    /// second tab showing the first tab's raw body.
+    mod tab_bodies {
+        use gpui_kit::{Entity, TestAppContext, VisualTestContext};
+        use restbook_core::{Body, Method, RequestDef};
+
+        use super::super::Workspace;
+
+        fn with_body(url: &str, text: &str) -> RequestDef {
+            RequestDef {
+                body: Body::Raw {
+                    mime: "application/json".to_owned(),
+                    text: text.to_owned(),
+                },
+                ..RequestDef::new(Method::Post, url)
+            }
+        }
+
+        fn plain(url: &str) -> RequestDef {
+            RequestDef::new(Method::Get, url)
+        }
+
+        fn open(
+            cx: &mut VisualTestContext,
+            workspace: &Entity<Workspace>,
+            node: &str,
+            request: RequestDef,
+        ) {
+            let node = node.to_owned();
+            cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| workspace.open_saved(node, request, cx));
+            });
+        }
+
+        fn body_of(cx: &mut VisualTestContext, workspace: &Entity<Workspace>) -> Body {
+            cx.update(|_, cx| {
+                workspace
+                    .read(cx)
+                    .panes
+                    .request
+                    .read(cx)
+                    .current_request(cx)
+                    .body
+            })
+        }
+
+        fn raw_text(body: &Body) -> Option<&str> {
+            match body {
+                Body::Raw { text, .. } => Some(text.as_str()),
+                _ => None,
+            }
+        }
+
+        #[gpui_kit::test]
+        fn the_second_tab_opens_with_its_own_body(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("tab-bodies");
+            let (workspace, cx) = cx.add_window_view(Workspace::new);
+
+            open(
+                cx,
+                &workspace,
+                "node-a",
+                with_body("https://api.test/a", "{\"a\":1}"),
+            );
+            cx.run_until_parked();
+            open(
+                cx,
+                &workspace,
+                "node-b",
+                plain("http://localhost:3000/users/2"),
+            );
+            cx.run_until_parked();
+
+            assert!(matches!(body_of(cx, &workspace), Body::None));
+        }
+
+        /// Two switches with no frame between them: the editor still shows the
+        /// previous tab when the second switch snapshots, so the snapshot must
+        /// not overwrite the tab that was about to be shown.
+        #[gpui_kit::test]
+        fn a_switch_before_the_adoption_lands_keeps_each_tab_intact(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("tab-bodies-quick");
+            let (workspace, cx) = cx.add_window_view(Workspace::new);
+
+            open(
+                cx,
+                &workspace,
+                "node-a",
+                with_body("https://api.test/a", "{\"a\":1}"),
+            );
+            cx.run_until_parked();
+            open(
+                cx,
+                &workspace,
+                "node-b",
+                plain("http://localhost:3000/users/2"),
+            );
+            cx.run_until_parked();
+
+            // Back to the first tab and to the second again, with no frame in
+            // between either switch.
+            cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.select_tab(0, cx);
+                    workspace.select_tab(1, cx);
+                });
+            });
+            cx.run_until_parked();
+
+            let bodies: Vec<Body> = cx.update(|_, cx| {
+                workspace
+                    .read(cx)
+                    .tabs
+                    .iter()
+                    .map(|tab| tab.request.body.clone())
+                    .collect()
+            });
+            assert_eq!(raw_text(&bodies[0]), Some("{\"a\":1}"));
+            assert!(matches!(bodies[1], Body::None));
+            assert!(matches!(body_of(cx, &workspace), Body::None));
+        }
+    }
+
     /// The undo path is a snapshot plus a re-save, so it can be proved against
     /// the in-memory store without a window or an executor.
     mod undo_delete {
