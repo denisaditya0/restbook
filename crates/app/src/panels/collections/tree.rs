@@ -151,27 +151,31 @@ fn insert_in_items(items: &mut Vec<CollectionItem>, path: &[String], item: Colle
 /// Remove the item with `id` from anywhere in the tree, and report which
 /// collection it was removed from so that collection can be re-saved.
 pub(super) fn remove_item(collections: &mut [Collection], id: &str) -> Option<String> {
+    take_item(collections, id).map(|(collection, _)| collection)
+}
+
+/// The item with `id`, removed from the tree, and the collection it came out of.
+fn take_item(collections: &mut [Collection], id: &str) -> Option<(String, CollectionItem)> {
     for collection in collections.iter_mut() {
-        if remove_from_items(&mut collection.items, id) {
-            return Some(collection.id.clone());
+        if let Some(item) = take_from_items(&mut collection.items, id) {
+            return Some((collection.id.clone(), item));
         }
     }
     None
 }
 
-fn remove_from_items(items: &mut Vec<CollectionItem>, id: &str) -> bool {
+fn take_from_items(items: &mut Vec<CollectionItem>, id: &str) -> Option<CollectionItem> {
     if let Some(index) = items.iter().position(|item| item_id(item) == id) {
-        items.remove(index);
-        return true;
+        return Some(items.remove(index));
     }
     for item in items.iter_mut() {
         if let CollectionItem::Folder(folder) = item {
-            if remove_from_items(&mut folder.items, id) {
-                return true;
+            if let Some(found) = take_from_items(&mut folder.items, id) {
+                return Some(found);
             }
         }
     }
-    false
+    None
 }
 
 /// Move the item with `id` one place up or down among its siblings, and report
@@ -268,6 +272,82 @@ fn rename_in_items(items: &mut [CollectionItem], id: &str, name: &str) -> bool {
         }
     }
     false
+}
+
+/// The destination a saved request currently lives in, for prefilling a move.
+pub(crate) fn destination_of(collections: &[Collection], id: &str) -> Option<Destination> {
+    for collection in collections {
+        let mut folders = Vec::new();
+        if path_to_request(&collection.items, id, &mut folders) {
+            return Some(Destination {
+                collection: collection.id.clone(),
+                folders,
+            });
+        }
+    }
+    None
+}
+
+fn path_to_request(items: &[CollectionItem], id: &str, folders: &mut Vec<String>) -> bool {
+    for item in items {
+        match item {
+            CollectionItem::Request(request) if request.id == id => return true,
+            CollectionItem::Request(_) => {}
+            CollectionItem::Folder(folder) => {
+                folders.push(folder.id.clone());
+                if path_to_request(&folder.items, id, folders) {
+                    return true;
+                }
+                folders.pop();
+            }
+        }
+    }
+    false
+}
+
+/// Move a saved request to another collection or folder.
+///
+/// Returns the ids that changed, target first: that is also the order they must
+/// be written in, so a failure between the two writes leaves the request in two
+/// places rather than in none.
+///
+/// `None` means nothing changed — an unknown request or target, or a move to the
+/// folder the request already lives in.
+pub(crate) fn move_to(
+    collections: &mut [Collection],
+    id: &str,
+    target: &Destination,
+) -> Option<(String, String)> {
+    let current = destination_of(collections, id)?;
+    if &current == target {
+        return None;
+    }
+    // Prove the target before taking anything out of the tree, so a stale id
+    // cannot turn a move into a delete.
+    resolve_destination(collections, target)?;
+
+    let (source, item) = take_item(collections, id)?;
+    if !insert_into(collections, target, item.clone()) {
+        // Unreachable after the check above, but a lost request would be the
+        // worst outcome of a bug here, so put it back rather than trust it.
+        insert_into(collections, &current, item);
+        return None;
+    }
+    Some((target.collection.clone(), source))
+}
+
+fn resolve_destination<'a>(
+    collections: &'a [Collection],
+    target: &Destination,
+) -> Option<&'a [CollectionItem]> {
+    resolve_selection(
+        collections,
+        &Selection {
+            collection: Some(target.collection.clone()),
+            folders: target.folders.clone(),
+            request: None,
+        },
+    )
 }
 
 /// The items addressed by a selection's folder path, or `None` when the
@@ -470,9 +550,10 @@ mod tests {
     use restbook_core::{Collection, CollectionItem, Folder, Method, RequestDef, SavedRequest};
 
     use super::{
-        default_destination, destination_rows, display_name, filter_tree, find_in_items_all,
-        has_move_target, initial, insert_into, item_id, move_item, node_name, owner_collection,
-        remove_item, rename_item, resolve_selection, Destination, Selection,
+        default_destination, destination_of, destination_rows, display_name, filter_tree,
+        find_in_items_all, has_move_target, initial, insert_into, item_id, move_item, move_to,
+        node_name, owner_collection, remove_item, rename_item, resolve_selection, Destination,
+        Selection,
     };
 
     fn destination(collection: &str, folders: &[&str]) -> Destination {
@@ -824,6 +905,97 @@ mod tests {
         assert_eq!(initial("acme"), "A");
         assert_eq!(initial("  spaced"), " ");
         assert_eq!(initial(""), "?");
+    }
+
+    /// A request's home, for prefilling a move or deciding one would be a no-op.
+    #[test]
+    fn destination_of_reads_the_folder_path() {
+        let tree = sample();
+        assert_eq!(
+            destination_of(&tree, "req-1"),
+            Some(destination("col-1", &["fold-1"])),
+        );
+        assert_eq!(
+            destination_of(&tree, "req-3"),
+            Some(destination("col-1", &[])),
+        );
+        assert_eq!(destination_of(&tree, "missing"), None);
+    }
+
+    fn two_collections() -> Vec<Collection> {
+        let mut tree = sample();
+        tree.push(Collection {
+            id: "col-2".to_owned(),
+            name: "Other".to_owned(),
+            items: vec![folder("fold-2", "Elsewhere", Vec::new())],
+        });
+        tree
+    }
+
+    /// A move reports both collections, target first: that is also the order
+    /// they must be written in.
+    #[test]
+    fn moving_a_request_reports_the_target_then_the_source() {
+        let mut tree = two_collections();
+        let changed = move_to(&mut tree, "req-3", &destination("col-2", &[]));
+        assert_eq!(changed, Some(("col-2".to_owned(), "col-1".to_owned())));
+
+        assert!(find_in_items_all(&tree, "req-3").is_some());
+        let source = tree.iter().find(|each| each.id == "col-1").unwrap();
+        assert!(source.items.iter().all(|item| item_id(item) != "req-3"));
+        let target = tree.iter().find(|each| each.id == "col-2").unwrap();
+        assert!(target.items.iter().any(|item| item_id(item) == "req-3"));
+    }
+
+    #[test]
+    fn moving_a_request_into_a_folder_nests_it() {
+        let mut tree = two_collections();
+        let target = destination("col-2", &["fold-2"]);
+        assert_eq!(
+            move_to(&mut tree, "req-1", &target),
+            Some(("col-2".to_owned(), "col-1".to_owned())),
+        );
+        let items = resolve_selection(&tree, &into_folder_2("fold-2")).unwrap();
+        assert!(matches!(items.first(), Some(CollectionItem::Request(r)) if r.id == "req-1"));
+    }
+
+    fn into_folder_2(id: &str) -> Selection {
+        Selection {
+            collection: Some("col-2".to_owned()),
+            folders: vec![id.to_owned()],
+            request: None,
+        }
+    }
+
+    /// Moving something to the place it already is must not rewrite the tree (or
+    /// report a move that did not happen).
+    #[test]
+    fn moving_a_request_to_its_own_folder_is_a_no_op() {
+        let mut tree = sample();
+        assert_eq!(
+            move_to(&mut tree, "req-1", &destination("col-1", &["fold-1"])),
+            None
+        );
+        assert_eq!(tree[0].items.len(), 2);
+        assert_eq!(
+            move_to(&mut tree, "req-3", &destination("col-1", &[])),
+            None
+        );
+        assert_eq!(tree[0].items.len(), 2);
+    }
+
+    /// A target that is not there is refused before anything is taken, because a
+    /// move that fails after the removal would delete the request.
+    #[test]
+    fn moving_to_an_unknown_target_changes_nothing() {
+        let mut tree = two_collections();
+        assert_eq!(move_to(&mut tree, "req-3", &destination("nope", &[])), None);
+        assert_eq!(
+            move_to(&mut tree, "req-3", &destination("col-2", &["nope"])),
+            None
+        );
+        assert!(find_in_items_all(&tree, "req-3").is_some());
+        assert_eq!(tree[1].items.len(), 1, "the folder is still alone");
     }
 
     /// The picker lists every place a save can land, and its labels name the

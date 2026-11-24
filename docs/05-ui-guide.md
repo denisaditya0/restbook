@@ -378,6 +378,7 @@ src/workspace/
   send.rs                Workspace::send() -> prepare -> transport -> store
   persistence.rs         dock layout to/from layout.json in the data dir (names + width)
   save_dialog.rs         the first-save dialog: a name and a destination picker
+  move_dialog.rs         the move dialog: the same picker, for a saved request
   settings.rs            app preferences (pretty-print, history limit) to/from
                          settings.json, as an observable entity
   settings_view.rs       the Settings dialog: preferences plus read-only storage facts
@@ -859,6 +860,14 @@ the same dialog into a name dialog and the confirm creates the collection and
 saves the request into its root (`Workspace::commit_save` takes the collection
 name and creates it first). It is also what a first run gets, because a
 workspace with no collection has nowhere else to send the save.
+
+The move dialog is the same picker without the name: one `Destination` is one
+request's home, so `save_dialog::with_destinations` builds the menu for both and
+the two lists cannot drift apart. A move writes the target collection first and
+the source second (`CollectionsPanel::move_request`, over `tree::move_to`), so a
+failure between them leaves the request in two places rather than in none, and
+nothing reloads between the two writes — a reload would hand the second write
+the store's copy of the first, putting the request back where it started.
 
 A rename that is not a creation does not deserve a modal: the collections pane
 puts a Rename button in the row tools that shows an inline input in the tree.

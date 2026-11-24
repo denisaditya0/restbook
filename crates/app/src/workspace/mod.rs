@@ -10,6 +10,7 @@ mod delete;
 mod dock;
 mod export;
 mod import;
+mod move_dialog;
 mod persistence;
 mod save_dialog;
 mod send;
@@ -137,6 +138,13 @@ pub(crate) struct Workspace {
     /// an existing one, and the name field for it.
     save_new_collection: bool,
     save_new_collection_name: Entity<InputState>,
+    /// A saved request asked to move, waiting for render to raise the destination
+    /// picker: the request came from a menu with no window.
+    pending_move: Option<String>,
+    /// The move dialog's request and destination choice, kept on the workspace
+    /// for the same reason as `save_target`.
+    move_node: Option<String>,
+    move_target: Option<Destination>,
     /// A draft asked to be saved, but the dialog needs a window and the event the
     /// request arrived on had none. The next render opens the dialog.
     pending_save: bool,
@@ -367,6 +375,9 @@ impl Workspace {
             save_target: None,
             save_new_collection: false,
             save_new_collection_name,
+            pending_move: None,
+            move_node: None,
+            move_target: None,
             pending_save: false,
             pending_import: false,
             export_state: ExportState::default(),
@@ -532,6 +543,10 @@ impl Workspace {
                     CollectionsEvent::Notice(notice) => this.notice(notice, cx),
                     CollectionsEvent::ConfirmDelete(target) => {
                         this.pending_delete = Some(PendingDelete::Node(target.clone()));
+                        cx.notify();
+                    }
+                    CollectionsEvent::Move { node } => {
+                        this.pending_move = Some(node.clone());
                         cx.notify();
                     }
                 }
@@ -1042,6 +1057,15 @@ impl Render for Workspace {
 
         // The empty-state import button has no window either; the picker is
         // opened after this element returns, like every other deferred surface.
+        if let Some(node) = self.pending_move.take() {
+            let this = cx.entity();
+            window.defer(cx, move |window, cx| {
+                this.update(cx, |workspace, cx| {
+                    workspace.open_move_dialog(node, window, cx)
+                });
+            });
+        }
+
         if std::mem::take(&mut self.pending_import) {
             let this = cx.entity();
             window.defer(cx, move |window, cx| {
