@@ -23,9 +23,9 @@ use gpui_kit::*;
 use restbook_core::{Collection, CollectionItem, Draft, Folder, RequestDef, SavedRequest, Store};
 
 use self::tree::{
-    display_name, filter_tree, find_in_items_all, find_saved_mut, has_move_target, initial,
+    display_name, filter_paths, find_in_items_all, find_saved_mut, has_move_target, initial,
     insert_into, item_name, move_item, node_name, owner_collection, remove_item, rename_item,
-    resolve_selection, sort_refs, sort_tree,
+    resolve_selection, sort_refs,
 };
 
 pub(crate) use self::tree::{Destination, DestinationRow};
@@ -291,11 +291,12 @@ pub(crate) struct CollectionsPanel {
     /// Whether the "new collection" field is showing. The header's plus button
     /// reveals it, so an always-visible empty input does not eat a row.
     composing: bool,
-    /// The last filtered tree, keyed by the query and the data revision, so a
-    /// repaint with neither changed does not re-run the filter. Render must not
-    /// deep-copy the tree on every frame, so only the non-empty-query result is
-    /// cached here; the unfiltered tree is borrowed in place.
-    filter_cache: Option<(String, u64, Vec<Collection>)>,
+    /// The rows the current filter shows, keyed by the query, the data revision
+    /// and the sort order, so a repaint with none of them changed does not
+    /// re-run the filter. Each entry is a path of indices into `collections`,
+    /// so the render walks the borrowed tree rather than a cloned copy. The
+    /// empty-query case is not cached here; that tree is borrowed in place.
+    filter_cache: Option<(String, u64, SortOrder, Vec<Vec<usize>>)>,
     /// Bumped on every mutation of `collections`; keys `filter_cache`.
     revision: u64,
     focus_handle: FocusHandle,
@@ -1202,31 +1203,28 @@ impl CollectionsPanel {
             return self.list(rows);
         }
 
-        // A non-empty filter rebuilds owned copies, so keep the result until
-        // the query or the data changes rather than rebuilding every repaint.
+        // A non-empty filter is computed once per query/data/sort change, then
+        // reused. It yields index paths, so drawing borrows the tree in place
+        // instead of copying every match.
         let fresh = matches!(
             &self.filter_cache,
-            Some((cached_query, cached_revision, _))
-                if cached_query == &query && *cached_revision == self.revision
+            Some((cached_query, cached_revision, cached_sort, _))
+                if cached_query == &query
+                    && *cached_revision == self.revision
+                    && *cached_sort == self.sort
         );
         if !fresh {
-            let filtered = filter_tree(&self.collections, &query);
-            self.filter_cache = Some((query.clone(), self.revision, filtered));
+            let paths = filter_paths(&self.collections, &query, self.sort);
+            self.filter_cache = Some((query.clone(), self.revision, self.sort, paths));
         }
-        // Sort the cached tree in place, then drop the mutable borrow so the
-        // render helpers below can read the panel while they walk it.
-        {
-            let cached = &mut self.filter_cache.as_mut().expect("cache set above").2;
-            sort_tree(cached, self.sort);
-        }
-        let filtered: &[Collection] = &self.filter_cache.as_ref().expect("cache set above").2;
-        if filtered.is_empty() {
+        let paths: &[Vec<usize>] = &self.filter_cache.as_ref().expect("cache set above").3;
+        if paths.is_empty() {
             return self.message("No matches.");
         }
 
-        let mut rows = Vec::with_capacity(filtered.len());
-        for collection in filtered {
-            rows.push(self.render_collection(collection, &query, cx));
+        let mut rows = Vec::with_capacity(paths.len());
+        for path in paths {
+            rows.push(self.render_path(path, &query, cx));
         }
 
         self.list(rows)
@@ -1255,7 +1253,90 @@ impl CollectionsPanel {
             .into_any_element()
     }
 
+    /// Draw one row of the filtered tree by its index path. The unfiltered tree
+    /// recurses through [`Self::render_collection`]; this flattens the filtered
+    /// result so every visible row is built from the borrowed collections.
+    fn render_path(&self, path: &[usize], query: &str, cx: &mut Context<Self>) -> AnyElement {
+        let Some((&collection_index, rest)) = path.split_first() else {
+            return div().into_any_element();
+        };
+        let Some(collection) = self.collections.get(collection_index) else {
+            return div().into_any_element();
+        };
+        if rest.is_empty() {
+            return self.collection_row(collection, query, cx);
+        }
+
+        // Walk to the target item, carrying the ancestor folder ids for a
+        // selection and the depth for indentation.
+        let mut items: &[CollectionItem] = &collection.items;
+        let mut ancestors: Vec<String> = Vec::new();
+        let mut depth = 1;
+        let mut target = None;
+        for (step, &index) in rest.iter().enumerate() {
+            let Some(item) = items.get(index) else {
+                return div().into_any_element();
+            };
+            let last = step + 1 == rest.len();
+            if last {
+                target = Some(item);
+                break;
+            }
+            match item {
+                CollectionItem::Folder(folder) => {
+                    ancestors.push(folder.id.clone());
+                    items = &folder.items;
+                }
+                CollectionItem::Request(_) => return div().into_any_element(),
+            }
+            depth += 1;
+        }
+
+        match target {
+            Some(CollectionItem::Folder(folder)) => {
+                self.folder_row(&collection.id, folder, &ancestors, depth, cx)
+            }
+            Some(CollectionItem::Request(request)) => {
+                self.render_request(&collection.id, request, &ancestors, depth, cx)
+            }
+            None => div().into_any_element(),
+        }
+    }
+
     fn render_collection(
+        &self,
+        collection: &Collection,
+        query: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let collapsed = query.is_empty() && self.collapsed.contains(&collection.id);
+        let mut column = v_flex()
+            .w_full()
+            .child(self.collection_row(collection, query, cx));
+
+        if !collapsed {
+            // The empty filter borrows the tree in stored order, so order
+            // references here rather than copying the children to sort them.
+            if query.trim().is_empty() && self.sort != SortOrder::Manual {
+                let mut items: Vec<&CollectionItem> = collection.items.iter().collect();
+                items.sort_by(|left, right| self.sort.compare(item_name(left), item_name(right)));
+                for item in items {
+                    column =
+                        column.child(self.render_item(&collection.id, item, &[], 1, query, cx));
+                }
+            } else {
+                for item in &collection.items {
+                    column =
+                        column.child(self.render_item(&collection.id, item, &[], 1, query, cx));
+                }
+            }
+        }
+
+        column.into_any_element()
+    }
+
+    /// The collection's own row, without its children.
+    fn collection_row(
         &self,
         collection: &Collection,
         query: &str,
@@ -1369,34 +1450,12 @@ impl CollectionsPanel {
         // pointer: `context_menu` records the press position and anchors the
         // popup there, so no second, invisible trigger is needed. The inline
         // rename input keeps its own right-click (select, paste) while open.
-        let row = if renaming {
+        if renaming {
             row.into_any_element()
         } else {
             let menu = self.row_menu(&target, true, cx);
             row.context_menu(menu).into_any_element()
-        };
-        let mut column = v_flex().w_full().child(row);
-
-        if !collapsed {
-            // A filtered tree arrives already ordered. The borrowed (empty
-            // query) tree is in stored order, so order references here rather
-            // than copying the children to sort them.
-            if query.trim().is_empty() && self.sort != SortOrder::Manual {
-                let mut items: Vec<&CollectionItem> = collection.items.iter().collect();
-                items.sort_by(|left, right| self.sort.compare(item_name(left), item_name(right)));
-                for item in items {
-                    column =
-                        column.child(self.render_item(&collection.id, item, &[], 1, query, cx));
-                }
-            } else {
-                for item in &collection.items {
-                    column =
-                        column.child(self.render_item(&collection.id, item, &[], 1, query, cx));
-                }
-            }
         }
-
-        column.into_any_element()
     }
 
     fn render_item(
@@ -1428,6 +1487,57 @@ impl CollectionsPanel {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let collapsed = query.is_empty() && self.collapsed.contains(&folder.id);
+        let mut own_path = path.to_vec();
+        own_path.push(folder.id.clone());
+        let mut column =
+            v_flex()
+                .w_full()
+                .child(self.folder_row(collection_id, folder, path, depth, cx));
+
+        if !collapsed {
+            // Same as the collection level: only the borrowed tree needs its
+            // children ordered here.
+            if query.trim().is_empty() && self.sort != SortOrder::Manual {
+                let mut children: Vec<&CollectionItem> = folder.items.iter().collect();
+                children
+                    .sort_by(|left, right| self.sort.compare(item_name(left), item_name(right)));
+                for child in children {
+                    column = column.child(self.render_item(
+                        collection_id,
+                        child,
+                        &own_path,
+                        depth + 1,
+                        query,
+                        cx,
+                    ));
+                }
+            } else {
+                for child in &folder.items {
+                    column = column.child(self.render_item(
+                        collection_id,
+                        child,
+                        &own_path,
+                        depth + 1,
+                        query,
+                        cx,
+                    ));
+                }
+            }
+        }
+
+        column.into_any_element()
+    }
+
+    /// The folder's own row, without its children.
+    fn folder_row(
+        &self,
+        collection_id: &str,
+        folder: &Folder,
+        path: &[String],
+        depth: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let collapsed = self.collapsed.contains(&folder.id);
         let selected = self.selection.collection.as_deref() == Some(collection_id)
             && self.selection.folder() == Some(folder.id.as_str())
             && self.selection.request.is_none();
@@ -1529,46 +1639,12 @@ impl CollectionsPanel {
         let target = RowTarget::Item(folder.id.clone());
         let tools = self.render_row_tools(&target, true, cx);
         let row = row.child(toggle).child(name_area).child(tools);
-        let row = if renaming {
+        if renaming {
             row.into_any_element()
         } else {
             let menu = self.row_menu(&target, true, cx);
             row.context_menu(menu).into_any_element()
-        };
-        let mut column = v_flex().w_full().child(row);
-
-        if !collapsed {
-            // Same as the collection level: only the borrowed tree needs its
-            // children ordered here; a filtered tree already is.
-            if query.trim().is_empty() && self.sort != SortOrder::Manual {
-                let mut children: Vec<&CollectionItem> = folder.items.iter().collect();
-                children
-                    .sort_by(|left, right| self.sort.compare(item_name(left), item_name(right)));
-                for child in children {
-                    column = column.child(self.render_item(
-                        collection_id,
-                        child,
-                        &own_path,
-                        depth + 1,
-                        query,
-                        cx,
-                    ));
-                }
-            } else {
-                for child in &folder.items {
-                    column = column.child(self.render_item(
-                        collection_id,
-                        child,
-                        &own_path,
-                        depth + 1,
-                        query,
-                        cx,
-                    ));
-                }
-            }
         }
-
-        column.into_any_element()
     }
 
     fn render_request(
