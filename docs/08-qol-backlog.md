@@ -532,6 +532,14 @@ side.
 Refs: `crates/app/src/theme.rs` (`Metrics`), `09-gpui-kit-audit.md` §1.2–1.3,
 `gpui-kit-design-guides` ("Zoom, base font, and `rem`").
 
+### 6.7 Snapshot omits response headers — **P2**
+
+The snapshot image carries the request as a cURL command and the response body as
+it reads, so nothing shows what the server sent back besides the body itself. The
+web reference this feature follows includes the headers. Deferred from the first
+cut to keep the image to two blocks; draw them under the status line in the next
+minor release and delete this entry.
+
 ## 7. What Zed has that we deliberately do not
 
 This is here so the absences above do not turn into a refactor.

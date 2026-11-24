@@ -31,6 +31,7 @@ pub(crate) enum Command {
     ImportFile,
     ExportFile,
     CopyCurl,
+    Snapshot,
     FocusPanel(PanelName),
     ClosePanel(PanelName),
     ToggleEnvironment,
@@ -60,6 +61,7 @@ fn commands() -> Vec<(Command, &'static str)> {
         (Command::ImportFile, "Import…"),
         (Command::ExportFile, "Export…"),
         (Command::CopyCurl, "Copy as cURL"),
+        (Command::Snapshot, "Snapshot…"),
         // One focus and one close per pane, so the fixed table stays flat and
         // the confirm index remains a plain position in this list.
         (Command::FocusPanel(PanelName::History), "Focus history"),
@@ -126,7 +128,8 @@ fn command_hint(command: Command, window: &Window) -> Option<String> {
         | Command::ClosePanel(_)
         | Command::ToggleEnvironment
         | Command::ToggleCollections
-        | Command::ResetLayout => None,
+        | Command::ResetLayout
+        | Command::Snapshot => None,
     }
 }
 
@@ -267,6 +270,7 @@ mod tests {
             ImportFile,
             ExportFile,
             CopyCurl,
+            Snapshot,
         ];
         for name in crate::workspace::PanelName::all() {
             all.push(FocusPanel(name));

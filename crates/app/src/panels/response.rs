@@ -56,6 +56,9 @@ pub(crate) enum Event {
     ShowHistory,
     /// Send the request on screen again after a failure.
     Retry,
+    /// Draw the request and its response as a PNG for a ticket or a chat. The
+    /// workspace owns the dialog, so the pane only asks.
+    Snapshot,
     /// Forget one cookie in the shared jar.
     DeleteCookie { name: String },
     /// Replace one cookie's value in the shared jar.
@@ -69,6 +72,7 @@ impl Event {
         match self {
             Event::ShowHistory => "event: response history".to_owned(),
             Event::Retry => "event: response retry".to_owned(),
+            Event::Snapshot => "event: response snapshot".to_owned(),
             Event::DeleteCookie { name } => format!("event: response cookie delete {name}"),
             Event::UpdateCookie { name, .. } => {
                 format!("event: response cookie update {name}")
@@ -1519,6 +1523,18 @@ impl ResponsePanel {
                             .on_click(cx.listener(move |_, _, _, cx| {
                                 log::debug!(target: "restbook_app::ui", "response: copy summary");
                                 cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
+                            })),
+                    )
+                    .child(
+                        Button::new("snapshot-image")
+                            .icon(IconName::Image)
+                            .ghost()
+                            .compact()
+                            .debug_selector(|| "response-snapshot".to_owned())
+                            .tooltip("Snapshot the request and response as an image")
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                log::debug!(target: "restbook_app::ui", "response: snapshot");
+                                cx.emit(Event::Snapshot);
                             })),
                     ),
             )

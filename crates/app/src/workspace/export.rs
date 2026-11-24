@@ -105,7 +105,7 @@ fn render(store: &dyn Store, state: &ExportState) -> Result<String, String> {
     .map_err(|error| error.to_string())
 }
 
-fn slug(name: &str) -> String {
+pub(super) fn slug(name: &str) -> String {
     let mut out = String::new();
     let mut last_dash = false;
     for ch in name.chars() {
