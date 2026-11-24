@@ -327,6 +327,37 @@ reported as a bug.
 
 Refs: `Workspace::stack_layout`, `02-ui-plan.md` U2a.
 
+### 3.6 Switching tabs does not reveal the request in Collections — **P2**
+
+A row click moves the Collections selection and opens the tab, but the reverse
+never happens: selecting a tab bound to a saved request leaves the sidebar
+selection where it was, and does not scroll the tree to that node. The pane has
+no way to be told — only pane → workspace events exist, never the other way.
+
+**Fix:** add a `CollectionsPanel::reveal_node(node)` that resolves the node to
+its collection and folder path (`owner_collection`, `find_in_items_all`), sets
+`selection`, expands every ancestor in `collapsed`, and notifies; call it from
+`adopt_active` when `tab.origin()` is `Saved { node }`. Scrolling the row into
+view needs the scroll offset the virtual list in 3.7 would bring, so it lands
+with that item, not before.
+
+Refs: `Workspace::adopt_active` (`workspace/tabs.rs`), `panels/collections/mod.rs`
+(`Selection`, `prune_selection`), `07-flows.md` "Collections: request row click".
+
+### 3.7 The Collections tree draws every row every frame — **P2**
+
+The tree is a plain `overflow_y_scroll` column, not a virtual list, so
+`render_list` builds every collection, folder, and request on each frame. The
+3,000-request test guards filter time, not paint cost, and a workspace with many
+collections pays the whole tree on every repaint.
+
+**Fix:** adopt `List`/`VirtualList` (deferred today in `09-gpui-kit-audit.md` §9)
+so only the visible rows paint. This is also what makes the "scroll the selected
+row into view" half of 3.6 possible.
+
+Refs: `panels/collections/mod.rs` (`render_list`, `list`),
+`09-gpui-kit-audit.md` §9.
+
 ## 4. Dialogs and destructive actions
 
 Prompts are app-only by construction: `crates/core`, `crates/transport`, and
