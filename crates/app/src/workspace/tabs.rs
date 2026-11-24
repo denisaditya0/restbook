@@ -349,22 +349,13 @@ impl Workspace {
 
     /// A pasted cURL command replaced the active request. Confirm the import,
     /// then offer the first-save dialog so the request gets a name and a home
-    /// instead of silently becoming another unsaved tab. A workspace with no
-    /// collection at all skips the dialog: there is nowhere for it to land.
+    /// instead of silently becoming another unsaved tab. The dialog can create
+    /// its destination, so even an empty workspace is offered the save.
     pub(crate) fn imported(&mut self, cx: &mut Context<Self>) {
         self.notice(
             &Notice::Done("Imported a request from the clipboard.".into()),
             cx,
         );
-        if self
-            .panes
-            .collections
-            .read(cx)
-            .default_destination()
-            .is_none()
-        {
-            return;
-        }
         self.pending_save = true;
         cx.notify();
     }
@@ -399,51 +390,24 @@ impl Workspace {
         };
         let node = tab.node.clone();
         if node.is_none() {
-            if self
-                .panes
-                .collections
-                .read(cx)
-                .default_destination()
-                .is_none()
-            {
-                self.flash(
-                    chrome::FlashKind::Error,
-                    "There is no collection to save into — create one in the sidebar first.",
-                    cx,
-                );
-                return;
-            }
             self.pending_save = true;
             cx.notify();
             return;
         }
-        self.commit_save(node, None, None, cx);
+        self.commit_save(node, None, None, None, cx);
     }
 
     /// Save the active request as a new node, even when the tab is already
     /// bound. The dialog opens with the bound name prefilled and `node` unset,
     /// so the save creates an entry instead of overwriting the source.
     pub(crate) fn save_active_as(&mut self, cx: &mut Context<Self>) {
-        if self
-            .panes
-            .collections
-            .read(cx)
-            .default_destination()
-            .is_none()
-        {
-            self.flash(
-                chrome::FlashKind::Error,
-                "There is no collection to save into — create one in the sidebar first.",
-                cx,
-            );
-            return;
-        }
         self.pending_save = true;
         cx.notify();
     }
 
-    /// Write the open request into `node` (an existing collection node) or, with
-    /// `None`, into `target` under `name`.
+    /// Write the open request into `node` (an existing collection node), into
+    /// `target` under `name`, or into a collection `create` names that does not
+    /// exist yet.
     ///
     /// The node the save landed on is written back onto the tab, so a tab saved
     /// for the first time is bound to it and the next Save updates rather than
@@ -453,18 +417,36 @@ impl Workspace {
         node: Option<String>,
         name: Option<&str>,
         target: Option<Destination>,
+        create: Option<&str>,
         cx: &mut Context<Self>,
     ) -> bool {
+        // *New collection…* is a destination that does not exist yet: create it,
+        // then save into its root, so one confirm leaves both behind.
+        let target = match create {
+            Some(collection_name) => {
+                let collection_name = collection_name.trim();
+                if collection_name.is_empty() {
+                    return false;
+                }
+                let id = self.panes.collections.update(cx, |panel, cx| {
+                    panel.create_collection(collection_name, None, cx)
+                });
+                let Some(id) = id else {
+                    return false;
+                };
+                Some(Destination {
+                    collection: id,
+                    folders: Vec::new(),
+                })
+            }
+            None => target,
+        };
         let landed = self.panes.collections.update(cx, |panel, cx| {
             panel.save_current(node.as_deref(), name, target.as_ref(), cx)
         });
         let Some(node) = landed else {
             // Nothing was saved, and the pane could not say so on this path.
-            self.flash(
-                chrome::FlashKind::Error,
-                "Couldn't save — that collection is no longer there.",
-                cx,
-            );
+            self.flash(chrome::FlashKind::Error, "Couldn't save the request.", cx);
             return false;
         };
         // A saved request and its tab must compare equal, or the unsaved dot
