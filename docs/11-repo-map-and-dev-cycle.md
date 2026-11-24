@@ -18,6 +18,8 @@ Related documents:
 - [`08-qol-backlog.md`](08-qol-backlog.md) — known rough edges
 - [`09-gpui-kit-audit.md`](09-gpui-kit-audit.md) — UI drift from the kit rules
 - [`10-release-and-updates.md`](10-release-and-updates.md) — artifacts and updater
+- [`12-keyboard-shortcuts.md`](12-keyboard-shortcuts.md) — every binding and its platform spelling
+- [`13-rust-primer.md`](13-rust-primer.md) — the Rust this repository uses, for readers arriving from another language
 
 **Status:** Windows (GNU toolchain) is the only OS this has been built and run
 on. `.github/workflows/ci.yml` checks every pull request on a Linux runner, and
@@ -134,6 +136,8 @@ runner. Build commands are `cargo` plus the `scripts/dev.*` wrappers.
 │   ├── dev.sh               cargo with OPENSSL_DIR detected (POSIX)
 │   ├── dev.ps1              same, PowerShell
 │   ├── dev.cmd              same, cmd.exe; `--logs` tees to target/dev-logs
+│   ├── setup-windows.ps1    check this machine's prerequisites, install with -Install
+│   ├── setup-windows.cmd    same, cmd.exe
 │   ├── package.sh           build dist/ (Windows exe + libcrypto DLL)
 │   └── sample-server.py     local response fixtures for the UI
 ├── docs/                    the numbered documents listed above
@@ -171,6 +175,14 @@ Two rules matter more than the rest:
    intent; only `workspace` chooses where it appears.
 
 ## The development cycle
+
+**Before anything else, the machine.** On Windows that is
+`scripts/setup-windows.ps1` (the README has the full story): it checks the GNU
+toolchain, rustfmt and clippy, MinGW and the two user PATH entries, fixes what is
+missing with `-Install`, and `-Verify` finishes by running `dev.ps1 check`.
+Everywhere else the package installs in
+[`06-cross-platform.md`](06-cross-platform.md) are the whole list. Every step
+below assumes a machine that check already passes.
 
 ### 1. Decide which side of the split owns the change
 

@@ -128,10 +128,18 @@ dependency for nothing.
 
 ### Windows
 
-See the README's *Windows setup* section. The `dev` scripts exist mainly for
-this platform, where `libsqlite3-sys` panics with "Missing environment variable
-OPENSSL_DIR" instead of falling back. `dev.sh` is for a POSIX shell (Git Bash,
-MSYS2); `dev.ps1` and `dev.cmd` are the native PowerShell and cmd.exe twins.
+See the README's *Windows setup* section. `scripts\setup-windows.ps1` (or the
+`setup-windows.cmd` twin) checks the GNU toolchain, rustfmt and clippy, MinGW and
+the two user PATH entries, installs whatever is missing with `-Install`, and
+runs `dev.ps1 check` with `-Verify`.
+
+The `dev` scripts exist mainly for this platform, where `libsqlite3-sys` panics
+with "Missing environment variable OPENSSL_DIR" instead of falling back. `dev.sh`
+is for a POSIX shell (Git Bash, MSYS2); `dev.ps1` and `dev.cmd` are the native
+PowerShell and cmd.exe twins.
+
+Linux and macOS need no equivalent script: the package lists above are the whole
+installation.
 
 ## Build and test
 

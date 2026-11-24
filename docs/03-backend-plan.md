@@ -34,6 +34,36 @@ and the seed.
 `core` defines the traits and nothing implements them there. That is what lets
 the engine be tested headlessly and the UI be replaced.
 
+## Where each stage lives
+
+The pipeline diagram names types, not directories. This is the map from a stage
+to the crate and file that implements it, so "the transport" also tells you
+where `prepare()` and the store are. The table above says what each crate may
+not do; the app's full directory tree is in
+[`11-repo-map-and-dev-cycle.md`](11-repo-map-and-dev-cycle.md#repository-map).
+
+| Stage | Crate | Directory | Key files | What it does |
+|---|---|---|---|---|
+| `RequestDef`, `Method`, `Kv`, `Body`, `Auth` | `core` | `crates/core/src/` | `model.rs` | the unresolved request and every collection/environment shape |
+| `prepare()` → `PreparedRequest` | `core` | `crates/core/src/` | `prepare.rs` | pure fold: vars, query, auth, body encoding, URL validation |
+| `{{var}}` resolution | `core` | `crates/core/src/` | `template.rs`, `vars.rs` | placeholder substitution and the scope lookup |
+| `{{$…}}` generators | `core` | `crates/core/src/` | `generator.rs` | `$uuid`, `$timestamp`, `$random*`, expanded at send time |
+| `Transport` trait | `core` | `crates/core/src/` | `transport.rs` | the `Transport` / `CancelToken` / `Progress` contract |
+| `ReqwestTransport` | `transport` | `crates/transport/src/` | `lib.rs` | reqwest adapter, client cache, shared cookie jar, tokio runtime |
+| `ResponseRecord` / `ResponseBody` | `core` | `crates/core/src/` | `model.rs` | what came back; `Memory` bytes or a `File` body |
+| `Store` trait | `core` | `crates/core/src/` | `store.rs` | `Store`, `HistoryEntry`, `HistoryHit`, `Origin`, `Draft` |
+| Store implementations | `store` | `crates/store/src/` | `lib.rs`, `jsonl.rs`, `folder.rs`, `sqlcipher.rs` | memory, plaintext JSONL, folder workspace, encrypted database |
+| Headless harness | `devcli` | `crates/devcli/src/` | `main.rs` | `send` / `history` / `import` / `export` over the pipeline |
+| Import adapters | `core` | `crates/core/src/import/` | `curl.rs`, `har.rs`, `postman.rs`, `openapi.rs` | a foreign format → `RequestDef` |
+| Errors | `core` | `crates/core/src/` | `error.rs` | typed failures the UI renders verbatim |
+| Fake transport | `core` | `crates/core/src/` | `testing.rs` | an offline `FakeTransport` for engine tests |
+| Send orchestration | `app` | `crates/app/src/workspace/` | `send.rs` | the only glue: prepare → transport → history → `Document` notify |
+| Panes | `app` | `crates/app/src/panels/` | `request.rs`, `response.rs`, … | content and events; never a dock or a sibling |
+
+Everything above `app` is the engine and builds with `cargo` at the repository
+root. The shell is its own workspace under `crates/app`, so a root build never
+compiles GPUI and an app build never sees the engine's test targets.
+
 ## Milestones
 
 The engine milestone table (`B` items) and what is deliberately deferred live in

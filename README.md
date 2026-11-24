@@ -20,6 +20,8 @@ crates/app        GPUI desktop shell (excluded from the workspace)
 scripts/dev.sh    runs cargo with the local toolchain's env detected
 scripts/dev.ps1   same, for PowerShell
 scripts/dev.cmd   same, for cmd.exe
+scripts/setup-windows.ps1  checks (and with -Install, installs) Windows prerequisites
+scripts/setup-windows.cmd  same, for cmd.exe
 scripts/package.sh  builds dist/ per OS, applying that platform's branding
 scripts/icons.sh    rasterizes crates/app/icons/restbook.svg for each platform
 ```
@@ -38,6 +40,11 @@ cargo run -p restbook-devcli -- send https://httpbin.org/bearer --var TOKEN=abc 
 cargo run -p restbook-devcli -- send https://httpbin.org/bytes/1048576 --progress
 cargo run -p restbook-devcli -- history httpbin
 ```
+
+On a fresh Windows machine, run `.\scripts\setup-windows.ps1 -Install` once
+first: it installs the GNU toolchain, MinGW and the user PATH entries these
+commands assume (see [Windows setup](#windows-setup)). Linux and macOS take the
+package lists in [`docs/06-cross-platform.md`](docs/06-cross-platform.md).
 
 `--progress` sends through `Transport::execute_with_progress` and prints live
 sent/received byte counts to stderr, which is how the progress path is exercised
@@ -327,29 +334,40 @@ of a shared request as tracked content.
 - `docs/10-release-and-updates.md` — versioning, channels, artifact matrix, release flow, update manifest
 - `docs/11-repo-map-and-dev-cycle.md` — repository map, crate ownership, and the development loop
 - `docs/12-keyboard-shortcuts.md` — every binding, platform spelling, and what to check when one does not fire
+- `docs/13-rust-primer.md` — the Rust this repository uses, for readers arriving from another language
 - [`SECURITY.md`](SECURITY.md) — what is protected, what is not, and how to report a vulnerability
 
-## Windows setup (this machine)
+## Windows setup
 
 Visual Studio Build Tools are not installed, so Rust uses the GNU toolchain
-rather than MSVC:
+rather than MSVC. The prerequisites are one idempotent script:
 
-```sh
-rustup toolchain install stable-x86_64-pc-windows-gnu   # pinned in rust-toolchain.toml
-scoop install mingw                                     # provides dlltool + as
+```powershell
+.\scripts\setup-windows.ps1            # report what is missing; change nothing
+.\scripts\setup-windows.ps1 -Install   # install it, asking before each step
+.\scripts\setup-windows.ps1 -Verify    # then run `dev.ps1 check`
 ```
 
-Add both directories to your **user PATH** (System Properties > Environment
-Variables > User variables > Path):
+From cmd.exe, `scripts\setup-windows.cmd` takes the same flags; `-Yes` skips the
+prompts. It exits non-zero while anything is still missing, so a wrapper script
+can use it as a pre-flight check, and nothing it does needs an elevated shell.
 
-```
-%USERPROFILE%\.cargo\bin
-%USERPROFILE%\scoop\apps\mingw\current\bin
-```
+What it checks, and the manual command when it cannot fix a step:
 
-After that `cargo build` works from a normal shell with no env vars. TLS uses
-`native-tls` (SChannel) instead of `rustls`, because `ring` needs a C compiler;
-flip the feature in the workspace `Cargo.toml` if MSVC Build Tools get installed.
+| Requirement | Manual equivalent |
+|---|---|
+| `rustup` | install from <https://rustup.rs> |
+| `stable-x86_64-pc-windows-gnu` with rustfmt and clippy | `rustup toolchain install stable-x86_64-pc-windows-gnu --component rustfmt --component clippy` |
+| `gcc`, `dlltool`, `as` | `scoop install mingw` |
+| user PATH entries | add `%USERPROFILE%\.cargo\bin` and `%USERPROFILE%\scoop\apps\mingw\current\bin` under System Properties > Environment Variables > User variables > Path |
+
+OpenSSL is not a separate prerequisite: scoop's MinGW carries a dev tree in its
+own `opt` directory, and that is what the `dev` scripts detect.
+
+Once the script reports everything present, `cargo build` works from a normal
+shell with no env vars. TLS uses `native-tls` (SChannel) instead of `rustls`,
+because `ring` needs a C compiler; flip the feature in the workspace
+`Cargo.toml` if MSVC Build Tools get installed.
 
 ### Encrypted store (`sqlcipher` feature)
 

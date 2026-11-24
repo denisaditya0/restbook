@@ -297,6 +297,9 @@ Send button (or secondary-enter)
 The editor is read live at send time: raw-body and auth inputs notify their own
 `InputState`, so a previously-stored copy can be one keystroke stale.
 
+Each stage above is a type in `crates/core`; the stage-to-directory map is in
+[`03-backend-plan.md`](03-backend-plan.md#where-each-stage-lives).
+
 ## Keeping this honest
 
 The command table above is the part most likely to drift. `Command` in

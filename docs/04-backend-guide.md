@@ -66,9 +66,10 @@ when one is found, takes precedence and keeps history in its gitignored
 migration of legacy `.restbook/history.jsonl` files.
 
 The encrypted store needs an OpenSSL dev tree: `libsqlite3-sys` reads
-`OPENSSL_DIR` and panics without it. The `dev` scripts detect a prefix on this
-machine and forward the command, so the checked-in docs never carry a personal
-path (`dev.ps1`/`dev.cmd` are the native Windows twins):
+`OPENSSL_DIR` and panics without it. On Windows that tree is MinGW's, which
+`scripts\setup-windows.ps1` installs with the toolchain. The `dev` scripts detect
+a prefix on this machine and forward the command, so the checked-in docs never
+carry a personal path (`dev.ps1`/`dev.cmd` are the native Windows twins):
 
 ```sh
 sh scripts/dev.sh test -p restbook-store --features sqlcipher

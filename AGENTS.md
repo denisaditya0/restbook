@@ -82,7 +82,9 @@ restbook/                    root workspace (the engine)
   tests are run twice, once per workspace.
 - The app links OpenSSL through SQLCipher, so it needs `OPENSSL_DIR`. Use
   `scripts/dev.sh` / `dev.ps1` / `dev.cmd`, which detect it; plain `cargo` will
-  fail or, worse, silently take a different path.
+  fail or, worse, silently take a different path. On a fresh Windows machine,
+  `scripts\setup-windows.ps1 -Install` puts the GNU toolchain, MinGW and the
+  PATH entries in place first; run it without flags to see what is missing.
 
 ## The one rule
 
@@ -276,6 +278,7 @@ there or it does not happen.
 - Anything cross-cutting → `docs/11-repo-map-and-dev-cycle.md`.
 - Picking up work → `docs/01-milestones.md`; rough edges already known →
   `docs/08-qol-backlog.md`.
+- New to Rust or coming from another language → `docs/13-rust-primer.md`.
 - Build/packaging differences per OS → `docs/06-cross-platform.md` and the README.
 
 ## Pull requests

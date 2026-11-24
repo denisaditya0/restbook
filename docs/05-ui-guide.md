@@ -50,8 +50,9 @@ build deliberately keeps the console: that is where `cargo run` prints the
 otherwise leave nothing behind after a crash.
 
 `cargo run` on this machine links GPUI through MinGW/GNU: the first build is
-slow, and `dlltool.exe` must be on `PATH` (see the README). There is no devcli
-for the UI; if a change is not visible, it is not verified.
+slow, and `dlltool.exe` must be on `PATH` — `scripts\setup-windows.ps1` puts the
+MinGW tree there, and the README has the manual steps. There is no devcli for
+the UI; if a change is not visible, it is not verified.
 
 ### The fast loop
 
