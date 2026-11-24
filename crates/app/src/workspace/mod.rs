@@ -405,6 +405,11 @@ impl Workspace {
 
         workspace.listen(window, cx);
         workspace.install_layout(window, cx);
+        // After the layout, so the saved tabs land over a known arrangement; a
+        // dropped tab changes nothing here, it just does not open.
+        if let Some(saved) = persistence::load_tabs(&workspace.layout_path) {
+            workspace.restore_tabs(saved, cx);
+        }
         // The saved layout is read for names only, so the strip is told what
         // is open here rather than by whichever install path ran.
         workspace.push_tabs(cx);
@@ -710,7 +715,11 @@ impl Workspace {
                 .await;
             this.update(cx, |workspace, cx| {
                 workspace.save_task = None;
-                persistence::save(&workspace.layout_path, &workspace.dock.read(cx).dump(cx));
+                persistence::save(
+                    &workspace.layout_path,
+                    &workspace.dock.read(cx).dump(cx),
+                    &workspace.tabs_snapshot(),
+                );
             })
             .ok();
         }));
@@ -969,7 +978,11 @@ impl Workspace {
         let draft_dirty = self.draft_task.take().is_some();
 
         if layout_dirty {
-            persistence::save(&self.layout_path, &self.dock.read(cx).dump(cx));
+            persistence::save(
+                &self.layout_path,
+                &self.dock.read(cx).dump(cx),
+                &self.tabs_snapshot(),
+            );
         }
         self.flush_draft(draft_dirty, cx);
 

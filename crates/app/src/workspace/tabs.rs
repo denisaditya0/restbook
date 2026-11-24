@@ -19,7 +19,7 @@ use crate::panels::collections::Destination;
 
 use super::chrome;
 use super::delete::PendingDelete;
-use super::persistence::CLOSED_TAB_LIMIT;
+use super::persistence::{SavedTab, SavedTabs, CLOSED_TAB_LIMIT};
 use super::{close_needs_confirmation, wrap_index, RequestStamp, Workspace};
 
 /// A tab's stable identity for the life of the open tab.
@@ -292,7 +292,84 @@ fn new_tab_id() -> TabId {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
+/// Rebuild the open tabs from what the layout file recorded.
+///
+/// A bound tab is resolved from the collection tree, so a node that was deleted
+/// since the last run drops the tab instead of opening a request that is no
+/// longer there. A draft is resolved the same way from its store row. The
+/// survivors keep their saved order, the dropped ones are counted for the
+/// caller's single message, and the active index lands on the same request even
+/// when an entry before it was dropped.
+///
+/// Returns the tabs, the number dropped, and the active index among survivors.
+pub(super) fn resolve_saved_tabs(
+    saved: &SavedTabs,
+    find_node: impl Fn(&str) -> Option<RequestDef>,
+    drafts: &[Draft],
+) -> (Vec<Tab>, usize, usize) {
+    let mut tabs = Vec::with_capacity(saved.entries.len());
+    let mut dropped = 0;
+    let mut active = None;
+    for (index, entry) in saved.entries.iter().enumerate() {
+        let tab = match entry {
+            SavedTab::Bound { node } => match find_node(node) {
+                Some(request) => {
+                    let mut tab = Tab::blank();
+                    tab.saved = Some(RequestStamp::of(&request));
+                    tab.request = request;
+                    tab.node = Some(node.clone());
+                    tab
+                }
+                None => {
+                    dropped += 1;
+                    continue;
+                }
+            },
+            SavedTab::Draft { id } => match drafts.iter().find(|draft| draft.id == *id) {
+                Some(draft) => Tab::from_draft(draft.clone()),
+                None => {
+                    dropped += 1;
+                    continue;
+                }
+            },
+        };
+        if index == saved.active {
+            active = Some(tabs.len());
+        }
+        tabs.push(tab);
+    }
+    let active = active.unwrap_or_else(|| saved.active.min(tabs.len().saturating_sub(1)));
+    (tabs, dropped, active)
+}
+
 impl Workspace {
+    /// Replace the single blank page with the tabs the last run had open.
+    ///
+    /// When nothing survives, the fresh tab the window opened with is left
+    /// alone: that is exactly a first run. Dropped tabs are reported once rather
+    /// than per tab, and only when something did open — a message over an empty
+    /// window would explain a loss the user cannot see.
+    pub(crate) fn restore_tabs(&mut self, saved: SavedTabs, cx: &mut Context<Self>) {
+        let drafts = self.store.drafts().unwrap_or_default();
+        let (tabs, dropped, active) = resolve_saved_tabs(
+            &saved,
+            |node| self.panes.collections.read(cx).saved_request(node),
+            &drafts,
+        );
+        if tabs.is_empty() {
+            return;
+        }
+        self.tabs = TabState::new(tabs);
+        self.tabs.set_active(active);
+        self.adopt_active(cx);
+        if dropped > 0 {
+            self.flash(
+                chrome::FlashKind::Error,
+                format!("Dropped {dropped} tab(s) whose request was deleted."),
+                cx,
+            );
+        }
+    }
     pub(crate) fn select_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         if index == self.tabs.active() || index >= self.tabs.len() {
             return;
@@ -314,6 +391,7 @@ impl Workspace {
                 cx.notify();
             });
         }
+        self.persist_tabs(cx);
     }
 
     /// Select a tab by its stable id, the way the strip reports a click.
@@ -482,6 +560,7 @@ impl Workspace {
         if stale.is_some() {
             self.refresh_drafts(cx);
         }
+        self.persist_tabs(cx);
         true
     }
 
@@ -581,6 +660,7 @@ impl Workspace {
         if stale.is_some() {
             self.refresh_drafts(cx);
         }
+        self.persist_tabs(cx);
     }
 
     pub(crate) fn new_tab(&mut self, cx: &mut Context<Self>) {
@@ -593,6 +673,7 @@ impl Workspace {
         self.tabs.set_active(index);
         self.adopt_active(cx);
         log::debug!(target: "restbook_app::ui", "new tab: {} open", self.tabs.len());
+        self.persist_tabs(cx);
     }
 
     /// Open a stored draft as a new tab. Used when the sidebar's Unsaved row is
@@ -611,6 +692,7 @@ impl Workspace {
             crate::logging::redact_url(&self.tabs[index].request.url),
             id,
         );
+        self.persist_tabs(cx);
     }
 
     /// The tab on screen, by its stable id rather than its position.
@@ -723,6 +805,7 @@ impl Workspace {
         self.tabs.set_active(index + 1);
         self.adopt_active(cx);
         log::debug!(target: "restbook_app::ui", "duplicated tab {id}");
+        self.persist_tabs(cx);
     }
 
     /// Move a tab one place left (`delta = -1`) or right (`delta = 1`), taking
@@ -744,6 +827,7 @@ impl Workspace {
         }
         self.push_tabs(cx);
         log::debug!(target: "restbook_app::ui", "moved tab {id} to {target}");
+        self.persist_tabs(cx);
     }
 
     /// Reopen the most recently closed tab. The stack is process-local and
@@ -764,6 +848,7 @@ impl Workspace {
         self.tabs.set_active(index);
         self.adopt_active(cx);
         log::debug!(target: "restbook_app::ui", "reopened a closed tab");
+        self.persist_tabs(cx);
     }
 
     /// Whether closing the tab at `index` would lose work: it has a saved
@@ -855,6 +940,7 @@ impl Workspace {
             self.tabs.len(),
             self.tabs.active(),
         );
+        self.persist_tabs(cx);
     }
 
     /// Store the live editor and document in the tab being left.
@@ -943,8 +1029,130 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::{Tab, TabState};
-    use restbook_core::{Method, RequestDef};
+    use super::{resolve_saved_tabs, RequestStamp, SavedTab, SavedTabs, Tab, TabState};
+    use restbook_core::{Draft, Method, RequestDef};
+
+    fn draft(id: i64, url: &str) -> Draft {
+        Draft {
+            id,
+            request: RequestDef::new(Method::Get, url),
+            updated_at: std::time::SystemTime::now().into(),
+        }
+    }
+
+    fn bound(node: &str) -> SavedTab {
+        SavedTab::Bound {
+            node: node.to_owned(),
+        }
+    }
+
+    /// A bound tab comes back with the node's current request, and with that
+    /// request as its saved baseline so the first frame shows no unsaved dot.
+    #[test]
+    fn a_bound_tab_is_restored_from_its_node() {
+        let saved = SavedTabs {
+            entries: vec![bound("node-1")],
+            active: 0,
+        };
+        let request = RequestDef::new(Method::Post, "https://api.test/items");
+
+        let (tabs, dropped, _) = resolve_saved_tabs(
+            &saved,
+            |node| (node == "node-1").then(|| request.clone()),
+            &[],
+        );
+
+        assert_eq!(dropped, 0);
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(tabs[0].node.as_deref(), Some("node-1"));
+        assert_eq!(tabs[0].request.url, "https://api.test/items");
+        assert_eq!(tabs[0].saved, Some(RequestStamp::of(&request)));
+        assert!(tabs[0].response.is_none() && tabs[0].error.is_none());
+    }
+
+    /// A node deleted since the last run drops its tab rather than opening a
+    /// request that no longer exists; the count is what the message reports.
+    #[test]
+    fn a_bound_tab_whose_node_is_gone_is_dropped() {
+        let saved = SavedTabs {
+            entries: vec![bound("node-1")],
+            active: 0,
+        };
+
+        let (tabs, dropped, _) = resolve_saved_tabs(&saved, |_| None, &[]);
+
+        assert!(tabs.is_empty());
+        assert_eq!(dropped, 1);
+    }
+
+    /// An unsaved tab comes back from its store row, keeping that row's id so
+    /// the next draft write updates it instead of inserting a second one.
+    #[test]
+    fn a_draft_tab_is_restored_from_its_row() {
+        let saved = SavedTabs {
+            entries: vec![SavedTab::Draft { id: 7 }],
+            active: 0,
+        };
+        let drafts = vec![draft(7, "https://api.test/draft")];
+
+        let (tabs, dropped, _) = resolve_saved_tabs(&saved, |_| None, &drafts);
+
+        assert_eq!(dropped, 0);
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(tabs[0].draft, Some(7));
+        assert_eq!(tabs[0].request.url, "https://api.test/draft");
+    }
+
+    /// The row can be gone (deleted from the sidebar) while the tab is still in
+    /// the layout file, so the draft tab is dropped like a missing node.
+    #[test]
+    fn a_draft_tab_whose_row_is_gone_is_dropped() {
+        let saved = SavedTabs {
+            entries: vec![SavedTab::Draft { id: 8 }],
+            active: 0,
+        };
+
+        let (tabs, dropped, _) =
+            resolve_saved_tabs(&saved, |_| None, &[draft(7, "https://api.test")]);
+
+        assert!(tabs.is_empty());
+        assert_eq!(dropped, 1);
+    }
+
+    /// Survivors keep the saved order even when a tab in the middle is dropped,
+    /// and the active index follows the same request rather than the old slot.
+    #[test]
+    fn restore_keeps_order_and_the_same_active_tab() {
+        let saved = SavedTabs {
+            entries: vec![
+                bound("a"),
+                SavedTab::Draft { id: 2 },
+                bound("gone"),
+                bound("b"),
+            ],
+            active: 3,
+        };
+        let drafts = vec![draft(2, "https://api.test/draft")];
+
+        let (tabs, dropped, active) = resolve_saved_tabs(
+            &saved,
+            |node| {
+                (node != "gone")
+                    .then(|| RequestDef::new(Method::Get, format!("https://api.test/{node}")))
+            },
+            &drafts,
+        );
+
+        assert_eq!(dropped, 1);
+        assert_eq!(tabs.len(), 3);
+        assert_eq!(tabs[0].node.as_deref(), Some("a"));
+        assert_eq!(tabs[1].draft, Some(2));
+        assert_eq!(tabs[2].node.as_deref(), Some("b"));
+        assert_eq!(
+            active, 2,
+            "the active tab is the same request, not the same slot"
+        );
+    }
 
     /// A duplicate shares the content but never the identity or the persistence
     /// binding: Save on the copy must create a new node, and the draft writer

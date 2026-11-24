@@ -483,6 +483,28 @@ fn find_saved_in_items_mut<'a>(
     None
 }
 
+/// The saved request with `id`, for a reader that only needs its content.
+pub(super) fn find_saved<'a>(collections: &'a [Collection], id: &str) -> Option<&'a SavedRequest> {
+    collections
+        .iter()
+        .find_map(|collection| find_saved_in_items(&collection.items, id))
+}
+
+fn find_saved_in_items<'a>(items: &'a [CollectionItem], id: &str) -> Option<&'a SavedRequest> {
+    for item in items {
+        match item {
+            CollectionItem::Request(saved) if saved.id == id => return Some(saved),
+            CollectionItem::Request(_) => {}
+            CollectionItem::Folder(folder) => {
+                if let Some(found) = find_saved_in_items(&folder.items, id) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn item_id(item: &CollectionItem) -> &str {
     match item {
         CollectionItem::Folder(folder) => &folder.id,

@@ -41,6 +41,13 @@ revealed on demand, which is the deliberate simplification noted in
 `05-ui-guide.md`: the sidebar is what you work *from*, not a log of what you
 sent. A saved `layout.json` restores the user's own arrangement by name.
 
+The same file records the open tabs and which one was active
+(`Workspace::restore_tabs`): a restart reopens them in the same order, on the
+same tab. A pristine blank page is not recorded, so a window left on an
+untouched tab opens on one. A tab whose collection node was deleted while the
+app was closed — or a draft whose row is gone — is dropped rather than reopened
+against nothing, and one message names how many were dropped.
+
 The center split is fixed to **Request over Response**: there is no command to
 make it horizontal or to move a pane into a dock. Panes can be focused and
 closed from the palette (`Focus <pane>` / `Close <pane>`) and each pane's own
