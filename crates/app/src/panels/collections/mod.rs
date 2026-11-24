@@ -28,6 +28,8 @@ use self::tree::{
     resolve_selection, sort_refs, sort_tree,
 };
 
+pub(crate) use self::tree::{Destination, DestinationRow};
+
 use crate::document::Document;
 use crate::icons::{self, IconName};
 use crate::notice::Notice;
@@ -311,7 +313,7 @@ impl gpui_kit::component::dock::Panel for CollectionsPanel {
                 .disabled(!has_collection)
                 .on_click(move |_, window, cx| {
                     new_request.update(cx, |this, cx| {
-                        this.save_request(None, None, Some(window), cx);
+                        this.save_request(None, None, None, Some(window), cx);
                     });
                 }),
         );
@@ -535,12 +537,16 @@ impl CollectionsPanel {
             .folder()
             .map(str::to_owned)
             .unwrap_or_else(|| collection_id.clone());
+        let destination = Destination {
+            collection: collection_id.clone(),
+            folders: self.selection.folders.clone(),
+        };
         let folder = CollectionItem::Folder(Folder {
             id: new_id(),
             name: "New folder".to_owned(),
             items: Vec::new(),
         });
-        if insert_into(&mut self.collections, &self.selection, folder) {
+        if insert_into(&mut self.collections, &destination, folder) {
             self.revision += 1;
             self.collapsed.remove(&parent);
             if self.persist(&collection_id, Some(window), cx) {
@@ -549,15 +555,18 @@ impl CollectionsPanel {
         }
     }
 
-    /// Save the open request into a collection. Called by the pane's + menu, the
+    /// Save the open request into a destination. Called by the pane's + menu, the
     /// workspace's `Ctrl+S`, and the request pane's Save button. `node`, when
     /// given, updates that node in place rather than appending; `name` falls back
-    /// to `"{method} {url}"`. Returns the node id to bind the tab; no collection
-    /// selected is a normal state and yields `None`, not an error.
+    /// to `"{method} {url}"`; `target` is where the save lands, and `None` means
+    /// the sidebar's selection, which is what the pane's own + menu means.
+    /// Returns the node id to bind the tab; a target that no longer exists is a
+    /// normal state and yields `None`, not an error.
     fn save_request(
         &mut self,
         node: Option<&str>,
         name: Option<&str>,
+        target: Option<&Destination>,
         window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) -> Option<String> {
@@ -577,11 +586,9 @@ impl CollectionsPanel {
             }
         }
 
-        let Some(collection_id) = self.selection.collection.clone() else {
-            if let Some(window) = window {
-                window.push_notification(Notification::error("Select a collection first."), cx);
-            }
-            return None;
+        let destination = match target {
+            Some(target) => target.clone(),
+            None => tree::default_destination(&self.collections, &self.selection)?,
         };
         let request = self.document.read(cx).request.clone();
         let name = name
@@ -595,19 +602,19 @@ impl CollectionsPanel {
             name,
             request,
         };
-        let parent = self
-            .selection
-            .folder()
-            .map(str::to_owned)
-            .unwrap_or_else(|| collection_id.clone());
+        let parent = destination
+            .folders
+            .last()
+            .cloned()
+            .unwrap_or_else(|| destination.collection.clone());
         if insert_into(
             &mut self.collections,
-            &self.selection,
+            &destination,
             CollectionItem::Request(saved),
         ) {
             self.revision += 1;
             self.collapsed.remove(&parent);
-            if self.persist(&collection_id, window, cx) {
+            if self.persist(&destination.collection, window, cx) {
                 self.notice(Notice::Done("Request saved.".into()), cx);
             }
             return Some(id);
@@ -615,16 +622,17 @@ impl CollectionsPanel {
         None
     }
 
-    /// The workspace's entry point: save the open request into the selection.
-    /// Used by the `SaveRequest` action, which arrives with no window. Returns
-    /// the node the request now lives at, so the tab can bind to it.
+    /// The workspace's entry point: save the open request, into `target` when the
+    /// dialog chose one. Used by the `SaveRequest` action, which arrives with no
+    /// window. Returns the node the request now lives at, so the tab binds to it.
     pub(crate) fn save_current(
         &mut self,
         node: Option<&str>,
         name: Option<&str>,
+        target: Option<&Destination>,
         cx: &mut Context<Self>,
     ) -> Option<String> {
-        self.save_request(node, name, None, cx)
+        self.save_request(node, name, target, None, cx)
     }
 
     /// The selected collection as `(id, name)`, for a command that acts on one
@@ -635,30 +643,16 @@ impl CollectionsPanel {
         Some((collection.id.as_str(), collection.name.as_str()))
     }
 
-    /// Where a save would land, for the first-save dialog: the selected
-    /// collection and folder path, or `None` when no collection is selected.
-    ///
-    /// Read-only: the dialog reports the destination rather than offering a
-    /// picker, because the sidebar selection is already how a destination is
-    /// chosen everywhere else in this pane.
-    pub(crate) fn save_destination(&self) -> Option<String> {
-        let collection_id = self.selection.collection.as_deref()?;
-        let collection = self
-            .collections
-            .iter()
-            .find(|each| each.id == collection_id)?;
-        let mut label = collection.name.clone();
-        let mut items: &[CollectionItem] = &collection.items;
-        for folder_id in &self.selection.folders {
-            let folder = items.iter().find_map(|item| match item {
-                CollectionItem::Folder(folder) if &folder.id == folder_id => Some(folder),
-                _ => None,
-            })?;
-            label.push_str(" › ");
-            label.push_str(&folder.name);
-            items = &folder.items;
-        }
-        Some(label)
+    /// Every place a save can land, for the first-save dialog's picker.
+    pub(crate) fn destinations(&self) -> Vec<DestinationRow> {
+        tree::destination_rows(&self.collections)
+    }
+
+    /// Where the save dialog opens on: the selection, or the first collection so
+    /// a save does not require one. `None` only when there is nothing to save
+    /// into at all.
+    pub(crate) fn default_destination(&self) -> Option<Destination> {
+        tree::default_destination(&self.collections, &self.selection)
     }
 
     pub(crate) fn delete_collection(
@@ -882,7 +876,7 @@ impl CollectionsPanel {
                             let panel = panel.clone();
                             move |_, window, cx| {
                                 panel.update(cx, |this, cx| {
-                                    this.save_request(None, None, Some(window), cx);
+                                    this.save_request(None, None, None, Some(window), cx);
                                 });
                             }
                         }),
@@ -1643,7 +1637,14 @@ fn new_id() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{selection_target, RowTarget, Selection};
+    use std::sync::Arc;
+
+    use gpui_kit::{AppContext as _, TestAppContext};
+    use restbook_core::{Collection, CollectionItem, Folder, Store};
+    use restbook_store::MemoryStore;
+
+    use super::{selection_target, CollectionsPanel, RowTarget, Selection};
+    use crate::document::Document;
 
     fn into_folder(id: &str) -> Selection {
         Selection {
@@ -1674,6 +1675,56 @@ mod tests {
                 ..into_folder("fold-1")
             }),
             Some(RowTarget::Item("req-1".to_owned())),
+        );
+    }
+
+    /// The 0.2.0 behaviour: a draft saves where the dialog says, with nothing
+    /// highlighted in the sidebar. Before this, an unselected tree refused the
+    /// save outright and the destination was whatever row was clicked last.
+    #[gpui_kit::test]
+    fn a_request_saves_into_a_chosen_destination_without_a_selection(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        crate::test_support::init_ui(cx);
+
+        let store = Arc::new(MemoryStore::new());
+        store
+            .save_collection(&Collection {
+                id: "col-a".to_owned(),
+                name: "A".to_owned(),
+                items: vec![CollectionItem::Folder(Folder {
+                    id: "fold-a".to_owned(),
+                    name: "Inner".to_owned(),
+                    items: Vec::new(),
+                })],
+            })
+            .unwrap();
+
+        let for_panel: Arc<dyn Store> = store.clone();
+        let document = cx.update(|cx| cx.new(|_| Document::new()));
+        let (panel, cx) =
+            cx.add_window_view(|window, cx| CollectionsPanel::new(for_panel, document, window, cx));
+
+        // Nothing is selected in the pane: `Selection::default()` is what
+        // `CollectionsPanel::new` starts with.
+        let target = cx.update(|_, cx| panel.read(cx).destinations()[1].target.clone());
+        let landed = panel.update(cx, |panel, cx| {
+            panel.save_current(None, Some("Saved"), Some(&target), cx)
+        });
+        assert!(landed.is_some(), "the save did not land");
+
+        let collections = store.collections().unwrap();
+        let CollectionItem::Folder(folder) = &collections[0].items[0] else {
+            panic!("the folder is gone");
+        };
+        assert_eq!(folder.items.len(), 1);
+        assert!(matches!(
+            &folder.items[0],
+            CollectionItem::Request(saved) if saved.name == "Saved"
+        ));
+        assert_eq!(
+            collections[0].items.len(),
+            1,
+            "the request went to the root"
         );
     }
 }

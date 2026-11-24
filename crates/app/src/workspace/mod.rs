@@ -11,6 +11,7 @@ mod dock;
 mod export;
 mod import;
 mod persistence;
+mod save_dialog;
 mod send;
 pub(crate) mod settings;
 mod settings_view;
@@ -47,7 +48,7 @@ use crate::document::Document;
 use crate::icons::IconName;
 use crate::logging;
 use crate::notice::Notice;
-use crate::panels::collections::Event as CollectionsEvent;
+use crate::panels::collections::{Destination, Event as CollectionsEvent};
 use crate::panels::command_palette::{self, Command};
 use crate::panels::environment::Event as EnvironmentEvent;
 use crate::panels::history::Event as HistoryEvent;
@@ -128,6 +129,10 @@ pub(crate) struct Workspace {
     /// dialog's content closure, because that closure is rebuilt on every notify
     /// and an input created inside it would lose the caret mid-typing.
     save_name: Entity<InputState>,
+    /// The save dialog's destination choice. It lives beside `save_name` for the
+    /// same reason: the dialog is rebuilt on every notify, so a pick made in one
+    /// build has to survive into the next.
+    save_target: Option<Destination>,
     /// A draft asked to be saved, but the dialog needs a window and the event the
     /// request arrived on had none. The next render opens the dialog.
     pending_save: bool,
@@ -353,6 +358,7 @@ impl Workspace {
             pending_notice: None,
             focus_handle: cx.focus_handle(),
             save_name,
+            save_target: None,
             pending_save: false,
             pending_import: false,
             export_state: ExportState::default(),
