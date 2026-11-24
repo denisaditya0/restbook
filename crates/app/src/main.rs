@@ -102,7 +102,7 @@ fn main() {
 
             // One table, in `actions`, so a typo fails a test instead of the
             // launch.
-            cx.bind_keys(actions::bindings());
+            cx.bind_keys(actions::bindings(cx));
 
             // The app draws its own titlebar (see `workspace::chrome`), so the
             // platform one is hidden and the sidebar runs to the top edge.

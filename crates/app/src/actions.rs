@@ -65,43 +65,53 @@ actions!(
     ]
 );
 
+/// Build one binding through the App, so `secondary-` resolves against the
+/// host OS and the context predicate parses eagerly.
+fn bound(cx: &App, keystrokes: &str, action: impl Action, context: Option<&str>) -> KeyBinding {
+    let context = context.map(|source| {
+        KeyBindingContextPredicate::parse(source)
+            .unwrap_or_else(|error| panic!("invalid binding context {source}: {error}"))
+            .into()
+    });
+    KeyBinding::load(keystrokes, Box::new(action), context, false, None, cx)
+        .unwrap_or_else(|error| panic!("invalid binding {keystrokes}: {error}"))
+}
+
 /// The whole keybinding table: which keystroke runs which action, in which key
-/// context; `main` installs it with one `cx.bind_keys` call. A binding is
-/// parsed when constructed, so a bad keystroke or context panics there, and the
-/// test below catches typos at `cargo test` time. `secondary` is cmd/ctrl;
-/// contexts are predicates spelled `==` (`Input && mode == editor`), not the
-/// element's own context string.
-pub(crate) fn bindings() -> Vec<KeyBinding> {
+/// context; `main` installs it with one `cx.bind_keys` call. Each row is loaded
+/// with the App, so `secondary` is cmd/ctrl for this host; a bad keystroke or
+/// context panics here, and the tests below catch typos at `cargo test` time.
+pub(crate) fn bindings(cx: &App) -> Vec<KeyBinding> {
     vec![
-        KeyBinding::new("secondary-enter", SendRequest, None),
-        KeyBinding::new("secondary-s", SaveRequest, None),
-        KeyBinding::new("secondary-t", NewTab, None),
-        KeyBinding::new("secondary-w", CloseTab, None),
+        bound(cx, "secondary-enter", SendRequest, None),
+        bound(cx, "secondary-s", SaveRequest, None),
+        bound(cx, "secondary-t", NewTab, None),
+        bound(cx, "secondary-w", CloseTab, None),
         // The tab rotation pair. `ctrl-tab` is the browser convention, and the
         // page-key aliases cover layouts and habits that reach for them.
-        KeyBinding::new("ctrl-tab", NextTab, None),
-        KeyBinding::new("ctrl-shift-tab", PreviousTab, None),
-        KeyBinding::new("ctrl-pagedown", NextTab, None),
-        KeyBinding::new("ctrl-pageup", PreviousTab, None),
-        KeyBinding::new("secondary-shift-t", ReopenClosedTab, None),
-        KeyBinding::new("secondary-l", FocusUrl, None),
-        KeyBinding::new("secondary-f", FindInResponse, None),
-        KeyBinding::new("secondary-shift-p", ToggleCommandPalette, None),
+        bound(cx, "ctrl-tab", NextTab, None),
+        bound(cx, "ctrl-shift-tab", PreviousTab, None),
+        bound(cx, "ctrl-pagedown", NextTab, None),
+        bound(cx, "ctrl-pageup", PreviousTab, None),
+        bound(cx, "secondary-shift-t", ReopenClosedTab, None),
+        bound(cx, "secondary-l", FocusUrl, None),
+        bound(cx, "secondary-f", FindInResponse, None),
+        bound(cx, "secondary-shift-p", ToggleCommandPalette, None),
         // `?` is a printable key, so it only opens the sheet when focus is not
         // inside an input; otherwise typing a question mark in a body would be
         // stolen. The palette row is the route that always works.
-        KeyBinding::new("?", ShowShortcuts, Some("!Input")),
-        KeyBinding::new("secondary-shift-v", PasteCurl, None),
-        KeyBinding::new("secondary-shift-i", ImportFile, None),
-        KeyBinding::new("secondary-shift-e", ExportFile, None),
-        KeyBinding::new("secondary-shift-c", CopyCurl, None),
+        bound(cx, "?", ShowShortcuts, Some("!Input")),
+        bound(cx, "secondary-shift-v", PasteCurl, None),
+        bound(cx, "secondary-shift-i", ImportFile, None),
+        bound(cx, "secondary-shift-e", ExportFile, None),
+        bound(cx, "secondary-shift-c", CopyCurl, None),
         // The conventional preferences shortcut. Settings is app-level, so the
         // key is window-wide rather than scoped to a pane.
-        KeyBinding::new("secondary-,", OpenSettings, None),
-        KeyBinding::new("secondary-=", ZoomIn, None),
-        KeyBinding::new("secondary-+", ZoomIn, None),
-        KeyBinding::new("secondary--", ZoomOut, None),
-        KeyBinding::new("secondary-0", ResetZoom, None),
+        bound(cx, "secondary-,", OpenSettings, None),
+        bound(cx, "secondary-=", ZoomIn, None),
+        bound(cx, "secondary-+", ZoomIn, None),
+        bound(cx, "secondary--", ZoomOut, None),
+        bound(cx, "secondary-0", ResetZoom, None),
         // The two dock toggles. The pair mirrors the `[` and `]` shapes of the
         // bars they move — left bracket for the left dock, slash for the right
         // — so neither needs a modifier beyond `secondary`. The keys are spelled
@@ -111,18 +121,19 @@ pub(crate) fn bindings() -> Vec<KeyBinding> {
         // key and clears `shift`, so binding `secondary-/` matches the Ctrl+Shift
         // press; binding `secondary-shift-/` would look for a stroke whose key is
         // literally `/` with shift held, which no layout emits.
-        KeyBinding::new("secondary-\\", ToggleSidebar, None),
-        KeyBinding::new("secondary-/", ToggleTools, None),
+        bound(cx, "secondary-\\", ToggleSidebar, None),
+        bound(cx, "secondary-/", ToggleTools, None),
         // Emacs-style next/previous inside the command palette. The palette
         // already binds Up/Down; these aliases let a keyboard-only user stay
         // on the home row. Scoped to the palette's own key context, so Ctrl+N
         // elsewhere keeps meaning nothing.
-        KeyBinding::new("ctrl-n", SelectDown, Some("Command")),
-        KeyBinding::new("ctrl-p", SelectUp, Some("Command")),
+        bound(cx, "ctrl-n", SelectDown, Some("Command")),
+        bound(cx, "ctrl-p", SelectUp, Some("Command")),
         // The raw body's completion popover. The kit ships the action but binds
         // no key for it, and the editor is the only element that carries the
         // `mode` key, so this stays out of every other input's way.
-        KeyBinding::new(
+        bound(
+            cx,
             "ctrl-space",
             ShowCompletions,
             Some("Input && mode == editor"),
@@ -146,11 +157,25 @@ mod tests {
     // attribute with GPUI's own.
     use super::{bindings, CopyCurl, PasteCurl};
 
-    /// Building the table is the assertion: `KeyBinding::new` parses both the
+    /// Build the table through an App so secondary- resolves for this host.
+    fn app_bindings() -> Vec<super::KeyBinding> {
+        let cx = gpui_kit::TestAppContext::single();
+        cx.update(gpui_kit::init);
+        cx.update(|cx| bindings(cx))
+    }
+
+    /// The semantic secondary modifier depends on the platform, which the
+    /// modifier value now asks an App for.
+    fn secondary(stroke: &gpui_kit::Keystroke) -> bool {
+        let cx = gpui_kit::TestAppContext::single();
+        cx.update(|cx| stroke.modifiers.secondary(cx))
+    }
+
+    /// Building the table is the assertion: each binding parses both the
     /// keystroke and the context predicate and panics on either.
     #[test]
     fn every_binding_parses() {
-        let bindings = bindings();
+        let bindings = app_bindings();
         assert!(!bindings.is_empty());
         assert!(bindings.iter().all(|b| !b.keystrokes().is_empty()));
     }
@@ -165,7 +190,7 @@ mod tests {
 
         use super::{ResetZoom, ToggleSidebar, ToggleTools, ZoomIn, ZoomOut};
 
-        let bindings = bindings();
+        let bindings = app_bindings();
         for name in [
             ZoomIn::name_for_type(),
             ZoomOut::name_for_type(),
@@ -190,7 +215,7 @@ mod tests {
 
         use super::{ExportFile, ImportFile};
 
-        let bindings = bindings();
+        let bindings = app_bindings();
         for name in [
             PasteCurl::name_for_type(),
             CopyCurl::name_for_type(),
@@ -213,7 +238,7 @@ mod tests {
 
         use super::OpenSettings;
 
-        let bindings = bindings();
+        let bindings = app_bindings();
         let binding = bindings
             .iter()
             .find(|b| b.action().name() == OpenSettings::name_for_type())
@@ -225,10 +250,7 @@ mod tests {
             .as_keystroke();
 
         assert_eq!(stroke.key, ",", "settings opens on cmd/ctrl + comma");
-        assert!(
-            stroke.modifiers.secondary(),
-            "settings keeps its cmd/ctrl modifier"
-        );
+        assert!(secondary(stroke), "settings keeps its cmd/ctrl modifier");
     }
 
     /// The shortcuts sheet opens on `?`, but `?` is printable, so the binding
@@ -241,7 +263,7 @@ mod tests {
 
         use super::ShowShortcuts;
 
-        let bindings = bindings();
+        let bindings = app_bindings();
         let binding = bindings
             .iter()
             .find(|b| b.action().name() == ShowShortcuts::name_for_type())
@@ -269,7 +291,7 @@ mod tests {
 
         use super::FindInResponse;
 
-        let bindings = bindings();
+        let bindings = app_bindings();
         let binding = bindings
             .iter()
             .find(|b| b.action().name() == FindInResponse::name_for_type())
@@ -281,10 +303,7 @@ mod tests {
             .as_keystroke();
 
         assert_eq!(stroke.key, "f");
-        assert!(
-            stroke.modifiers.secondary(),
-            "find keeps its cmd/ctrl modifier"
-        );
+        assert!(secondary(stroke), "find keeps its cmd/ctrl modifier");
     }
 
     /// Tab rotation has to stay reachable from any pane, and both spellings —
@@ -297,7 +316,7 @@ mod tests {
 
         use super::{NextTab, PreviousTab};
 
-        let bindings = bindings();
+        let bindings = app_bindings();
         let strokes = |action: &str| -> Vec<String> {
             bindings
                 .iter()
@@ -322,7 +341,7 @@ mod tests {
 
         use super::{ToggleSidebar, ToggleTools};
 
-        let bindings = bindings();
+        let bindings = app_bindings();
         let stroke = |name: &str| -> gpui_kit::Keystroke {
             let binding = bindings
                 .iter()
@@ -347,7 +366,7 @@ mod tests {
         // parser rather than being dropped.
         for stroke in [&sidebar, &tools] {
             assert!(
-                stroke.modifiers.secondary(),
+                secondary(stroke),
                 "the toggle must keep its cmd/ctrl modifier"
             );
             // Not `shift`, for the reason in the test's own doc comment: a
