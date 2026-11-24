@@ -24,6 +24,25 @@ Contributors and pull requests are added to the release page by `release.yml`;
 do not write them here.
 -->
 
+## 0.2.0
+
+- **Choose where a request is saved.** Saving opens a destination picker that
+lists every collection and folder, plus *New collection…*, so a save no longer
+needs something selected in the sidebar first. Creating a collection and saving
+into it now happens in one step.
+- **Move a saved request.** A saved request's row offers *Move to…*, which
+re-homes it in another collection or folder with the same picker.
+- **Collection commands moved to the Collections pane.** Save, Import, and Export
+left the window menu for the Collections pane's header and row menus, leaving
+the window menu with window-level entries only.
+- **Snapshot a request and response as an image.** A palette command, the window
+menu, and the Response toolbar draw the current send as a PNG — the request as a
+cURL command and the response body as it reads — to copy or save. Secrets are
+redacted unless you tick *Include secrets*. Long responses stay on one wide
+column, and a *Compact* option clips them into a small image.
+- **A quick tab switch keeps its own body.** Switching between tabs faster than
+the editor redraws no longer copies one tab's raw request body into another.
+
 ## 0.1.10
 
 - **Every shortcut in one place.** Press `?` outside a text field, or choose
