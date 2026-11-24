@@ -153,6 +153,9 @@ This is the "intent as event" rule in action.
 | Collections: any mutation | `CollectionsEvent::Notice(_)` | report a notification (create/delete/rename/save/move) | Overlay (notification) | `Workspace::notice` |
 | Collections: delete a row | `CollectionsEvent::ConfirmDelete(target)` | open the delete alert dialog; delete on confirm | Overlay (alert dialog) | `Workspace::open_delete_dialog` |
 | Collections: Move to… | `CollectionsEvent::Move { node }` | open the destination picker; its confirm rewrites the target collection, then the source | Overlay (dialog) | `Workspace::open_move_dialog` |
+| Collections: Save request… | `CollectionsEvent::SaveRequest` | save the active request as a new entry through the save dialog | Overlay (dialog) | `Workspace::save_active_as` |
+| Collections: Import… | `CollectionsEvent::Import` | open the file picker from the next render, land the file, show the result | Overlay (dialog) + Left dock | `Workspace::import_file` |
+| Collections: Export… | `CollectionsEvent::Export` | open the export picker from the next render | Overlay (dialog) | `Workspace::open_export_dialog` |
 | Environment: delete | `EnvironmentEvent::ConfirmDelete(name)` | open the delete alert dialog; delete on confirm | Overlay (alert dialog) | `Workspace::open_delete_dialog` |
 
 ### Response panel → workspace
@@ -182,7 +185,8 @@ offered a copy of payload the current tab does not show.
 | Trigger | Effect | POV |
 |---|---|---|
 | Collection switcher → a collection | select it | Left dock |
-| `+` menu → New Request / New Folder / New Collection | create (New Request needs a selection) | Left dock |
+| `+` menu → Save request here / New Folder / New Collection | save the open request into the selection, or create a folder or collection there | Left dock |
+| `+` menu → Save request… / Import… / Export… | open the save dialog, the import picker, or the export picker | Left dock → Overlay |
 | Sort → Manual / Name A-Z / Name Z-A | re-sort the tree | Left dock |
 | Row tools: up / down / rename / move / delete | move within the siblings, rename (label only), pick a new home, or delete (opens the alert dialog) | Left dock → Overlay |
 
@@ -237,7 +241,7 @@ with `window.defer`.
 | Keyboard shortcuts | `?`, palette `Keyboard shortcuts`, titlebar menu | centered dialog, 448px; one row per bound command | `Workspace::open_shortcuts` |
 | Save request | Save on an unbound tab, or Save As | centered dialog, 448px; a name and a destination picker listing every collection and its folders, plus *New collection…*. The sidebar selection only pre-fills the picker, so a save needs no selection; with no collection at all the dialog opens ready to create one, and that confirm leaves both behind | `Workspace::open_save_dialog` |
 | Import result | an import that landed something | centered dialog, 448px; counts, saved names, duplicates, every skipped item with its reason, and any notes (an imported row that needs attention, such as inherited auth) | `Workspace::open_import_report` |
-| Export picker | `secondary-shift-e`, palette `Export…`, titlebar menu | centered dialog, 448px; scope, format, *Include secrets* | `Workspace::open_export_dialog` |
+| Export picker | `secondary-shift-e`, palette `Export…`, the Collections pane's `+` menu | centered dialog, 448px; scope, format, *Include secrets* | `Workspace::open_export_dialog` |
 | Delete confirmation | a row's trash button (Collections) or Delete (Environment) | centered **alert** dialog, 420px | `Workspace::open_delete_dialog` |
 | Move request | a saved request row's *Move to…* | centered dialog, 448px; the same destination picker the save dialog uses, with *Move* disabled while the choice is the request's current home | `Workspace::open_move_dialog` |
 | Update offer | the launch check finding a newer release that is not skipped | centered dialog, 448px; *Install now* / *Later* / *Skip this version* | `Workspace::open_update_offer_dialog` |

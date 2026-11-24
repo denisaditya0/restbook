@@ -393,22 +393,6 @@ missing binding.
 
 Refs: `actions::bindings()`.
 
-### 5.4 Collection verbs live in the window menu, and panes repeat it — **P2**
-
-Save, import and export are commands about collections, yet they sit in the
-titlebar window menu beside Settings and the palette, and the request pane adds
-its own ellipsis for another copy of Paste cURL. The result is one window menu,
-a per-dock ellipsis, and a second ellipsis inside the request pane, with the same
-verb reachable from each.
-
-**Fix:** move save, import and export onto the Collections pane's header and row
-menus, and remove the request pane's own ellipsis; the titlebar keeps only
-window-level commands. `0.2.0` owns the move; `0.2.4` (X5) derives what remains
-from one `Command` table.
-
-Refs: `workspace/mod.rs` (`render`, window menu), `panels/request.rs`
-(`dropdown_menu`, `request-menu`), `01-milestones.md` 0.2.0 and X5.
-
 ## 6. Developer experience
 
 ### 6.1 No interactive preview / storybook — **P2**

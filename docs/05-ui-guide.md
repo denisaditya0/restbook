@@ -869,6 +869,13 @@ failure between them leaves the request in two places rather than in none, and
 nothing reloads between the two writes — a reload would hand the second write
 the store's copy of the first, putting the request back where it started.
 
+The window menu is the other half of the placement rule. It keeps commands about
+the *window* — the palette, settings, the panes it shows, reset, diagnostics — and
+gives up anything that belongs to a pane: save, import, and export are verbs
+about collections, so they sit in the Collections pane's `+` menu. The request
+pane's own ellipsis went with them; every verb it held was already on the strip
+or in the palette.
+
 A rename that is not a creation does not deserve a modal: the collections pane
 puts a Rename button in the row tools that shows an inline input in the tree.
 Both paths end in the same place — `request.name` is a **label**, so renaming a
