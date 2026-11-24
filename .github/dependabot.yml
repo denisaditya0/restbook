@@ -1,0 +1,12 @@
+# Every `uses:` in the workflows names a commit SHA, so nothing updates itself.
+# This is the only thing that moves a pin, and it moves it through a pull
+# request that CI has to pass.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
