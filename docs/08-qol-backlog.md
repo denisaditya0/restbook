@@ -188,13 +188,13 @@ Refs: `crates/app/src/actions.rs`, `Workspace::select_tab`.
 
 ### 1.11 Truncated tab labels have no tooltip — **P2**
 
-A tab label is the URL without its scheme, capped at 220px and truncated. Unlike
-the titlebar breadcrumb, the tab carries no tooltip with the full address.
+A tab label is the URL without its scheme, capped at 220px and truncated. The
+tab carries no tooltip with the full address.
 
-**Fix:** `.tooltip(...)` on the tab cell with method + URL, as the breadcrumb
-already does.
+**Fix:** `.tooltip(...)` on the tab cell with method + URL, so a truncated label
+still names the request it stands for.
 
-Refs: `RequestPanel::render_tab_strip`, `chrome::titlebar` (`TitlePart::with_tooltip`).
+Refs: `RequestPanel::render_tab_strip`.
 
 ### 1.12 No overflow menu / tab list — **P3**
 
@@ -355,6 +355,20 @@ editor's layout anyway; until then it is an unassigned P3.
 
 Refs: `panels/editor/kv_table.rs` (`render`), `panels/editor/parts_table.rs`
 (`render`), `panels/request.rs` (`render_editor`, `editor-tab-body`), 3.7.
+
+### 3.11 The window does not remember its size or position — **P3**
+
+Every launch opens at the same 1280×820 at a fixed origin. The layout policy
+already fits the docks to whatever width the window has (`sync_dock_fit`), so a
+restored size only improves the first frame; it is not a prerequisite for the
+region minimums.
+
+**Fix:** persist the last `WindowBounds` (size and origin, clamped to a display
+from `cx.displays()`) beside `layout.json` and pass it as `window_bounds`, with
+the saved `MIN_WINDOW_WIDTH`/`MIN_WINDOW_HEIGHT` still enforced. A monitor that
+has gone away falls back to the default bounds.
+
+Refs: `main.rs` (`WindowOptions.window_bounds`), `workspace/persistence.rs`.
 
 ## 4. Dialogs and destructive actions
 

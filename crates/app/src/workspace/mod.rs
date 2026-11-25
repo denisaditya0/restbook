@@ -11,6 +11,7 @@ mod destination_picker;
 mod dock;
 mod export;
 mod import;
+mod layout_policy;
 mod move_dialog;
 mod persistence;
 mod save_dialog;
@@ -25,6 +26,7 @@ mod updates;
 pub(crate) use delete::PendingDelete;
 pub(crate) use export::ExportState;
 use import::PendingImport;
+pub(crate) use persistence::MIN_WINDOW_WIDTH;
 pub(crate) use tabs::{Tab, TabAction, TabEntry, TabId, TabState};
 
 use std::path::PathBuf;
@@ -56,13 +58,14 @@ use crate::panels::collections::Event as CollectionsEvent;
 use crate::panels::command_palette::{self, Command};
 use crate::panels::environment::Event as EnvironmentEvent;
 use crate::panels::history::Event as HistoryEvent;
-use crate::panels::request::{self as request_panel, Event as RequestEvent};
+use crate::panels::request::Event as RequestEvent;
 use crate::panels::response::Event as ResponseEvent;
 use crate::panels::{
     CollectionsPanel, EnvironmentPanel, HistoryPanel, RequestPanel, ResponsePanel,
 };
 use crate::theme::{self, Metrics, Palette};
 use crate::variables::Variables;
+use layout_policy::Docks;
 
 /// The dock's identity in the persisted layout. Bump the version when the
 /// meaning of the tree changes, not when a panel is added.
@@ -145,6 +148,14 @@ pub(crate) struct Workspace {
     /// [`CenterOrientation`]). Set from the saved layout on install and flipped by
     /// [`Workspace::toggle_center_orientation`].
     center_orientation: CenterOrientation,
+    /// The docks the user asked for, independent of what the current window
+    /// width can show. [`Workspace::sync_dock_fit`] collapses and restores
+    /// around this, and it — not the dock's transient open flag — is what
+    /// `layout.json` records.
+    dock_intent: Docks,
+    /// Set while `sync_dock_fit` changes a dock, so an auto collapse or restore
+    /// is not saved as if the user had chosen it.
+    suppress_layout_save: bool,
     dock: Entity<DockArea>,
     layout_path: PathBuf,
     save_task: Option<Task<()>>,
@@ -419,6 +430,8 @@ impl Workspace {
             closed: Vec::new(),
             sending: None,
             center_orientation: CenterOrientation::default(),
+            dock_intent: Docks::FIRST_RUN,
+            suppress_layout_save: false,
             dock,
             layout_path: state_dir.join(LAYOUT_FILE),
             save_task: None,
@@ -662,9 +675,17 @@ impl Workspace {
             .detach();
 
         cx.subscribe(&self.dock, |this, _, event, cx| {
-            if matches!(event, DockEvent::LayoutChanged) {
+            if matches!(event, DockEvent::LayoutChanged) && !this.suppress_layout_save {
                 this.schedule_save(cx);
             }
+        })
+        .detach();
+
+        // A resize changes which docks fit. This is the one place the fit is
+        // re-derived, so a collapse/restore follows the window rather than a
+        // number baked in at launch.
+        cx.observe_window_bounds(window, |this, window, cx| {
+            this.sync_dock_fit(window, cx);
         })
         .detach();
 
@@ -763,7 +784,7 @@ impl Workspace {
                 workspace.save_task = None;
                 persistence::save(
                     &workspace.layout_path,
-                    &workspace.dock.read(cx).dump(cx),
+                    &workspace.layout_state(cx),
                     &workspace.tabs_snapshot(),
                 );
             })
@@ -1025,7 +1046,7 @@ impl Workspace {
         if layout_dirty {
             persistence::save(
                 &self.layout_path,
-                &self.dock.read(cx).dump(cx),
+                &self.layout_state(cx),
                 &self.tabs_snapshot(),
             );
         }
@@ -1057,23 +1078,6 @@ impl Workspace {
         for index in 0..self.tabs.len() {
             self.persist_tab_draft(index, index == active && dirty, cx);
         }
-    }
-
-    /// Where the open request lives, as breadcrumb parts.
-    ///
-    /// The tab knows the request, not its collection; so this is the request's
-    /// own name over its method, and nothing invented when a tab is unsaved.
-    /// The URL is truncated in the titlebar, so it carries itself as its own
-    /// tooltip: the full address is the one thing you want when it is cut off.
-    fn breadcrumb(&self, cx: &App) -> Vec<chrome::TitlePart> {
-        let request = &self.document.read(cx).request;
-        let mut parts = vec![chrome::TitlePart::new(request_panel::tab_label(request))];
-        if !request.url.trim().is_empty() {
-            parts.push(
-                chrome::TitlePart::new(request.url.clone()).with_tooltip(request.url.clone()),
-            );
-        }
-        parts
     }
 
     /// The status line's contents: the last URL that went out, or why nothing
@@ -1233,8 +1237,11 @@ impl Render for Workspace {
             .map(|name| (name, self.panel_visible(name, cx)))
             .collect();
         let dock = self.dock.clone();
-        let breadcrumb = self.breadcrumb(cx);
         let status = self.status(cx);
+        // A cramped status bar drops the chip labels to icons (the labels stay in
+        // their tooltips) so the URL keeps room without shoving the toggles off.
+        let compact_status = f32::from(window.viewport_size().width)
+            < layout_policy::STATUS_COMPACT_WIDTH * theme::zoom(cx);
         // The chip is window-wide chrome, not pane content, so the canvas is
         // what places it. The pick mutates the shared `Variables` entity, which
         // is the same one the Environment pane reads.
@@ -1537,7 +1544,6 @@ impl Render for Workspace {
                 &palette,
                 &metrics,
                 &self.workspace_name,
-                breadcrumb,
                 controls,
             ))
             .child(div().flex_1().min_h_0().child(dock))
@@ -1549,6 +1555,7 @@ impl Render for Workspace {
                     history: self.history,
                 },
                 &status,
+                compact_status,
                 left_toggle,
                 right_toggle,
             ))
@@ -1593,6 +1600,21 @@ mod tests {
         let side = stacked.flipped();
         assert_eq!(side, CenterOrientation::SideBySide);
         assert_eq!(side.flipped(), stacked);
+    }
+
+    /// The launch floor takes the wider split, so a window that starts stacked
+    /// can still flip side by side without the centre falling under its floor.
+    #[test]
+    fn the_window_minimum_is_the_side_by_side_centre() {
+        use super::layout_policy::window_min_width;
+        use super::CenterOrientation;
+
+        assert_eq!(
+            super::MIN_WINDOW_WIDTH,
+            window_min_width(CenterOrientation::SideBySide),
+            "the launch minimum must cover the wider split"
+        );
+        assert_eq!(super::MIN_WINDOW_WIDTH, 680.0);
     }
 
     /// The lane's rule: a skipped version does not offer itself again, but
@@ -2181,6 +2203,7 @@ mod tests {
                             history: crate::workspace::storage::HistoryMode::Encrypted,
                         },
                         &chrome::Status::default(),
+                        false,
                         left_toggle,
                         right_toggle,
                     ))

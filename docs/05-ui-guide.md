@@ -439,7 +439,7 @@ The window is a dock area with three regions, wrapped in two lines of app-drawn
 chrome and no generic tab strip:
 
 ```
-titlebar (34px, app-drawn)     workspace chip › request › url   …   window controls
+titlebar (34px, app-drawn)     workspace chip   …   environment chip, menu, window controls
 ┌────────────────────────────┐    ┌───────────────────────────────┐
 │ Collections                │    │ Request  method ▾ url  Send   │
 │ ▸ Acme                     │    │ Params Headers Body Auth Set… │
@@ -778,9 +778,9 @@ widgets can own keybindings), not a row of buttons in `Workspace::render`.
 
 The one window-level place a text label belongs is the status bar. Its contents
 are `chrome::Status`, built by `Workspace::status` from the document; add a
-field there rather than drawing a per-pane footer. The titlebar's breadcrumb is
-the same: `Workspace::breadcrumb` returns `chrome::TitlePart`s, and a part
-carries an optional tooltip for text that will be truncated.
+field there rather than drawing a per-pane footer. The titlebar carries no
+text about the open request: its label and URL are already in the request tab
+strip, and the last-sent URL is in the status bar.
 
 A number the response already prints does **not** belong there. Status, duration,
 and size live in the response header, beside the body they describe; the footer
@@ -792,11 +792,11 @@ ask first which pane would print the same thing.
 `src/workspace/chrome.rs` holds both. They are plain functions returning an
 element, not panes, and that is deliberate: chrome is drawn for every layout
 the user can build, so it cannot be dragged away, and it holds no engine state
-of its own. To change what the titlebar shows, edit `Workspace::breadcrumb`; to
-change the status line, edit `Workspace::status` and add a field to
-`chrome::Status`. The titlebar's drag, double-click-to-zoom, and window controls
-are `gpui_kit::component::TitleBar`'s — do not hand-roll them, and keep
-`main.rs` on `TitleBar::window_options()`.
+of its own. To change what the titlebar shows, edit `chrome::titlebar` and the
+values `Workspace::render` passes it; to change the status line, edit
+`Workspace::status` and add a field to `chrome::Status`. The titlebar's drag,
+double-click-to-zoom, and window controls are `gpui_kit::component::TitleBar`'s
+— do not hand-roll them, and keep `main.rs` on `TitleBar::window_options()`.
 
 The titlebar is not a tab strip, by decision (see `docs/02-ui-plan.md`, U13/U14):
 the open-request strip lives in the request pane.

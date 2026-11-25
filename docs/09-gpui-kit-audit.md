@@ -156,8 +156,10 @@ Values outside `Metrics`, so zoom scales the row and not what sits in it:
   `w(px(460.))`; `command_palette.rs:120` `w(px(520.))`.
 - `panels/history.rs:193,201,230,242` `px(5./44./28./2.)`;
   `panels/response.rs:1036,1044` `px(12. + 7. * …)`, `px(24.)`.
-- `workspace/mod.rs:66,71` `HISTORY_WIDTH`/`TOOL_WIDTH` as raw `f32`, so the
-  dock panes stay 260/400 px at every zoom.
+- `workspace/persistence.rs` `HISTORY_WIDTH`/`TOOL_WIDTH` as raw `f32`, so the
+  dock panes stay 260/400 px at every zoom; `workspace/layout_policy.rs`
+  `CENTRE_MIN`/`LEFT_MIN`/`RIGHT_MIN` likewise, though the fit compares them
+  `zoom`-scaled (the window floor itself is unscaled).
 - `response.rs:1388-1390` `palette.danger.opacity(0.12/0.4)` literals.
 
 **Fix:** add three fields to `Metrics` (`indent`, `icon_sm`, `tool_lane`) and
