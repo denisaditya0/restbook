@@ -58,6 +58,19 @@ back to stacked. Panes can be focused and closed from the palette (`Focus
 are also in the titlebar's **View** menu, which leaves out the three panes that
 already have a status-bar toggle.
 
+### Scroll and size
+
+A pane never clips: when the window or a split narrows past what a pane needs,
+its body scrolls (the request editor, the response body, headers, and cookies,
+the environment list), and a custom region shows a scrollbar once its content
+overflows. The two exceptions are the response body's horizontal scroll — it
+keeps the plain scrollport so a long line keeps its full width — and the request
+tab strip, which scrolls to the selected tab through a handle the pane owns.
+
+A menu whose rows grow with the user's data scrolls inside the popup instead of
+clipping at the window edge: the collection switcher (one row per collection) and
+the environment switcher (one row per environment). A fixed menu never scrolls.
+
 ## Global chrome (always visible)
 
 | Element | Shows | Source |

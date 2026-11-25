@@ -340,7 +340,7 @@ Refs: `Workspace::adopt_active` (`workspace/tabs.rs`), `panels/collections/mod.r
 `panels/editor/kv_table.rs` (headers, query params) and
 `panels/editor/parts_table.rs` (form-data, multipart) build one widget — a
 checkbox, two inputs, and an action strip — per row in a plain `v_flex` loop,
-inside `editor-tab-body`'s `overflow_y_scroll`. Nothing virtualizes them, so a
+inside `editor-tab-body`'s `overflow_y_scrollbar`. Nothing virtualizes them, so a
 request with hundreds of params or multipart parts re-lays out every row on each
 keystroke that notifies the editor. It is the same shape the Collections tree had
 before 3.7, scoped to a single request, and only bites a request built by hand or

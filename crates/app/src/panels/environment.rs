@@ -11,6 +11,7 @@ use gpui_kit::component::button::*;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenu, PopupMenuItem};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{h_flex, v_flex, Disableable as _};
 use gpui_kit::*;
 
@@ -448,7 +449,9 @@ impl EnvironmentPanel {
                         }),
                 );
             }
-            menu
+            // One row per environment plus "(none)": unbounded, so a long list
+            // can outgrow the window and clip without a scrollbar.
+            menu.scrollable(true)
         };
 
         let picker = Button::new("environment-picker")
@@ -831,7 +834,7 @@ impl Render for EnvironmentPanel {
                     .id("environment-body")
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
+                    .overflow_y_scrollbar()
                     .child(self.render_editor(cx))
                     .child(self.render_inspector(cx)),
             )

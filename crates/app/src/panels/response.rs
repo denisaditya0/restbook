@@ -14,6 +14,7 @@ use gpui_kit::component::highlighter::{HighlightTheme, SyntaxHighlighter};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::tab::{TabBar, TabVariant};
 use gpui_kit::component::{
     h_flex, v_flex, ActiveTheme as _, Disableable as _, Selectable as _, WindowExt as _,
@@ -1650,6 +1651,10 @@ impl ResponsePanel {
                 .flex_row()
                 .flex_1()
                 .min_h_0()
+                // Stays on the hidden variant: horizontal scroll relies on the
+                // child keeping its max-content width (see the UI guide's gotcha),
+                // and `Scrollable`'s wrapper caps the content at the viewport.
+                // `a_raw_body_is_wider_than_the_viewport` pins this.
                 .overflow_scroll()
                 .items_start()
                 .px(px(self.metrics.space_lg))
@@ -1730,6 +1735,8 @@ impl ResponsePanel {
             .flex_col()
             .flex_1()
             .min_h_0()
+            // As the pretty view above: the raw line must keep its max-content
+            // width to scroll sideways, which the `Scrollable` wrapper caps.
             .overflow_x_scroll()
             .py(px(self.metrics.space_sm))
             .font_family(palette.mono_font.clone())
@@ -1822,7 +1829,7 @@ impl ResponsePanel {
             .debug_selector(|| "response-headers".to_owned())
             .flex_1()
             .min_h_0()
-            .overflow_y_scroll()
+            .overflow_y_scrollbar()
             .px(px(self.metrics.space_lg))
             .py(px(self.metrics.space_sm))
             .font_family(palette.mono_font.clone())
@@ -1911,7 +1918,7 @@ impl ResponsePanel {
             .debug_selector(|| "response-cookies".to_owned())
             .flex_1()
             .min_h_0()
-            .overflow_y_scroll()
+            .overflow_y_scrollbar()
             .px(px(self.metrics.space_lg))
             .py(px(self.metrics.space_sm))
             .font_family(palette.mono_font.clone())
@@ -2372,7 +2379,7 @@ impl ResponsePanel {
                     .id("response-error-body")
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
+                    .overflow_y_scrollbar()
                     .px(px(metrics.space_lg))
                     .py(px(metrics.space_lg))
                     .child(

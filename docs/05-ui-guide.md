@@ -723,8 +723,18 @@ and a filtered list's “No matches.” is a result, not a first run.
   inline `Hsla` values.
 - Shared formatting (bytes, duration, cookies, JSON pretty-printing) belongs in
   `src/util.rs` with a unit test; do not test view code through the widget tree.
-- Layout numbers are view-local. `bounded_height` exists because the dock does
-  not size children for us; reuse it for new scroll regions.
+- Layout numbers are view-local, and a pane that cannot shrink **scrolls**. Give
+  the body `flex_1()` with its own floor at zero (`min_h_0()`/`min_w_0()`) and an
+  overflow style, so the dock shrinks the scrollport and the content scrolls
+  instead of clipping. A custom scroll region uses `overflow_*_scrollbar()`
+  (gpui-component's `Scrollable`), which draws a scrollbar only when the content
+  overflows; keep the hidden `overflow_*_scroll()` only where the wrapper would
+  cap the content (the response body, which needs max-content width to scroll
+  sideways — see the gotcha below) or take over a handle the caller drives (the
+  request tab strip's `scroll_to_item`). A `PopupMenu` whose rows come from user
+  data — the collection switcher, the environment switcher — sets
+  `.scrollable(true)`, because its default caps at half the window height and
+  clips the rest; a fixed menu never needs it.
 - The components are `gpui-component`; the imports that matter are
   `component::button::*` (for `.primary()`, `.ghost()`, `.danger()`),
   `component::input`, `component::tab`, `component::menu` (`DropdownMenu`,
