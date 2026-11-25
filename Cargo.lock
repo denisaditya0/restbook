@@ -1765,12 +1765,15 @@ dependencies = [
 name = "restbook-devcli"
 version = "0.2.0"
 dependencies = [
+ "base64 0.22.1",
  "clap",
+ "flate2",
  "restbook-core",
  "restbook-store",
  "restbook-transport",
  "serde_json",
  "tokio",
+ "url",
 ]
 
 [[package]]

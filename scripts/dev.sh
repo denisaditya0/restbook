@@ -14,6 +14,15 @@
 # still runs cargo, which then reports what is missing.
 set -eu
 
+# `--logs` is the developer switch: the full app transcript (at `debug`) goes to
+# a timestamped file under `target/dev-logs`, never to the quiet `restbook.log`
+# a user's install writes. An explicit RUST_LOG always wins.
+logs=0
+if [ "${1:-}" = "--logs" ]; then
+    logs=1
+    shift
+fi
+
 if [ -z "${OPENSSL_DIR:-}" ]; then
     detected=$(
         # A MinGW toolchain usually keeps a sibling `opt` with OpenSSL headers.
@@ -78,6 +87,17 @@ fi
 if [ "${1:-}" = "--print-openssl-dir" ]; then
     printf '%s\n' "${OPENSSL_DIR:-}"
     exit 0
+fi
+
+if [ "$logs" = 1 ]; then
+    log_dir="$(cd "$(dirname "$0")/.." && pwd)/target/dev-logs"
+    mkdir -p "$log_dir"
+    RESTBOOK_LOG_FILE="$log_dir/$(date +%Y%m%d-%H%M%S)-app.log"
+    export RESTBOOK_LOG_FILE
+    : "${RUST_LOG:=warn,restbook_app=debug,restbook_core=debug,restbook_store=debug,restbook_transport=debug}"
+    export RUST_LOG
+    echo "dev: app log $RESTBOOK_LOG_FILE" >&2
+    echo "dev: RUST_LOG=$RUST_LOG" >&2
 fi
 
 exec cargo "$@"

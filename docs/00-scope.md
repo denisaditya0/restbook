@@ -1,8 +1,11 @@
 # restbook — scope
 
 A local-first desktop HTTP client, inspired by Postman, Insomnia, Yaak, and
-Bruno. Original code; no forked or vendored sources. Zaku is a reference for
-interaction and layout only — none of its AGPL code is used (see the ledger).
+Bruno. The reference poles are **Bruno** for data ownership and **Yaak** for
+local-first polish; Postman supplies the feature vocabulary, and Insomnia is
+the cautionary tale about mandatory accounts. Original code; no forked or
+vendored sources. Zaku is a reference for interaction and layout only — none of
+its AGPL code is used (see the ledger).
 
 ## Product principles
 
@@ -70,6 +73,7 @@ The engine's kept-current milestones are B1..B18, with B19..B29 planned, in
 | Offline, data ownership | Bruno | No account, local secrets | `.bru` plain text, built-in Git *(deferred; `1.0.0` at most)* |
 | Paste-curl, local-first UX | Yaak | Interaction ideas | Plugin runtime |
 | Feature vocabulary | Postman | Parameter tables, env switcher | Cloud, workspaces-as-a-service |
+| Mandatory account (the anti-pattern) | Insomnia | — | Cloud sync, forced sign-in, workspaces-as-a-service |
 | Widgets, dock layout | `gpui-kit` | Components | Building a widget system |
 | Dense pane layout, request tabs, progress UX | Zaku | Interaction and layout ideas; a progress sink on the transport | Its Zed-derived crate graph, AGPL code, `.toml`-as-request files |
 

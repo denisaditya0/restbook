@@ -105,12 +105,12 @@ with `debug_selector` (a no-op outside test builds).
 ### Sample responses
 
 Some of the response pane is only observable against a particular body shape,
-and a public echo service will not produce one on demand. `scripts/sample-server.py`
-serves them locally (standard library only, bound to 127.0.0.1):
+and a public echo service will not produce one on demand. `sample-server` serves
+them locally, bound to 127.0.0.1, with no state and no dependency on the app:
 
 ```sh
-python scripts/sample-server.py            # http://127.0.0.1:8787
-python scripts/sample-server.py --port 9000
+cargo run -p restbook-devcli --bin sample-server            # :8787
+cargo run -p restbook-devcli --bin sample-server -- --port 9000
 ```
 
 | Path | Shape | What it exercises |
@@ -198,6 +198,8 @@ warn,restbook_app=info,restbook_core=info,restbook_store=info,restbook_transport
 RUST_LOG=warn,restbook_app=debug,restbook_core=debug,restbook_store=debug,restbook_transport=debug sh ../../scripts/dev.sh run
 ```
 
+The dev scripts' `--logs` flag supplies this filter for you (below).
+
 Targets are crate names, so the hyphen in `restbook-app` becomes an underscore
 (`restbook_app`), and a module can be narrowed further
 (`restbook_app::workspace=debug`). `log::debug!` or `log::trace!` added without
@@ -258,20 +260,22 @@ runs afterwards, so a terminal run reads as it always did.
 Windows paths:
 
 ```powershell
-$env:RUST_LOG = 'restbook_app=debug'; ..\..\scripts\dev.ps1 run
+..\..\scripts\dev.ps1 --logs run
 ```
 
 ```bat
-set RUST_LOG=restbook_app=debug
 ..\..\scripts\dev.cmd --logs run
 ```
 
-`--logs` (cmd.exe only) tees **cargo's** output to
-`target\dev-logs\<stamp>-cargo.log`, which is what catches a build error that
-scrolled past, and points the app's `RESTBOOK_LOG_FILE` at
-`target\dev-logs\<stamp>-app.log` beside it, so the debug transcript never lands
-in the `restbook.log` a user would attach. Unless `RUST_LOG` is already set,
-`--logs` supplies the full debug filter itself.
+Both set the `debug` filter and the `target/dev-logs` file themselves; set
+`RUST_LOG` only to narrow it (for example `restbook_app::perf=debug`).
+
+`--logs` is the developer switch on all three scripts. It points the app's
+`RESTBOOK_LOG_FILE` at `target/dev-logs/<stamp>-app.log`, so the transcript
+never lands in the `restbook.log` a user would attach; on cmd.exe it also tees
+**cargo's** output to `<stamp>-cargo.log`, which catches a build error that
+scrolled past. Unless `RUST_LOG` is already set, `--logs` supplies the full
+`debug` filter itself.
 
 ## Testing
 

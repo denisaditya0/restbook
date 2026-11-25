@@ -15,6 +15,26 @@
 
 $ErrorActionPreference = 'Stop'
 
+# `--logs` is the developer switch: the full app transcript (at `debug`) goes to
+# a timestamped file under `target/dev-logs`, never to the quiet `restbook.log`
+# a user's install writes. An explicit RUST_LOG always wins.
+$restArgs = $args
+$logs = $false
+if ($args.Count -ge 1 -and $args[0] -eq '--logs') {
+    $logs = $true
+    $restArgs = @($args | Select-Object -Skip 1)
+}
+if ($logs) {
+    $logDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'target/dev-logs'
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    $env:RESTBOOK_LOG_FILE = Join-Path $logDir ("{0}-app.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    if (-not $env:RUST_LOG) {
+        $env:RUST_LOG = 'warn,restbook_app=debug,restbook_core=debug,restbook_store=debug,restbook_transport=debug'
+    }
+    [Console]::Error.WriteLine("dev: app log $($env:RESTBOOK_LOG_FILE)")
+    [Console]::Error.WriteLine("dev: RUST_LOG=$($env:RUST_LOG)")
+}
+
 function Test-OpenSsl {
     param([string]$Prefix)
     if ([string]::IsNullOrWhiteSpace($Prefix)) { return $null }
@@ -91,10 +111,10 @@ if ($env:OPENSSL_DIR) {
     }
 }
 
-if ($args.Count -ge 1 -and $args[0] -eq '--print-openssl-dir') {
+if ($restArgs.Count -ge 1 -and $restArgs[0] -eq '--print-openssl-dir') {
     if ($env:OPENSSL_DIR) { Write-Output $env:OPENSSL_DIR }
     exit 0
 }
 
-& cargo @args
+& cargo @restArgs
 exit $LASTEXITCODE

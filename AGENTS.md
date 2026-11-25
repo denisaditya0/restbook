@@ -183,8 +183,9 @@ root does not reach the excluded app.
   workspaces, `-D warnings`, the SQLCipher job). Run the commands above for the
   code you touched; do not invent extra whole-repo runs.
 - Prove behavior with `devcli` rather than a network: `send`, `history`,
-  `--progress`. For response-body edge cases use `python scripts/sample-server.py`
-  (`http://127.0.0.1:8787`), not a live API.
+  `--progress`. For response-body edge cases use the `sample-server` binary in
+  `crates/devcli` (`cargo run -p restbook-devcli --bin sample-server`,
+  `http://127.0.0.1:8787`), not a live API.
 - **Tests are behavior sentences** (`rejects_header_injection`) and state a reason
   in a doc comment. Engine tests must never need a network or a window; the only
   exception is the SQLCipher keyring round trip. Extend an existing test when a
