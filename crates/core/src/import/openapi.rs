@@ -505,4 +505,102 @@ mod tests {
             .reason
             .contains("undeclared path parameter"));
     }
+
+    /// A document shaped like Cloudflare's: every operation carries a `$ref`
+    /// parameter, a required query row, a JSON body and a response schema. One
+    /// path with two operations, so `paths * 2` is the request count.
+    fn large_document(paths: usize) -> String {
+        let mut by_path = Map::new();
+        for index in 0..paths {
+            by_path.insert(
+                format!("/zones/{{zone_id}}/things/{index}"),
+                json!({
+                    "parameters": [{"$ref": "#/components/parameters/zone_id"}],
+                    "get": {
+                        "summary": format!("List things {index}"),
+                        "parameters": [{
+                            "name": "limit", "in": "query", "required": true,
+                            "schema": {"type": "integer", "default": 25}
+                        }],
+                        "responses": {"200": {"description": "ok", "content": {
+                            "application/json": {"schema": {
+                                "type": "object", "required": ["id", "items"],
+                                "properties": {
+                                    "id": {"type": "string"},
+                                    "items": {"type": "array", "items": {
+                                        "type": "object", "required": ["name"],
+                                        "properties": {"name": {"type": "string"}}
+                                    }}
+                                }
+                            }}
+                        }}}
+                    },
+                    "post": {
+                        "operationId": format!("createThing{index}"),
+                        "requestBody": {"content": {"application/json": {"schema": {
+                            "type": "object", "required": ["name", "config"],
+                            "properties": {
+                                "name": {"type": "string"},
+                                "config": {"type": "object", "required": ["mode"],
+                                    "properties": {"mode": {"type": "string"}}}
+                            }
+                        }}}}
+                    }
+                }),
+            );
+        }
+
+        json!({
+            "openapi": "3.1.0",
+            "info": {"title": "Big"},
+            "servers": [{"url": "https://api.example.com"}],
+            "components": {"parameters": {"zone_id": {
+                "name": "zone_id", "in": "path", "required": true,
+                "schema": {"type": "string"}
+            }}},
+            "paths": Value::Object(by_path),
+        })
+        .to_string()
+    }
+
+    /// What the app pays for a file: the format guess and the parse, which is
+    /// exactly what `import_file` runs off the UI thread.
+    fn cost(paths: usize) -> (usize, std::time::Duration) {
+        let text = large_document(paths);
+        let started = std::time::Instant::now();
+        assert_eq!(
+            crate::import::ImportFormat::detect(&text),
+            crate::import::ImportFormat::OpenApi
+        );
+        let import = parse(&text, "big.json").unwrap();
+        (import.request_count(), started.elapsed())
+    }
+
+    /// A Cloudflare-sized document (29 MB, 3,934 requests) is a few seconds of
+    /// JSON in a debug build, so the import is a visible wait even though it runs
+    /// off the UI thread. That cost is linear in the document — the guess and the
+    /// parse are each one pass — and this test is what keeps it that way: four
+    /// times the paths may not cost more than eight times the time, which is the
+    /// gap between one pass per path and a scan per path.
+    ///
+    /// Measured on the development machine for a 1.5 MB, 4,000-request document:
+    /// ~78 ms guess + ~146 ms parse in release, ~264 ms + ~491 ms in debug. The
+    /// bound is generous because a debug build is not a benchmark.
+    #[test]
+    fn a_large_document_parses_in_linear_time() {
+        let (some_requests, some) = cost(500);
+        let (more_requests, more) = cost(2_000);
+        assert_eq!((some_requests, more_requests), (1_000, 4_000));
+
+        let ceiling = some.max(std::time::Duration::from_millis(50)) * 8;
+        assert!(
+            more < ceiling,
+            "4,000 requests took {more:?} against {some:?} for 1,000: the parse is \
+             growing faster than the document",
+        );
+        assert!(
+            more < std::time::Duration::from_secs(10),
+            "4,000 requests took {more:?}",
+        );
+    }
 }

@@ -474,13 +474,20 @@ plumbing went with it.
 
 - `panels/history.rs:166-259` renders one element per hit; `history_limit` goes
   to 1000 (`workspace/settings.rs:79-80`).
-- `panels/response.rs:1070` already uses `uniform_list` — the pattern exists.
+- `panels/response.rs:1070` and `panels/collections/mod.rs` (`render_list`) use
+  `uniform_list` — the pattern exists, and the tree is the proof it carries a
+  hierarchy.
+
+The collections tree was the exception here on the grounds that it is
+user-authored, shallow, and nested virtualization would need a flattened model
+first. `0.2.2` built that model (`FlatRow`, `CollectionsPanel::flatten`) after an
+imported spec landed ~6,000 expanded rows and the tree rebuilt all of them every
+frame, so a hierarchy is no longer a reason to opt out: flatten, then
+`uniform_list` over the visible range.
 
 **Fix:** `uniform_list("history-rows", hits.len(), …)` at a row height derived
 from `Metrics` (the rows are single-line and already uniform), keeping
-`self.selected` keyed by `hit.id`. The collections tree is left alone: it is
-user-authored, shallow, and nested virtualization would need a flattened model
-first; revisit if trees grow into the hundreds.
+`self.selected` keyed by `hit.id`.
 
 ## Accepted exceptions
 

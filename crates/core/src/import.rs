@@ -337,24 +337,80 @@ impl ImportFormat {
     /// envelope of ours claims it. `None` means the text is not a JSON object
     /// at all, and the caller's substring guess still applies.
     fn detect_json(text: &str) -> Option<Self> {
-        let value: serde_json::Value = serde_json::from_str(text).ok()?;
-        let object = value.as_object()?;
-        let has = |key: &str| object.contains_key(key);
+        // Read only the root keys. Parsing the whole document into a `Value`
+        // just to look at them cost a second and ~137 MB of heap on a 29 MB
+        // OpenAPI file (B30); this visits the root map and skips every value.
+        let mut deserializer = serde_json::Deserializer::from_str(text);
+        let keys = RootKeys::deserialize(&mut deserializer).ok()?;
+        deserializer.end().ok()?;
         // `log` alone is a HAR, even without `entries`, so a malformed log
         // still reaches the HAR parser and says what is wrong with it.
-        if has("log") {
+        if keys.log {
             return Some(Self::Har);
         }
-        if has("info") && has("item") {
+        if keys.info && keys.item {
             return Some(Self::Postman);
         }
-        if has("openapi") || has("swagger") {
+        if keys.openapi || keys.swagger {
             return Some(Self::OpenApi);
         }
-        if has("collections") && has("version") {
+        if keys.collections && keys.version {
             return Some(Self::Bundle);
         }
         Some(Self::Curl)
+    }
+}
+
+/// The top-level keys that decide a JSON envelope, read without a DOM.
+#[derive(Default)]
+struct RootKeys {
+    log: bool,
+    info: bool,
+    item: bool,
+    openapi: bool,
+    swagger: bool,
+    collections: bool,
+    version: bool,
+}
+
+impl<'de> Deserialize<'de> for RootKeys {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_map(RootKeysVisitor)
+    }
+}
+
+/// Visits the root map's keys; every value is skipped unread.
+struct RootKeysVisitor;
+
+impl<'de> serde::de::Visitor<'de> for RootKeysVisitor {
+    type Value = RootKeys;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a JSON object")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<RootKeys, A::Error>
+    where
+        A: serde::de::MapAccess<'de>,
+    {
+        let mut keys = RootKeys::default();
+        while let Some(key) = map.next_key::<String>()? {
+            match key.as_str() {
+                "log" => keys.log = true,
+                "info" => keys.info = true,
+                "item" => keys.item = true,
+                "openapi" => keys.openapi = true,
+                "swagger" => keys.swagger = true,
+                "collections" => keys.collections = true,
+                "version" => keys.version = true,
+                _ => {}
+            }
+            map.next_value::<serde::de::IgnoredAny>()?;
+        }
+        Ok(keys)
     }
 }
 

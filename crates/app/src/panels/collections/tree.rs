@@ -137,15 +137,6 @@ fn contains(haystack: &str, needle: &str) -> bool {
     haystack.to_ascii_lowercase().contains(needle)
 }
 
-/// Order a list of collection references for display without copying the tree.
-/// Nested item ordering is applied where the borrow path renders them.
-pub(super) fn sort_refs(collections: &mut [&Collection], order: SortOrder) {
-    if order == SortOrder::Manual {
-        return;
-    }
-    collections.sort_by(|left, right| order.compare(&left.name, &right.name));
-}
-
 pub(super) fn item_name(item: &CollectionItem) -> &str {
     match item {
         CollectionItem::Folder(folder) => &folder.name,
