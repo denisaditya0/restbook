@@ -263,12 +263,16 @@ pub(crate) fn status_bar(
     left_toggle: AnyElement,
     right_toggle: AnyElement,
 ) -> AnyElement {
-    let mut right = h_flex().items_center().gap(px(metrics.space_md));
+    // The URL is the only item that may give way when the bar is narrow: it has
+    // a ceiling but no floor, so it ellipsises instead of shoving the fixed chips
+    // or the corner toggles off the edge.
+    let mut right = h_flex().items_center().gap(px(metrics.space_md)).min_w_0();
 
     if let Some(url) = &status.url {
         right = right.child(
             div()
                 .id("status-url")
+                .min_w_0()
                 .max_w(px(520.))
                 .truncate()
                 .text_xs()
@@ -282,6 +286,7 @@ pub(crate) fn status_bar(
         right = right.child(
             div()
                 .id("status-message")
+                .min_w_0()
                 .max_w(px(640.))
                 .truncate()
                 .text_xs()
@@ -313,6 +318,7 @@ pub(crate) fn status_bar(
         };
         h_flex()
             .id("status-workspace")
+            .flex_none()
             .min_w_0()
             .items_center()
             .gap(px(metrics.space_1p5))
