@@ -83,7 +83,9 @@ runner. Build commands are `cargo` plus the `scripts/dev.*` wrappers.
 │   │       └── sqlcipher.rs     SqlcipherStore (feature = "sqlcipher")
 │   ├── devcli/
 │   │   ├── Cargo.toml
-│   │   └── src/main.rs          send / history / import / export
+│   │   └── src/
+│   │       ├── main.rs          send / history / import / export
+│   │       └── bin/sample-server/  local response fixtures for the UI
 │   └── app/
 │       ├── Cargo.toml           standalone workspace; sqlcipher is a default feature
 │       ├── Cargo.lock
@@ -137,13 +139,12 @@ runner. Build commands are `cargo` plus the `scripts/dev.*` wrappers.
 │                   ├── parts_table.rs
 │                   └── settings.rs
 ├── scripts/
-│   ├── dev.sh               cargo with OPENSSL_DIR detected (POSIX)
-│   ├── dev.ps1              same, PowerShell
-│   ├── dev.cmd              same, cmd.exe; `--logs` tees to target/dev-logs
+│   ├── dev.sh               cargo with OPENSSL_DIR detected (POSIX); `--logs` writes to target/dev-logs
+│   ├── dev.ps1              same, PowerShell; `--logs` above
+│   ├── dev.cmd              same, cmd.exe; `--logs` also tees cargo's output
 │   ├── setup-windows.ps1    check this machine's prerequisites, install with -Install
 │   ├── setup-windows.cmd    same, cmd.exe
-│   ├── package.sh           build dist/ (Windows exe + libcrypto DLL)
-│   └── sample-server.py     local response fixtures for the UI
+│   └── package.sh           build dist/ (Windows exe + libcrypto DLL)
 ├── docs/                    the numbered documents listed above
 ├── CHANGELOG.md             what shipped for the user; the manifest's notes
 ├── LICENSE-MIT              dual-licensed: MIT or Apache-2.0
@@ -257,7 +258,7 @@ There is no CLI for the UI: **if a change is not visible in a window, it is not
 verified.** For response-body edge cases, start the fixture server:
 
 ```sh
-python scripts/sample-server.py       # http://127.0.0.1:8787
+cargo run -p restbook-devcli --bin sample-server   # http://127.0.0.1:8787
 ```
 
 `05-ui-guide.md` lists what each fixture path exercises.

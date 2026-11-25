@@ -34,6 +34,29 @@ and the seed.
 `core` defines the traits and nothing implements them there. That is what lets
 the engine be tested headlessly and the UI be replaced.
 
+### Crates we adopt, and why not others
+
+A crate earns its place by replacing hand-rolled code or serving a lane already
+planned; the dev-only ones never reach a release build.
+
+| Crate | Replaces / unlocks | Lane |
+|---|---|---|
+| `bytes` | `Bytes`-backed request and response bodies, zero-copy chunks | B18 |
+| `encoding_rs` + `mime` | decode a `text/*` body by its `charset=`, not `from_utf8_lossy` | unassigned (response pane) |
+| `serde_path_to_error` | an import error names `resources[2].request.url`, not serde's bare type | 0.2.7 |
+| `secrecy` + `zeroize` | secret values redacted in `Debug` and zeroed on drop | 0.3.2 |
+| `notify` | workspace file watch | B24 |
+| `insta`, `proptest`, `tempfile` (dev) | import snapshots, curl-tokenizer properties, real temp dirs | test only |
+
+The popular alternatives that target a ruled-out feature stay out, for the same
+reason `00-scope.md` names the feature: a template engine (`handlebars`,
+`minijinja`, `tera`) or a wasm template runtime (`yaak-templates`) turns
+`{{var}}` into scripting, an ORM, query builder, or connection pool (`diesel`,
+`sqlx`, `sea-query`, `r2d2`) serves a multi-user server, an RPC bridge
+(`yaak-rpc`) exists only to host plugins, a JS runtime (`deno_core`, `boa`,
+`rquickjs`) is the plugin runtime, a web framework (`axum`, `actix`) serves no
+endpoint, and `tracing` + `opentelemetry` is telemetry.
+
 ## Where each stage lives
 
 The pipeline diagram names types, not directories. This is the map from a stage

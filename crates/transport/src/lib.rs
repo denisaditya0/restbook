@@ -386,6 +386,8 @@ fn build_client(config: &NetworkConfig, jar: &Arc<SharedJar>, insecure: bool) ->
         ),
     };
 
+    // Only certificate validation is relaxed; hostname verification stays on,
+    // and `B27` refuses a cross-host or https→http hop unless this is set.
     if insecure {
         builder = builder.danger_accept_invalid_certs(true);
     }

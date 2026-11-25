@@ -9,10 +9,19 @@ rust-version.workspace = true
 name = "devcli"
 path = "src/main.rs"
 
+[[bin]]
+name = "sample-server"
+path = "src/bin/sample-server/main.rs"
+
 [dependencies]
 restbook-core.workspace = true
 restbook-store.workspace = true
 restbook-transport.workspace = true
+base64.workspace = true
 clap.workspace = true
+# The sample server compresses one route the way a real API would; flate2 is
+# already in the tree through reqwest's gzip support.
+flate2 = "1"
 serde_json.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["net", "io-util"] }
+url.workspace = true

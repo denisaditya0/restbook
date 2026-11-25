@@ -3058,8 +3058,8 @@ mod render_tests {
         format!("{}null{}", "[".repeat(depth), "]".repeat(depth))
     }
 
-    /// Every body shape `scripts/sample-server.py` serves, so a failure here
-    /// can be reproduced by hand against the same route. The old paint test
+    /// Every body shape `sample-server` serves, so a failure here can be
+    /// reproduced by hand against the same route. The old paint test
     /// covered JSON only; the viewer has to label and survive the rest too.
     fn every_shape() -> Vec<(&'static str, ResponseRecord)> {
         vec![
@@ -3349,7 +3349,7 @@ mod render_tests {
     /// Every state the pane has must lay out and paint without panicking. A
     /// body that overflows a fixed-height row, or a virtualized list built at
     /// zero height, is exactly what a plain unit test cannot reach. The shapes
-    /// are the ones `scripts/sample-server.py` serves, so a failure here can
+    /// are the ones `sample-server` serves, so a failure here can
     /// be reproduced by hand against the same route.
     #[test]
     fn the_pane_paints_every_response_shape() {
