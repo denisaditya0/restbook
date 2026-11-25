@@ -289,6 +289,12 @@ fn new_tab_id() -> TabId {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
+/// The first non-empty, trimmed line of a clipboard paste. A paste that is
+/// blank, or only whitespace, yields `None`.
+fn clipboard_url(text: &str) -> Option<&str> {
+    text.lines().map(str::trim).find(|line| !line.is_empty())
+}
+
 /// Rebuild the open tabs from what the layout file recorded.
 ///
 /// A bound tab is resolved from the collection tree, a draft from its store row;
@@ -649,6 +655,41 @@ impl Workspace {
         if stale.is_some() {
             self.refresh_drafts(cx);
         }
+        self.persist_tabs(cx);
+    }
+
+    /// Open a new request tab whose URL is the text on the clipboard.
+    ///
+    /// A multi-line paste often carries a stray blank line, so the first
+    /// non-empty line, trimmed, is the URL. An empty or missing clipboard
+    /// reports a flash instead of opening a blank tab the user did not ask for.
+    pub(crate) fn paste_url(&mut self, cx: &mut Context<Self>) {
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            self.notice(
+                &Notice::Failed("The clipboard has no text to paste.".into()),
+                cx,
+            );
+            return;
+        };
+        let Some(url) = clipboard_url(&text) else {
+            self.notice(
+                &Notice::Failed("The clipboard has no text to paste.".into()),
+                cx,
+            );
+            return;
+        };
+
+        self.flush_leaving_draft(cx);
+        let mut tab = Tab::blank();
+        tab.request.url = url.to_owned();
+        let index = self.tabs.push(tab);
+        self.tabs.set_active(index);
+        self.adopt_active(cx);
+        log::info!(
+            target: "restbook_app::ui",
+            "paste url: {}",
+            crate::logging::redact_url(url),
+        );
         self.persist_tabs(cx);
     }
 
@@ -1018,7 +1059,9 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_saved_tabs, RequestStamp, SavedTab, SavedTabs, Tab, TabState};
+    use super::{
+        clipboard_url, resolve_saved_tabs, RequestStamp, SavedTab, SavedTabs, Tab, TabState,
+    };
     use restbook_core::{Draft, Method, RequestDef};
 
     fn draft(id: i64, url: &str) -> Draft {
@@ -1211,5 +1254,18 @@ mod tests {
         assert_eq!(entries[1].id, second_id);
         assert_eq!(entries[0].method, Method::Put);
         assert_eq!(&*entries[0].url, "https://api.test/a");
+    }
+
+    #[test]
+    fn a_blank_clipboard_yields_no_url() {
+        assert!(clipboard_url("   \n\t\n").is_none());
+    }
+
+    #[test]
+    fn the_first_non_empty_line_is_the_url() {
+        assert_eq!(
+            clipboard_url("\n  https://api.test/x  \nbody"),
+            Some("https://api.test/x"),
+        );
     }
 }

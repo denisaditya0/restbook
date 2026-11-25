@@ -588,6 +588,7 @@ impl Workspace {
                     this.pending_import = true;
                     cx.notify();
                 }
+                RequestEvent::PasteUrl => this.paste_url(cx),
                 RequestEvent::CopyCurl => this.copy_curl(cx),
                 RequestEvent::FetchToken(config) => this.fetch_token(config.clone(), cx),
             }
