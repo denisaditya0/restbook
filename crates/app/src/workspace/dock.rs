@@ -601,8 +601,16 @@ impl Workspace {
     /// be honoured. An auto collapse or restore is suppressed from `layout.json`
     /// because the saved open flags are the intent, not this frame's fit.
     pub(crate) fn sync_dock_fit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let zoom = theme::zoom(cx);
         let width = f32::from(window.viewport_size().width);
+        self.apply_dock_fit(width, window, cx);
+    }
+
+    /// Apply the fit for an explicit width. `window.resize` updates
+    /// `viewport_size` only on the next bounds event, so a caller that just
+    /// resized must judge the fit against the width it asked for, not the stale
+    /// one still reported this frame.
+    fn apply_dock_fit(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) {
+        let zoom = theme::zoom(cx);
         let want =
             layout_policy::visible_docks(width, self.center_orientation, zoom, self.dock_intent);
         let dock = self.dock.clone();
@@ -642,15 +650,20 @@ impl Workspace {
         let zoom = theme::zoom(cx);
         let needed = layout_policy::needed_width(self.center_orientation, self.dock_intent, zoom);
         let current = f32::from(window.viewport_size().width);
-        if current + 0.5 < needed {
+        let width = if current + 0.5 < needed {
             // Cap to the display's usable width: a request larger than the
             // monitor would otherwise open a window off every edge.
             let cap = display_width(window, cx).unwrap_or(f32::INFINITY);
             let width = needed.min(cap);
             let height = window.viewport_size().height;
             window.resize(size(px(width), height));
-        }
-        self.sync_dock_fit(window, cx);
+            width
+        } else {
+            current
+        };
+        // Judge the fit at the width we just asked for: `viewport_size` still
+        // reports the old size this frame.
+        self.apply_dock_fit(width, window, cx);
     }
 
     /// Whether a dock is on screen *and* holds something. A dock emptied by
