@@ -23,6 +23,7 @@ mod updates;
 
 pub(crate) use delete::PendingDelete;
 pub(crate) use export::ExportState;
+use import::PendingImport;
 pub(crate) use tabs::{Tab, TabAction, TabEntry, TabId, TabState};
 
 use std::path::PathBuf;
@@ -153,6 +154,13 @@ pub(crate) struct Workspace {
     /// window, so the picker opens from the next render, the same way a save is
     /// deferred.
     pending_import: bool,
+    /// The parsed file the import dialog is deciding about. Parsed once, on the
+    /// background executor, and parked here because the dialog's content
+    /// closure is rebuilt on every notify.
+    import_pending: Option<PendingImport>,
+    /// The import dialog's destination, `None` for the default of new
+    /// collections. Kept beside `import_pending` for the same reason.
+    import_target: Option<Destination>,
     /// The Collections pane asked to export. Same deferral as `pending_import`.
     pending_export: bool,
     /// The export picker's choices. Rebuilt each time the dialog opens so
@@ -392,6 +400,8 @@ impl Workspace {
             move_target: None,
             pending_save: false,
             pending_import: false,
+            import_pending: None,
+            import_target: None,
             pending_export: false,
             export_state: ExportState::default(),
             pending_history: false,
