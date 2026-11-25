@@ -723,6 +723,13 @@ impl CollectionsPanel {
         Some((collection.id.as_str(), collection.name.as_str()))
     }
 
+    /// The saved request with `id`, if the tree still holds it. A tab bound to
+    /// a node that was deleted resolves to `None`, which is how a restore drops
+    /// it.
+    pub(crate) fn saved_request(&self, id: &str) -> Option<RequestDef> {
+        tree::find_saved(&self.collections, id).map(|saved| saved.request.clone())
+    }
+
     /// Every place a save can land, for the first-save dialog's picker.
     pub(crate) fn destinations(&self) -> Vec<DestinationRow> {
         tree::destination_rows(&self.collections)

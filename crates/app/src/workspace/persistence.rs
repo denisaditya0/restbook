@@ -1,9 +1,10 @@
 //! Where the dock layout and the open tabs are remembered between runs.
 //!
-//! Only the arrangement is persisted, never the panels: the workspace builds the
-//! panes on every start, so a stale panel name is dropped on load. The file
-//! carries this app's own version, separate from `DockAreaState`'s schema
-//! version, so a changed default arrangement discards layouts an older build saved.
+//! Only the arrangement and the names of the open tabs are persisted, never the
+//! panels: the workspace builds the panes on every start, so a stale panel name
+//! is dropped on load. The file carries this app's own version, separate from
+//! `DockAreaState`'s schema version, so a changed default arrangement discards
+//! layouts an older build saved.
 
 use std::path::Path;
 use std::time::{Duration, SystemTime};
@@ -25,6 +26,10 @@ use super::{PanelName, Workspace};
 /// 2 — Collections alone is the left dock.
 /// 3 — History and Environment moved to the right tools dock, so a saved
 ///     layout from 2 would put the environment back in the sidebar.
+///
+/// The open tabs are not a version concern: they are a defaulted field, so a
+/// file from any version parses and a launch without `tabs` merely restores
+/// none. Bumping for them would discard every existing 0.2.0 layout.
 const LAYOUT_VERSION: u32 = 3;
 
 /// The persisted file: our version plus the library's state.
@@ -32,14 +37,39 @@ const LAYOUT_VERSION: u32 = 3;
 struct Saved {
     layout_version: u32,
     state: DockAreaState,
+    #[serde(default)]
+    tabs: SavedTabs,
 }
 
-/// Save the layout. Failing to persist is not worth interrupting the user for,
-/// so the error is swallowed deliberately.
-pub(crate) fn save(path: &Path, state: &DockAreaState) {
+/// The open tabs, in strip order, and which one was on screen.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+pub(crate) struct SavedTabs {
+    #[serde(default)]
+    pub entries: Vec<SavedTab>,
+    #[serde(default)]
+    pub active: usize,
+}
+
+/// One restorable tab. A bound tab names its collection node; a draft names its
+/// store row. Anything else — a pristine blank page — has nothing to restore
+/// and is not recorded.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum SavedTab {
+    Bound { node: String },
+    Draft { id: i64 },
+}
+
+/// Save the layout and the open tabs. Failing to persist is not worth
+/// interrupting the user for, so the error is swallowed deliberately.
+pub(crate) fn save(path: &Path, state: &DockAreaState, tabs: &SavedTabs) {
     let saved = Saved {
         layout_version: LAYOUT_VERSION,
         state: state.clone(),
+        tabs: SavedTabs {
+            entries: tabs.entries.clone(),
+            active: tabs.active,
+        },
     };
     let Ok(json) = serde_json::to_string_pretty(&saved) else {
         return;
@@ -59,6 +89,14 @@ pub(crate) fn load(path: &Path) -> Option<DockAreaState> {
     let text = std::fs::read_to_string(path).ok()?;
     let saved: Saved = serde_json::from_str(&text).ok()?;
     (saved.layout_version == LAYOUT_VERSION).then_some(saved.state)
+}
+
+/// The open tabs a usable layout file recorded, or `None` when the file is
+/// missing, unreadable, or from an older version.
+pub(crate) fn load_tabs(path: &Path) -> Option<SavedTabs> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let saved: Saved = serde_json::from_str(&text).ok()?;
+    (saved.layout_version == LAYOUT_VERSION).then_some(saved.tabs)
 }
 
 impl Workspace {
@@ -164,7 +202,11 @@ impl Workspace {
     pub(crate) fn reset_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         log::debug!(target: "restbook_app::ui", "reset layout");
         self.default_layout(window, cx);
-        self::save(&self.layout_path, &self.dock.read(cx).dump(cx));
+        self::save(
+            &self.layout_path,
+            &self.dock.read(cx).dump(cx),
+            &self.tabs_snapshot(),
+        );
         self.flash(super::chrome::FlashKind::Success, "Layout reset", cx);
     }
 
@@ -428,6 +470,43 @@ impl Workspace {
             .collections
             .update(cx, |panel, cx| panel.refresh_drafts(cx));
     }
+
+    /// The open tabs as the layout file records them. A tab bound to neither a
+    /// node nor a draft row has nothing to restore and is skipped, which is also
+    /// what keeps a pristine blank page out of the file.
+    ///
+    /// `active` indexes `entries`, not the live strip: the two lists differ by
+    /// the skipped tabs, and a restore has to land on the same request rather
+    /// than on whichever slot happens to survive.
+    pub(crate) fn tabs_snapshot(&self) -> SavedTabs {
+        let mut entries = Vec::new();
+        let mut active = None;
+        for (index, tab) in self.tabs.iter().enumerate() {
+            let entry = match (&tab.node, tab.draft) {
+                (Some(node), _) => SavedTab::Bound { node: node.clone() },
+                (None, Some(id)) => SavedTab::Draft { id },
+                (None, None) => continue,
+            };
+            if index == self.tabs.active() {
+                active = Some(entries.len());
+            }
+            entries.push(entry);
+        }
+        SavedTabs {
+            entries,
+            active: active.unwrap_or(0),
+        }
+    }
+
+    /// Write the layout and the open tabs together, synchronously. Tab changes
+    /// are discrete, unlike a drag, so there is no burst to debounce away.
+    pub(crate) fn persist_tabs(&mut self, cx: &App) {
+        save(
+            &self.layout_path,
+            &self.dock.read(cx).dump(cx),
+            &self.tabs_snapshot(),
+        );
+    }
 }
 
 /// A drag emits a layout change per frame, so the file is written on a pause.
@@ -475,11 +554,68 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("nested").join("layout.json");
 
-        save(&path, &DockAreaState::default());
+        save(&path, &DockAreaState::default(), &Default::default());
 
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "layout.json should be private");
         assert!(load(&path).is_some(), "the saved file still parses");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod tab_tests {
+    use gpui_kit::component::dock::DockAreaState;
+
+    use super::{load_tabs, save, SavedTab, SavedTabs, LAYOUT_VERSION};
+
+    fn temp_path(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        dir.join("layout.json")
+    }
+
+    /// 0.2.0 wrote no `tabs` key; a file from it must still parse and restore
+    /// no tabs rather than discard the layout.
+    #[test]
+    fn a_file_without_tabs_parses_as_no_tabs() {
+        let path = temp_path("restbook-tabs-missing-key-test");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let state = serde_json::to_value(DockAreaState::default()).unwrap();
+        let doc = serde_json::json!({
+            "layout_version": LAYOUT_VERSION,
+            "state": state,
+        });
+        std::fs::write(&path, doc.to_string()).unwrap();
+
+        let tabs = load_tabs(&path).expect("a file from the previous build still parses");
+
+        assert!(tabs.entries.is_empty());
+        assert_eq!(tabs.active, 0);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// A bound tab and a draft keep their keys across a write and a read.
+    #[test]
+    fn bound_and_draft_tabs_round_trip() {
+        let path = temp_path("restbook-tabs-roundtrip-test");
+        let saved = SavedTabs {
+            entries: vec![
+                SavedTab::Bound {
+                    node: "node-1".into(),
+                },
+                SavedTab::Draft { id: 7 },
+            ],
+            active: 1,
+        };
+
+        save(&path, &DockAreaState::default(), &saved);
+        let tabs = load_tabs(&path).expect("the file just written parses");
+
+        assert_eq!(tabs.active, 1);
+        assert_eq!(tabs.entries.len(), 2);
+        assert!(matches!(&tabs.entries[0], SavedTab::Bound { node } if node == "node-1"));
+        assert!(matches!(tabs.entries[1], SavedTab::Draft { id: 7 }));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }
