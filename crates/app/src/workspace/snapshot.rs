@@ -1,10 +1,9 @@
 //! Snapshot: the request and its response as a shareable PNG.
 //!
-//! The image is rasterized from the SVG that [`crate::snapshot`] draws, because
-//! a release build cannot read pixels back from its own window. Secrets are
-//! redacted unless the checkbox is ticked, and that tick is deliberately not
-//! remembered — the same rule as the export dialog, for the same reason: a
-//! remembered "include secrets" is a silent leak on the next snapshot.
+//! The image is rasterized from the SVG that [`crate::snapshot`] draws, because a
+//! release build cannot read pixels back from its own window. Secrets are redacted
+//! unless ticked, and the tick is deliberately not remembered: a remembered
+//! "include secrets" is a silent leak on the next snapshot.
 
 use std::path::PathBuf;
 

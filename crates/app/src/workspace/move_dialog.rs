@@ -1,12 +1,9 @@
 //! The move dialog: a saved request and a destination.
 //!
-//! The same picker the save dialog uses, because a request's home is one
-//! `Destination` and the two lists must not disagree. The node keeps its id, so
-//! the tab bound to it follows the move without knowing one happened: what
-//! changes is which collection file holds it.
-//!
-//! Only a saved request moves. A folder would take its children with it, which
-//! is a different feature and not one this lane promises.
+//! It reuses the save dialog's picker, since a request's home is one `Destination`
+//! and the two lists must not disagree. The node keeps its id, so a tab bound to
+//! it follows the move unknowingly. Only a saved request moves; a folder would
+//! take its children, which is a different feature.
 
 use std::rc::Rc;
 

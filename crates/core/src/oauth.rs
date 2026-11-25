@@ -1,11 +1,8 @@
 //! OAuth 2.0 shapes: configuration, PKCE, authorization and token requests.
 //!
-//! Nothing here performs I/O. [`OAuthConfig::authorize`] builds the URL the
-//! browser opens, [`OAuthConfig::client_credentials_request`] and
-//! [`OAuthConfig::code_exchange_request`] build the form a caller hands to an
-//! [`OAuthTransport`], and [`parse_token_response`] reads the reply. The
-//! transport implements the trait; `prepare()` only ever adds the resulting
-//! bearer token as a header, so the pipeline stays pure.
+//! Nothing here performs I/O: [`OAuthConfig`] builds the authorization URL and
+//! token-request forms, and [`parse_token_response`] reads the reply. The
+//! transport implements [`OAuthTransport`], so `prepare()` stays pure.
 
 use async_trait::async_trait;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

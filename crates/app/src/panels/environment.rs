@@ -366,14 +366,12 @@ impl EnvironmentPanel {
         reload
     }
 
-    /// Delete the named environment. Called by the workspace once the user
-    /// confirms the alert dialog; the pane no longer arms a two-click delete
-    /// itself, because a dialog is where a destructive act belongs.
+    /// Delete the named environment, called by the workspace after the user
+    /// confirms the alert dialog.
     ///
-    /// This is the one handler with no window in hand — `perform_delete`
-    /// calls it inside an entity update — so it queues the reload for the next
-    /// render rather than deferring. Giving it a window would change a
-    /// workspace call site.
+    /// This is the one handler with no window in hand — `perform_delete` calls it
+    /// inside an entity update — so it queues the reload for the next render rather
+    /// than deferring. Giving it a window would change a workspace call site.
     pub(crate) fn delete_environment(&mut self, name: &str, cx: &mut Context<Self>) {
         self.variables
             .update(cx, |vars_store, cx| vars_store.delete_environment(name, cx));

@@ -1,10 +1,8 @@
 //! Bruno request import.
 //!
-//! Newer Bruno writes one YAML file per request: `info` names it, `http` holds
-//! method, URL, headers, query rows, auth, and body, and `settings` carries the
-//! timeout and redirect choice. A single file has no collection to inherit auth
-//! or variables from, so `auth: inherit` becomes a note instead of a silent
-//! no-op.
+//! Bruno writes one YAML file per request: `info` names it, `http` holds method,
+//! URL, headers, query rows, auth, and body, and `settings` the timeout and
+//! redirect choice. `auth: inherit` becomes a note rather than a silent no-op.
 
 use serde_json::Value;
 

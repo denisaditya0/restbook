@@ -1,16 +1,9 @@
 //! The destination picker shared by the save, move, and import dialogs.
 //!
-//! A request's home is one [`Destination`], and every dialog that asks for one
-//! must list the same places. The list is every collection *and every folder*,
-//! so importing a large document can put thousands of rows here. It is therefore
-//! a searchable, virtualized [`Select`] rather than a menu that builds one view
-//! per destination: the menu laid out every row on open, the select lays out only
-//! the visible ones.
-//!
-//! The selection lives in the [`SelectState`] entity, which the dialog captures.
-//! That entity is created once per dialog open, so the choice survives the
-//! content closure being rebuilt on every notify — the dialog is a controller:
-//! it reads `selected_value()` when it renders and when it commits.
+//! Every dialog that asks for a home must list the same places: every collection
+//! and folder, which for a large import can be thousands of rows, so this is a
+//! searchable, virtualized [`Select`] laying out only the visible rows. The
+//! selection lives in a [`SelectState`] entity created once per dialog open.
 
 use gpui_kit::component::select::{
     SearchableVec, Select, SelectDelegate as _, SelectItem, SelectState,

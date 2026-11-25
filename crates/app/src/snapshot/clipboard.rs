@@ -1,10 +1,8 @@
 //! The snapshot image on the system clipboard.
 //!
-//! On Windows GPUI publishes an image only under its own registered `"PNG"`
-//! format, which Paint, Firefox and the usual chat clients do not read, so a
-//! paste anywhere but a GPUI app finds nothing. The image is published as a
-//! `CF_DIB` bitmap there instead — the format those apps paste from. Everywhere
-//! else GPUI's writer is already the native one.
+//! Windows GPUI publishes images only under its own `"PNG"` format, which Paint
+//! and chat clients do not read, so there the image is published as a `CF_DIB`
+//! bitmap instead. Everywhere else GPUI's writer is already native.
 
 use gpui_kit::App;
 #[cfg(not(windows))]

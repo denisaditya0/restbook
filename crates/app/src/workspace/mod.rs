@@ -156,9 +156,9 @@ pub(crate) struct Workspace {
     /// per tick: a send notifies the document ~10-20 times a second, and only
     /// the last edit should start the debounce.
     draft_gen: u64,
-    /// The last message an action reported. Kept so [`Self::dismiss_flash`] has
-    /// something to retire and so `issue_notice` can re-read it; the kit owns the
-    /// visible toast, so this no longer needs a timer.
+    /// The last message an action reported, kept so [`Self::dismiss_flash`] has
+    /// something to retire and `issue_notice` can re-read it. The kit owns the
+    /// visible toast, so no timer is needed.
     flash: Option<chrome::Flash>,
     /// A message waiting for a `Window` to be shown in. `flash` is called from
     /// paths that have none, and a notification is window-level, so the message
@@ -596,10 +596,9 @@ impl Workspace {
                         this.open_saved(node.clone(), request.clone(), cx);
                     }
                     CollectionsEvent::OpenDraft { id } => {
-                        // The tab that holds the draft, if it is still open.
-                        // Drafts are no longer restored as tabs at startup, so a
-                        // row that has no tab is reopened from the store instead
-                        // of doing nothing.
+                        // The tab that holds the draft, if still open; otherwise
+                        // reopen from the store, since drafts are not restored as
+                        // tabs at startup.
                         if let Some(index) = this.tabs.iter().position(|tab| tab.draft == Some(*id))
                         {
                             this.select_tab(index, cx);
@@ -707,10 +706,9 @@ impl Workspace {
     /// Ask the release channel once after launch, when the preference allows it
     /// and a channel is configured.
     ///
-    /// A failed check is logged, not shown: an unreachable update server must
-    /// not be the first thing a user sees. A newer version becomes an offer the
-    /// user can act on without visiting Settings, unless that version was
-    /// skipped. The task has no window, so the offer is parked for render.
+    /// A failed check is logged, not shown. A newer version becomes an offer the
+    /// user can act on unless skipped; the task has no window, so it is parked for
+    /// render.
     fn check_updates_on_launch(&mut self, cx: &mut Context<Self>) {
         if !self.settings.read(cx).current().check_updates {
             return;
@@ -1003,11 +1001,9 @@ impl Workspace {
 
     /// Write everything a closing window still owes the disk.
     ///
-    /// Runs from `on_window_should_close` and again from the quit observers
-    /// (Cmd+Q, a session shutdown); the first call sets `flushed` so a normal
-    /// close does not write twice. The writes are synchronous on purpose: a
-    /// task spawned here would be dropped with the process, and the debounces
-    /// are exactly what stand between the last edit and the store.
+    /// Runs from `on_window_should_close` and the quit observers; `flushed` makes
+    /// the second call a no-op. The writes are synchronous on purpose: a spawned
+    /// task would be dropped with the process, losing the debounced last edit.
     pub(crate) fn flush(&mut self, cx: &mut Context<Self>) {
         if std::mem::replace(&mut self.flushed, true) {
             return;
@@ -1042,16 +1038,12 @@ impl Workspace {
         crate::logging::mark_closing();
     }
 
-    /// The close path's draft write: the same row `persist_draft` maintains,
-    /// but on the foreground because a detached write would be cancelled with
-    /// the process.
+    /// The close path's draft write: the same row `persist_draft` maintains, but on
+    /// the foreground because a detached write would be cancelled with the process.
     ///
-    /// `dirty` says a debounce was still armed, so there are edits the store
-    /// has not seen. Without it nothing new is written — the saved row keeps
-    /// its `updated_at`, so closing does not reorder the Unsaved list. A tab
-    /// that has been filed into a collection is always cleaned up, even when
-    /// its delete task has not run yet, so closing right after a save does not
-    /// bring the stale row back on the next launch.
+    /// `dirty` says a debounce was still armed. Without it the saved row keeps its
+    /// `updated_at`, so closing does not reorder the Unsaved list. A filed tab is
+    /// always cleaned up, so closing after a save cannot bring its row back.
     fn flush_draft(&mut self, dirty: bool, cx: &mut Context<Self>) {
         if self.tabs.is_empty() {
             return;
@@ -1111,12 +1103,6 @@ impl Workspace {
     }
 }
 
-/// Match the native window chrome to the app appearance: `System` hands it back
-/// to the OS, `Light`/`Dark` pin it. The component theme switches through
-/// `Theme::change`, which makes `cx.theme()` — and every fallback color in
-/// [`Palette`] — follow the same axis.
-///
-/// `System` has no `ThemeMode` variant, so the OS appearance resolves it.
 /// The tooltip of a status-bar dock toggle: what it does, plus its shortcut.
 ///
 /// The bar has no room for a label, so the tooltip is the only place the
@@ -1129,6 +1115,9 @@ fn toggle_tooltip(label: &'static str, shortcut: Option<String>) -> SharedString
     }
 }
 
+/// Match the native window chrome to the app appearance: `System` hands it back to
+/// the OS, `Light`/`Dark` pin it. Switching the component theme through
+/// `Theme::change` makes `cx.theme()` and every [`Palette`] fallback follow suit.
 fn apply_appearance(window: &mut Window, cx: &mut App) {
     let appearance = theme::appearance(cx);
     let mode = appearance.mode(Some(window.appearance()));
@@ -1272,15 +1261,9 @@ impl Render for Workspace {
         };
 
         // The trailing slot holds the app's own controls. The kit appends the
-        // real window controls (minimize/maximize/close) after everything the
-        // app adds, so this slot must NOT draw its own close button: it would
-        // sit to the left of the kit's and read as a second, broken one.
-        // What is here is grouped apart from the window controls with a hairline
-        // divider, so `menu | — □ ✕` reads as two groups.
-        //
-        // It no longer holds the panel toggles. Those live at the leading edge,
-        // beside the docks they open, because a dock control belongs on the
-        // side it controls; see `chrome::titlebar`'s `panels` slot.
+        // real window controls after everything the app adds, so this slot must
+        // NOT draw its own close button: it would read as a second, broken one.
+        // A hairline divider keeps `menu | — □ ✕` reading as two groups.
         let controls = h_flex()
             .flex_none()
             .items_center()
@@ -1288,13 +1271,9 @@ impl Render for Workspace {
             .child(environment_chip)
             .child({
                 // The window menu. Settings lives here as well as in the command
-                // palette: a mouse user has no other route to it, and an
-                // undiscoverable settings screen is the same as none.
-                //
-                // It no longer repeats the panel toggles. Every entry here is a
-                // command with no other pointer route; a pane that has a
-                // dedicated button beside the dock it lives in does not need a
-                // second entry one menu deep.
+                // palette: a mouse user has no other route. Every entry is a command
+                // with no other pointer route; a pane with a dedicated button beside
+                // its dock does not need a second entry one menu deep.
                 let workspace = cx.entity();
                 let menu = move |mut menu: PopupMenu,
                                  _: &mut Window,
@@ -1361,16 +1340,11 @@ impl Render for Workspace {
                                 copy.update(cx, |workspace, cx| workspace.copy_curl(cx));
                             }),
                     );
-                    // Save, import, and export are commands about collections, so
-                    // they live on the Collections pane. The window menu keeps
-                    // only what this window is: commands, panes, and diagnostics.
                     // The View section: the panes with no other pointer route.
-                    // Collections and the tools dock each have a toggle in the
-                    // status bar's corners, so repeating them here would be a
-                    // second way to do one thing; Request and Response have no
-                    // dedicated control, and Reset Layout below is the way back
-                    // from either. Clicking a pane reveals it and then focuses
-                    // it, the same pair the palette's focus commands run.
+                    // Collections and the tools dock each have a status-bar toggle,
+                    // so repeating them here is a second way to do one thing;
+                    // Request and Response have none, and Reset Layout is the way
+                    // back. Clicking a pane reveals it, then focuses it.
                     menu = menu.separator();
                     for &(name, visible) in &panel_visibility {
                         if Self::has_corner_toggle(name) {
@@ -2130,9 +2104,8 @@ mod tests {
     /// dock, so a click on one has to reach its handler and change the dock.
     /// This renders the real `chrome::status_bar` and clicks the real button.
     ///
-    /// The status bar is not window chrome, so it has none of the drag hazard
-    /// the titlebar had — but it is the same promise ("a click toggles the
-    /// dock"), and the moved-press case guards it either way.
+    /// The bar has none of the titlebar's drag hazard, but the moved-press case
+    /// guards the same promise either way.
     mod status_toggles {
         use std::cell::RefCell;
         use std::rc::Rc;
@@ -2294,12 +2267,11 @@ mod tests {
     }
 
     /// The titlebar's leading dock buttons are the only route back to a closed
-    /// screen, so each button is the only route back to its dock; it therefore
-    /// has to toggle, or reopening is impossible from the window itself.
+    /// dock, so each has to toggle or reopening is impossible from the window.
     ///
-    /// Building the whole `Workspace` would open a window against the real
-    /// data directory, so this drives the dock and the panes directly and runs
-    /// the same steps `toggle_sidebar` and `toggle_tools` take.
+    /// Building the whole `Workspace` would open a window against the real data
+    /// directory, so this drives the dock and panes directly, running the same
+    /// steps `toggle_sidebar` and `toggle_tools` take.
     mod dock_toggles {
         use std::sync::Arc;
 
@@ -2375,10 +2347,9 @@ mod tests {
             });
         }
 
-        /// Two tools panes sharing the dock is the shape that used to refuse to
-        /// close: the tab bar's own collapse button is hidden behind the tabs,
-        /// so the titlebar button is the only route. It must close the dock on
-        /// the second click whatever pane is in front.
+        /// Two tools panes sharing the dock: the tab bar's own collapse button is
+        /// hidden behind the tabs, so the titlebar button is the only route. It must
+        /// close the dock on the second click whatever pane is in front.
         #[gpui_kit::test]
         fn the_tools_dock_closes_with_two_panes_showing_tabs(cx: &mut TestAppContext) {
             cx.update(gpui_kit::init);

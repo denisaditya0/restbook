@@ -50,13 +50,10 @@ pub enum PartData {
     },
 }
 
-/// Headers every request carries unless the request defines one with the same
-/// name. They live here rather than in the transport's client so the Headers
-/// tab can list exactly what the engine will send: an override is a user row
-/// with the same name, and the hidden section is this list minus the rows.
-///
-/// `Content-Type` is not part of the list: it describes the body, so the body
-/// decides it and the pane derives it from the selected body kind.
+/// Headers every request carries unless the request overrides one by name.
+/// They live here, not in the transport's client, so the Headers tab can list
+/// exactly what the engine sends; `Content-Type` is excluded because the body
+/// decides it.
 pub fn default_headers() -> Vec<(String, String)> {
     vec![
         ("Accept".to_owned(), "*/*".to_owned()),

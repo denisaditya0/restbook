@@ -1,10 +1,9 @@
 //! The confirmation, the act, and the one-step undo a destructive delete
 //! offers.
 //!
-//! The panes name the thing; the canvas owns the dialog because it owns window
-//! placement. What a delete removed is captured before the pane mutates the
-//! store, and the snapshot lives exactly as long as its toast: a second delete
-//! replaces the offer, and letting the toast expire drops the snapshot.
+//! The canvas owns the dialog because it owns window placement; what a delete
+//! removed is captured before the pane mutates the store, and lives only as long
+//! as its toast.
 
 use gpui_kit::component::button::*;
 use gpui_kit::component::*;
@@ -312,10 +311,9 @@ fn stored_node_name(store: &dyn Store, id: &str) -> Option<String> {
 }
 
 impl Workspace {
-    /// Confirm a destructive delete before doing it. A modal alert dialog, not
-    /// the two-click dance the panes used to run: a dialog is what a user
-    /// expects before a collection or an environment is destroyed, it can name
-    /// the thing, and it cannot be triggered by a mis-aimed second click.
+    /// Confirm a destructive delete before doing it. A modal alert dialog: it can
+    /// name the thing, it is what a user expects before a collection or environment
+    /// is destroyed, and it cannot be triggered by a mis-aimed second click.
     pub(crate) fn open_delete_dialog(
         &mut self,
         request: PendingDelete,

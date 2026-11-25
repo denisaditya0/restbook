@@ -1,10 +1,9 @@
 //! Export a collection or the whole workspace to a file.
 //!
-//! The engine writes the format; this module owns the choices a person makes
-//! (scope, format, whether to include secrets), the save prompt, and the file
-//! write. Secrets are redacted unless the checkbox was ticked, and that tick is
-//! deliberately not remembered: a remembered "include secrets" is a silent leak
-//! on the next export.
+//! The engine writes the format; this module owns the person's choices (scope,
+//! format, secrets), the save prompt, and the write. Secrets are redacted unless
+//! ticked, and the tick is deliberately not remembered: a remembered
+//! "include secrets" is a silent leak on the next export.
 
 use std::path::PathBuf;
 

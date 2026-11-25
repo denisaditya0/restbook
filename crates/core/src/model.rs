@@ -478,9 +478,8 @@ mod tests {
     }
 
     /// A form or multipart body holds a sequence, which an internally tagged
-    /// enum cannot write as a newtype variant. Before the mirrors below, a
-    /// request with either body failed to serialize, so it could not be saved
-    /// to a collection, a draft, or history at all.
+    /// enum cannot write as a newtype variant; the mirrors below keep every
+    /// body kind round-tripping through JSON.
     #[test]
     fn every_request_body_kind_roundtrips_through_json() {
         let bodies = [

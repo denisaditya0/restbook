@@ -14,14 +14,10 @@ use super::{Selection, SortOrder};
 
 /// The rows a search shows, as index paths into `collections`.
 ///
-/// Each inner vec is a path `[collection_index, item_index, …]` naming one
-/// visible row, in pre-order and in display order. A saved request matches on
-/// its name or its stored URL, and any ancestor of a match stays visible; a
-/// collection or folder whose own name matches keeps its whole subtree. An
-/// empty query returns nothing, because the caller borrows the tree in place.
-///
-/// Paths rather than owned copies are what keep typing in the filter from
-/// deep-cloning every match: the pane walks `&collections` by these indices.
+/// Each inner vec is `[collection_index, item_index, …]` in display order. A
+/// request matches on name or stored URL and any ancestor of a match stays
+/// visible; a matching collection or folder keeps its whole subtree. Paths, not
+/// copies, keep typing in the filter from deep-cloning every match.
 pub(super) fn filter_paths(
     collections: &[Collection],
     query: &str,
@@ -192,15 +188,10 @@ pub(crate) struct ImportOutcome {
 
 /// Append `incoming` under `target`, giving every arriving node a fresh id.
 ///
-/// A file carries ids of its own and they can collide with nodes already in the
-/// tree, so nothing keeps the id it came with. A request whose name is already
-/// a direct child of `target` is skipped and reported: the same rule a batch
-/// import applies, never an overwrite. Incoming folders are always inserted as
-/// new folders — a folder is not merged by name, so two `Auth` folders can
-/// coexist where two `GET /users` requests cannot.
-///
-/// `None` when the collection or a folder on the path is gone; the caller then
-/// has nothing safe to write.
+/// File ids can collide, so nothing keeps its id. A request named like an
+/// existing direct child of `target` is skipped and reported, never overwritten;
+/// folders are always inserted new, so two `Auth` folders can coexist where two
+/// `GET /users` requests cannot. `None` when the target path is gone.
 pub(crate) fn import_into(
     collections: &mut [Collection],
     target: &Destination,
@@ -445,12 +436,9 @@ fn path_to_request(items: &[CollectionItem], id: &str, folders: &mut Vec<String>
 
 /// Move a saved request to another collection or folder.
 ///
-/// Returns the ids that changed, target first: that is also the order they must
-/// be written in, so a failure between the two writes leaves the request in two
-/// places rather than in none.
-///
-/// `None` means nothing changed — an unknown request or target, or a move to the
-/// folder the request already lives in.
+/// Returns the ids that changed, target first — also the write order, so a failure
+/// between the two writes leaves the request in two places, not none. `None` means
+/// nothing changed: an unknown request or target, or a move into the same folder.
 pub(crate) fn move_to(
     collections: &mut [Collection],
     id: &str,

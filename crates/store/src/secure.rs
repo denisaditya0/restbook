@@ -1,15 +1,9 @@
 //! Create the files and directories this app owns with a private mode.
 //!
-//! The history database, a JSONL history and its snapshot, `restbook.local.json`,
-//! and the app's log, settings, and layout can each hold a credential or a
-//! response body. A plain `File::create` takes its mode from the umask (0644 on
-//! a default install), so on Unix a file this module creates is `0600` and a
-//! directory it creates is `0700`. Windows has no mode to set — the user account
-//! is the boundary — so every helper is a plain passthrough there.
-//!
-//! These helpers only tighten what the app owns. An existing directory keeps its
-//! mode, because a workspace root is a user's own checkout and changing its
-//! permissions is not this app's decision.
+//! These can hold a credential or a response body, and a plain `File::create`
+//! takes its mode from the umask (0644 by default). So on Unix a file is `0600`
+//! and a directory `0700`; Windows has no mode to set, so every helper is a
+//! passthrough. An existing directory keeps its mode: it is the user's checkout.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};

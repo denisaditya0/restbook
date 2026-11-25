@@ -32,11 +32,9 @@ const SETTING_GLOBALS: &str = "globals";
 const SETTING_FTS_BACKFILLED: &str = "fts_backfilled";
 
 /// Contentless (`content=''`) so the index holds no second copy of the history,
-/// keyed by the execution id as its rowid. The trigram tokenizer provides the
-/// substring search that `LIKE '%q%'` used to.
-///
-/// Not part of `SCHEMA`: a build without FTS5/trigram must still open the
-/// database, so this runs separately and only success marks the store indexed.
+/// keyed by the execution id as its rowid; the trigram tokenizer provides the
+/// substring search. Created outside `SCHEMA` so a build without FTS5/trigram
+/// still opens the database, and only success marks the store indexed.
 const CREATE_HISTORY_FTS: &str = "CREATE VIRTUAL TABLE IF NOT EXISTS history_fts \
      USING fts5(url, method, name, content='', tokenize='trigram');";
 

@@ -248,10 +248,9 @@ fn mark_runs(
 /// Merge syntax runs and search marks into one sorted, non-overlapping list.
 ///
 /// `StyledText::with_highlights` walks ranges in order and assumes they do not
-/// overlap. Appending a mark that sits inside a syntax run put it *after* the
-/// run, so the mark was painted past the end of the text and nothing appeared
-/// at the match. Splitting the run around the mark keeps the token's colour on
-/// either side and gives the mark its background.
+/// overlap; a mark inside a syntax run was painted past the text end. Splitting
+/// the run around the mark keeps the token's colour on either side and gives the
+/// mark its background.
 fn merge_highlight_runs(
     text_len: usize,
     base: &[(Range<usize>, HighlightStyle)],
@@ -1100,15 +1099,12 @@ impl ResponsePanel {
         (text, truncated)
     }
 
-    /// The response header: what was received on the left, how it went on the
-    /// right — `Body | Headers 3 | Cookies` … `200 OK · 593 ms · 12.17 KB ·
-    /// 🕘 1 minute ago`. One line, because the response is read far more often
-    /// than its headers are compared.
+    /// The response header: what was received on the left, how it went on the right —
+    /// `Body | Headers 3 | Cookies` … `200 OK · 593 ms · 12.17 KB · 🕘 1 minute ago`.
     ///
-    /// The copy controls are **not** here. They act on the body, which the
-    /// Headers and Cookies tabs do not show, so the header was offering a copy
-    /// of something absent from the tab it was drawn under. They live in the
-    /// body's own toolbar; see [`Self::render_body_toolbar`].
+    /// The copy controls live in the body's own toolbar instead, because they act on
+    /// the body, which the Headers and Cookies tabs do not show; see
+    /// [`Self::render_body_toolbar`].
     fn render_header(&self, response: &ResponseRecord, cx: &mut Context<Self>) -> AnyElement {
         let palette = &self.palette;
         // One selectable run, not three spans of chrome: the summary the user
@@ -1503,14 +1499,10 @@ impl ResponsePanel {
 
     /// The body's own toolbar: the format switch and both copy controls.
     ///
-    /// These describe the payload, so they belong beside it rather than in the
-    /// header, which also draws for the Headers and Cookies tabs. Moving them
-    /// here is what makes the header one line of facts — status, time, size —
-    /// with no controls whose target is off-screen.
-    ///
-    /// The summary copy stays even though the summary is selectable: a drag is
-    /// the fine-grained gesture, and the button is the one-click "give me the
-    /// whole thing" that does not depend on hitting a row boundary.
+    /// These describe the payload, so they belong beside it rather than in the header,
+    /// which also draws for the Headers and Cookies tabs. The summary copy stays even
+    /// though the summary is selectable: the button is the one-click "give me the whole
+    /// thing" that needs no row boundary.
     fn render_body_toolbar(&self, response: &ResponseRecord, cx: &mut Context<Self>) -> AnyElement {
         let palette = &self.palette;
         let (summary, _) = summary_for(response, palette);
@@ -2271,13 +2263,11 @@ impl ResponsePanel {
             .into_any_element()
     }
 
-    /// `Idle` means nothing has been sent (or the response was wiped), so
-    /// there is no pending branch here: a live send renders through
-    /// [`ResponsePanel::render_status`].
+    /// `Idle` means nothing has been sent (or the response was wiped), so there is no
+    /// pending branch here; a live send renders through [`ResponsePanel::render_status`].
     ///
-    /// The empty state names the next actions and their live shortcuts, the
-    /// same rows the shortcuts sheet draws, so the keys read per OS instead of
-    /// a hardcoded glyph.
+    /// The empty state names the next actions and their live shortcuts, the same rows
+    /// the shortcuts sheet draws, so the keys read per OS instead of a hardcoded glyph.
     fn render_idle(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let actions = vec![
             Action::new("Send request", shortcut(&SendRequest, window)),
@@ -3274,11 +3264,9 @@ mod render_tests {
 
     /// The tab badge's count is parsed once, when the body is decoded.
     ///
-    /// It used to split every `Set-Cookie` header inside `render_tabs`, which
-    /// runs on every frame; a scroll alone repaints continuously, so a response
-    /// with many cookies paid for the badge on each one. What is asserted is the
-    /// cache: the count is stored with the decoded body, so a repaint reads it
-    /// instead of recomputing it.
+    /// Recomputing it in `render_tabs` would split every `Set-Cookie` header on every
+    /// frame, and a scroll repaints continuously. The count is cached with the decoded
+    /// body, so a repaint reads it instead of recomputing it.
     #[test]
     fn the_cookie_count_is_cached_with_the_body() {
         let mut record = json_response("{\"a\":1}");
@@ -3332,11 +3320,10 @@ mod render_tests {
 
     /// 6.2: the recorded bounds as a deterministic text tree.
     ///
-    /// A real screenshot needs a GPU and a font stack, which the mock window
-    /// does not have. What it does record is the bounds of every element that
-    /// opted in with `debug_selector`, so the tree is the assertion and the file
-    /// under `target/preview/` is the visual diff: two builds can be compared
-    /// with `git diff`, and a pane whose layout moved shows up as changed lines.
+    /// A real screenshot needs a GPU and a font stack, which the mock window lacks. It
+    /// records the bounds of every element that opted in with `debug_selector`, so the
+    /// tree is the assertion and the file under `target/preview/` is the visual diff: a
+    /// pane whose layout moved shows up as changed lines.
     #[test]
     fn a_pane_has_a_deterministic_element_tree() {
         let mut cx = TestAppContext::single();
@@ -3369,11 +3356,10 @@ mod render_tests {
 
     /// The copy controls belong to the body, not the header strip.
     ///
-    /// The header also draws for the Headers and Cookies tabs, so a copy button
-    /// there offers a copy of something the current tab does not show. They
-    /// moved into the body's own toolbar, which only the Body tab draws. The
-    /// assertion is positional: each button's top edge is at or below the
-    /// toolbar's, and the toolbar is below the header's summary row.
+    /// The header also draws for the Headers and Cookies tabs, so a copy button there
+    /// offers something the current tab does not show; the toolbar only the Body tab
+    /// draws does. The assertion is positional: each button's top edge is at or below
+    /// the toolbar's, which is below the header's summary row.
     #[test]
     fn the_copy_controls_live_in_the_body_toolbar() {
         let mut cx = TestAppContext::single();

@@ -112,15 +112,11 @@ pub(crate) fn bindings(cx: &App) -> Vec<KeyBinding> {
         bound(cx, "secondary-+", ZoomIn, None),
         bound(cx, "secondary--", ZoomOut, None),
         bound(cx, "secondary-0", ResetZoom, None),
-        // The two dock toggles. The pair mirrors the `[` and `]` shapes of the
-        // bars they move — left bracket for the left dock, slash for the right
-        // — so neither needs a modifier beyond `secondary`. The keys are spelled
-        // *unshifted* on purpose: `\` and `/` are shifted-glyph keys on the US
-        // layout, and Windows reports the typed stroke by its produced character
-        // (`|` and `?`). GPUI's mapper folds that character back to the physical
-        // key and clears `shift`, so binding `secondary-/` matches the Ctrl+Shift
-        // press; binding `secondary-shift-/` would look for a stroke whose key is
-        // literally `/` with shift held, which no layout emits.
+        // The two dock toggles. Spelled *unshifted* on purpose: `\` and `/` are
+        // shifted-glyph keys on the US layout, and GPUI folds the produced
+        // character (`|`, `?`) back to the physical key and clears `shift`, so
+        // `secondary-/` matches the Ctrl+Shift press while `secondary-shift-/`
+        // matches no stroke any layout emits.
         bound(cx, "secondary-\\", ToggleSidebar, None),
         bound(cx, "secondary-/", ToggleTools, None),
         // Emacs-style next/previous inside the command palette. The palette

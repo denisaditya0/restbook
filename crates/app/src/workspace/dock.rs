@@ -1,10 +1,8 @@
 //! Where panels go, and what the user is told about it.
 //!
 //! A pane names itself; this module decides which dock holds it, whether that
-//! dock is open, and how it is brought to the front. The same module owns the
-//! one message channel to the user: every action that finishes, fails, or has
-//! an undo to offer says so through [`Workspace::flash`], which parks the
-//! message because most callers have no `Window` to push a notification to.
+//! dock is open, and how it is brought to the front. Every outcome says so
+//! through [`Workspace::flash`], which parks the message for a `Window`-less caller.
 
 use std::cell::Cell;
 use std::sync::Arc;
@@ -51,12 +49,9 @@ impl Workspace {
 
     /// The named panes in one split, in order.
     ///
-    /// The split's axis follows the workspace's `center_orientation`: Request
-    /// over Response by default, or side by side when the user flips it. `sizes`
-    /// is a restored split's slot sizes, in the same order as `names`. It is only
-    /// a starting point: the user drags the handle from there, and an absent or
-    /// short list leaves that slot unconstrained, which makes the split share the
-    /// space evenly.
+    /// The axis follows `center_orientation`. `sizes` is a restored split's slot
+    /// sizes, in the same order as `names`, and is only a starting point: an
+    /// absent or short list leaves that slot to share the space evenly.
     pub(crate) fn stack_layout(
         &self,
         names: &[PanelName],
@@ -119,9 +114,8 @@ impl Workspace {
     /// Show a confirmation in the bottom-right for a few seconds.
     ///
     /// Actions routed through an event arrive without a `Window`, so
-    /// `push_notification` is unavailable; this is the replacement. A new flash
-    /// replaces the pending clear, so two quick saves do not leave the first one's
-    /// timer to wipe the second one's message.
+    /// `push_notification` is unavailable. A new flash replaces the pending clear,
+    /// so two quick saves do not leave the first one's timer to wipe the second.
     pub(crate) fn flash(
         &mut self,
         kind: chrome::FlashKind,
@@ -137,11 +131,9 @@ impl Workspace {
 
     /// Hand the parked flash to the kit's notification layer.
     ///
-    /// A notification is window-level, and most of the paths that report an
-    /// outcome have no `Window`, so [`Self::flash`] parks the message and this
-    /// issues it from render. The kit stacks these above dialogs, which is what
-    /// the hand-drawn toast could not do: it was part of the dock tree, so an
-    /// open dialog covered it.
+    /// A notification is window-level, and most paths that report an outcome have
+    /// no `Window`, so [`Self::flash`] parks the message and this issues it from
+    /// render. The kit stacks these above dialogs.
     pub(crate) fn issue_notice(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(flash) = self.pending_notice.take() else {
             return;
@@ -310,11 +302,9 @@ impl Workspace {
     /// Make the Collections pane re-read the tree after an undo restored a
     /// collection or an item.
     ///
-    /// The pane has no public reload hook, but `delete_collection` always
-    /// re-reads the store, and deleting an unknown id is a documented no-op.
-    /// This ID cannot collide with a real one (ids are generated), so the call
-    /// is only the refresh seam; its own "Deleted collection." notice is
-    /// replaced by the undo result flashed by the caller.
+    /// There is no public reload hook, but `delete_collection` always re-reads the
+    /// store and deleting an unknown id is a documented no-op. `REFRESH_ID` is
+    /// generated-safe, and its own notice is replaced by the caller's undo result.
     pub(crate) fn reload_collections(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         const REFRESH_ID: &str = "restbook-refresh-only";
         self.panes.collections.update(cx, |panel, cx| {
@@ -460,12 +450,9 @@ impl Workspace {
 
     /// Bring a pane to the front.
     ///
-    /// The left dock is the collection tree and nothing else; History and
-    /// Environment live in the wider right-hand tools dock, where the
-    /// environment's key/value rows and controls have room. Rebuilding a dock
-    /// as a single tab group is deliberate: it is the arrangement the app
-    /// ships with, and a pane the user asks for should not be hidden behind
-    /// another one.
+    /// Collections is the left dock alone; History and Environment live in the
+    /// wider right-hand tools dock. Rebuilding the dock as a single tab group is
+    /// deliberate: a pane the user asks for should not be hidden behind another.
     pub(crate) fn reveal_panel(
         &mut self,
         name: PanelName,

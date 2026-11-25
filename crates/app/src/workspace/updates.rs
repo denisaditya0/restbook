@@ -33,13 +33,12 @@ pub(crate) struct PendingUpdate {
 }
 
 impl Workspace {
-    /// Ask whether to install a newer release, without sending the user to
-    /// Settings first.
+    /// Ask whether to install a newer release, without sending the user to Settings
+    /// first.
     ///
-    /// A plain dialog with a composed footer, not an alert: an alert's
-    /// confirm/cancel pair has no room for *Skip this version*, and nothing here
-    /// is destructive. The download, the `sha256` check, and handing the package
-    /// to the OS are [`Updates::install`]'s job; this decides whether to start it.
+    /// A plain dialog with a composed footer, not an alert: an alert has no room for
+    /// *Skip this version*, and nothing here is destructive. The download, `sha256`
+    /// check, and OS hand-off are [`Updates::install`]'s job; this decides to start.
     pub(crate) fn open_update_offer_dialog(
         &mut self,
         offer: PendingUpdate,
@@ -130,11 +129,10 @@ impl Workspace {
 
 /// Whether a found release should be offered to the user.
 ///
-/// Two ways a newer version is still not worth interrupting for: the user
-/// already said *Skip this version*, or the manifest publishes no build for
-/// this platform, in which case an offer could not be acted on. The second is
-/// the caller's business — it has the `Option<Asset>` — so this is the skip
-/// rule alone, kept apart from the task so it can be tested without a manifest.
+/// A newer version is not worth interrupting for if the user already said *Skip
+/// this version*, or the manifest publishes no build for this platform. The second
+/// is the caller's business, so this is the skip rule alone, kept testable without
+/// a manifest.
 pub(crate) fn should_offer(current: &settings::AppSettings, latest: &str) -> bool {
     current.skipped_update.as_deref() != Some(latest)
 }

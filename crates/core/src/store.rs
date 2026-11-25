@@ -27,12 +27,9 @@ pub struct HistoryEntry {
 /// The saved request or draft a send belonged to.
 ///
 /// This is the *owner*, not the request text: `Saved` carries the tree node id,
-/// so a rename, reorder, or move (all of which keep the node id) leaves the
-/// history linked. Collection and folder ids are deliberately absent — they are
-/// a tree fact, and duplicating them here would make every move rewrite history.
-///
-/// `RequestDef::id` cannot serve this purpose: the editor emits an empty id at
-/// send time, so a sent request carries no usable identity of its own.
+/// so a rename, reorder, or move keeps the node id and the history stays
+/// linked. Collection and folder ids are absent — duplicating them would make
+/// every move rewrite history — and `RequestDef::id` is empty at send time.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Origin {
@@ -69,11 +66,9 @@ pub struct HistoryHit {
 
 /// The narrowing a history search applies before its row limit.
 ///
-/// Every field is empty or `None` by default, so `HistoryFilter::default()` is
-/// the unfiltered search. A status class is its first digit (`2` keeps
-/// `200..=299`), because a history list is scanned for outcomes rather than for
-/// one exact code. The filter is applied before `limit`, so a restricted list
-/// still fills its page.
+/// Every field defaults to empty, so `HistoryFilter::default()` is unfiltered.
+/// A status class is its first digit (`2` keeps `200..=299`). The filter is
+/// applied before `limit`, so a restricted list still fills its page.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HistoryFilter {
     /// Methods to keep, matched case-insensitively; empty means any.
@@ -159,11 +154,9 @@ pub trait Store: Send + Sync + 'static {
 
     /// History owned by one saved request or draft, newest first.
     ///
-    /// `Ok(None)` means this backend cannot answer by owner yet, and the caller
-    /// should fall back to a URL search. A backend that stores the owner returns
-    /// `Ok(Some(rows))`, with an empty vector meaning "this owner has no sends" —
-    /// which is *not* the same thing as unsupported. The filter applies the same
-    /// way it does to [`Store::search_history`].
+    /// `Ok(None)` means the backend cannot answer by owner and the caller should
+    /// fall back to a URL search; `Ok(Some(rows))` with an empty vector means the
+    /// owner has no sends. The filter applies as in [`Store::search_history`].
     fn history_for_origin(
         &self,
         _origin: &Origin,

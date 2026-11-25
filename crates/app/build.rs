@@ -1,27 +1,14 @@
 //! Embeds the Windows executable's resources: its icon and its version info.
 //!
-//! This is the only branding the *build* owns. macOS and Linux take their icon
-//! from packaging (the `.app` bundle and the hicolor icon theme), so on those
-//! targets this script has nothing to do and returns immediately — which is why
-//! `winres` is a `cfg(windows)` build dependency rather than a general one.
+//! This is the only branding the *build* owns; macOS and Linux take theirs from
+//! packaging, so on those targets the script does nothing and `winres` is a
+//! `cfg(windows)` dependency. The values are repeated as literals because a
+//! build script cannot read `src/branding.rs`.
 //!
-//! Everything it writes comes from one place: `src/branding.rs` is *not* read
-//! here (a build script cannot depend on the crate it builds), so the values are
-//! repeated as literals and the re-run guards below watch the icon and the
-//! environment instead. The duplication is a handful of strings, and the
-//! alternative — generating a Rust file from the build script — would make the
-//! identity un-greppable.
-//!
-//! # Why the GNU toolchain gets a warning
-//!
-//! `winres` emits a COFF object with a `.rsrc` section, and the linker merges it
-//! with the manifest Rust puts in the same section. The MSVC linker merges every
-//! contribution. The GNU `ld` does not: it keeps one `.rsrc` and **silently
-//! drops the rest**, so a GNU build links with a manifest and nothing else — no
-//! icon, no version block. The release matrix builds `windows-msvc`
-//! (`10-release-and-updates.md`), where this works, but a local GNU build is the
-//! documented one on this machine, so the script says so instead of leaving a
-//! generic-icon binary with no explanation.
+//! The GNU `ld` keeps only one `.rsrc` section and silently drops the rest, so a
+//! GNU build links the manifest without the icon or version block. The release
+//! matrix builds MSVC, where the merge works; the script warns rather than leave
+//! a generic-icon binary unexplained.
 
 fn main() {
     // Compile-time inputs. Declared on every platform so a change re-runs the

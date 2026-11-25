@@ -1,25 +1,9 @@
 //! Wire-form text for a list of [`Kv`] rows.
 //!
-//! A `Form` body and the query-parameter list are both a `Vec<Kv>`, and both are
-//! one `a=1&b=2` string on the wire. This module is the round trip between the
-//! two, so a raw editor can show that string without owning the encoding rules.
-//! `parse` decodes and `render` encodes; the transport still encodes for the
-//! actual send, so a decoded value is not encoded twice.
-//!
-//! The canonical text is one pair per line. `&` is also accepted as a separator,
-//! because that is what gets pasted in from a URL or a browser's form view.
-//!
-//! - A line beginning with `#` is a disabled row (`# key=value`). A key that
-//!   really starts with `#` is written `%23`, so the marker is unambiguous.
-//! - `+` and `%XX` decode to their bytes. An escape that is incomplete or not
-//!   hex stays literal, so pasting a stray `%` cannot lose text.
-//! - `render` keeps `A-Za-z0-9-._~`, writes a space as `%20`, and writes every
-//!   other byte as `%XX`. A value reachable from the table stays readable and
-//!   unambiguously re-parses.
-//! - A segment without `=` is a key with an empty value. Blank segments and
-//!   segments with an empty key are dropped, the same rows a send skips.
-//! - `secret` has no wire form: request parameters and form fields do not carry
-//!   it, so a parsed row is never secret.
+//! A `Form` body and the query-parameter list are both a `Vec<Kv>` and both one
+//! `a=1&b=2` string on the wire; `parse` decodes it, `render` encodes it, and a
+//! leading `#` disables a row (a real `#` is written `%23`). An incomplete
+//! escape stays literal, and a parsed row is never `secret` — no wire form.
 
 use crate::model::Kv;
 

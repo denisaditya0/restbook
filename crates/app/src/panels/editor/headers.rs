@@ -1,10 +1,9 @@
 //! The Headers tab: request headers, plus the generated defaults.
 //!
-//! Rows the user writes are the request's own headers. Headers the client adds
-//! on every send (and the body's `Content-Type`) are not part of the request,
-//! so they live in a collapsed "Default headers" section beneath the table,
-//! the way a web client hides its generated headers. An enabled row above with
-//! the same name overrides the default and drops it from the section.
+//! Rows the user writes are the request's own headers. Headers the client adds on
+//! every send (and the body's `Content-Type`) are not part of the request, so they
+//! live in a collapsed "Default headers" section beneath the table. An enabled row
+//! with the same name overrides the default and drops it from the section.
 
 use gpui_kit::component::button::*;
 use gpui_kit::component::{h_flex, v_flex, IconName};

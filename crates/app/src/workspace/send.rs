@@ -177,13 +177,10 @@ impl Workspace {
                             }
                             this.document.update(cx, |document, cx| {
                                 if document.is_pending() {
-                                    // The elapsed clock is derived from
-                                    // `started_at` at paint time, so every tick
-                                    // must repaint even when no bytes arrived
-                                    // and the snapshot is unchanged. Only
-                                    // rewrite the snapshot when it actually
-                                    // differs, to keep that value from
-                                    // churning.
+                                    // The elapsed clock derives from `started_at` at
+                                    // paint time, so every tick must repaint even when
+                                    // no bytes arrived. Rewrite the snapshot only when
+                                    // it differs, to keep it from churning.
                                     if document.progress != Some(now) {
                                         document.progress = Some(now);
                                     }

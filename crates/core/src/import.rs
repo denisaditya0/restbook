@@ -293,11 +293,9 @@ impl ImportFormat {
     /// The format whose envelope this text matches, by shape rather than file
     /// name; `curl` is the fallback.
     ///
-    /// JSON formats are told apart by their *top-level* keys, not by keys
-    /// anywhere in the text: a 29 MB OpenAPI document mentions `log` and
-    /// `entries` in its own schemas and was read as a HAR. Postman is `info` +
-    /// `item`, not `info` + `schema`: `schema` is optional, and a lone `info`
-    /// used to fall through to the curl parser.
+    /// JSON formats are told apart by their *top-level* keys: a document can
+    /// mention `log` or `entries` in its own schemas, and Postman is `info` +
+    /// `item` rather than `info` + the optional `schema`.
     pub fn detect(text: &str) -> Self {
         let trimmed = text.trim_start();
         if !trimmed.starts_with('{') {
