@@ -265,6 +265,11 @@ impl Workspace {
                 dock.remove_dock(DockPlacement::Right, window, cx);
             }
         });
+
+        // The header's toggle glyph names the orientation that is now installed,
+        // so it follows every path that rebuilds the centre — the saved layout,
+        // the first-run default, and a reset.
+        self.push_center_orientation(cx);
     }
 
     /// layout debounce. A burst of typing costs one write; only the active tab is

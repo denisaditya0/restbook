@@ -348,7 +348,6 @@ pub(crate) fn status_bar(
     workspace: &WorkspaceChip,
     status: &Status,
     left_toggle: AnyElement,
-    center_toggle: AnyElement,
     right_toggle: AnyElement,
 ) -> AnyElement {
     let mut right = h_flex().items_center().gap(px(metrics.space_md));
@@ -441,7 +440,6 @@ pub(crate) fn status_bar(
                 .child(storage_chip)
                 .child(history_chip)
                 .child(div().flex_1())
-                .child(center_toggle)
                 .child(right)
                 .child(right_toggle),
         )
@@ -686,7 +684,6 @@ mod render_tests {
                         history: self.0,
                     },
                     &super::Status::default(),
-                    gpui_kit::Empty.into_any_element(),
                     gpui_kit::Empty.into_any_element(),
                     gpui_kit::Empty.into_any_element(),
                 ))

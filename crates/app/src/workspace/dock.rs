@@ -99,11 +99,22 @@ impl Workspace {
                 .update(cx, |dock, cx| dock.set_center(layout, window, cx));
         }
         self.persist_tabs(cx);
+        self.push_center_orientation(cx);
         let message = match self.center_orientation {
             CenterOrientation::Stacked => "Stacked",
             CenterOrientation::SideBySide => "Side by side",
         };
         self.flash(chrome::FlashKind::Success, message, cx);
+    }
+
+    /// Hand the centre's orientation to the response pane, which draws the
+    /// split toggle's glyph. The canvas owns the split; the pane only mirrors the
+    /// next action, so this is called after every install, reset, and flip.
+    pub(crate) fn push_center_orientation(&mut self, cx: &mut Context<Self>) {
+        let side = self.center_orientation == CenterOrientation::SideBySide;
+        self.panes
+            .response
+            .update(cx, |panel, cx| panel.set_center_side_by_side(side, cx));
     }
     /// Show a confirmation in the bottom-right for a few seconds.
     ///

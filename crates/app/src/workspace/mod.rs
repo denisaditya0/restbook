@@ -205,6 +205,9 @@ pub(crate) struct Workspace {
     /// Whether the response pane asked for an image snapshot. Same deferral as
     /// `pending_history`: its event carries no window, and a dialog needs one.
     pending_snapshot: bool,
+    /// Whether the response pane asked to flip the centre split. Same deferral:
+    /// rebuilding the dock needs a window the event does not carry.
+    pending_toggle_split: bool,
     /// The snapshot dialog's "include secrets" tick. Reset every time the dialog
     /// opens, like the export picker's, so a remembered tick cannot leak.
     pub(crate) snapshot_include_secrets: bool,
@@ -436,6 +439,7 @@ impl Workspace {
             export_state: ExportState::default(),
             pending_history: false,
             pending_snapshot: false,
+            pending_toggle_split: false,
             snapshot_include_secrets: false,
             snapshot_compact: false,
             pending_delete: None,
@@ -534,6 +538,10 @@ impl Workspace {
                     }
                     ResponseEvent::Snapshot => {
                         this.pending_snapshot = true;
+                        cx.notify();
+                    }
+                    ResponseEvent::ToggleSplit => {
+                        this.pending_toggle_split = true;
                         cx.notify();
                     }
                     ResponseEvent::Retry => this.send(cx),
@@ -1186,6 +1194,17 @@ impl Render for Workspace {
             });
         }
 
+        // The split flip rebuilds the dock, which needs a window the response
+        // pane's event does not carry, so it runs after this element returns.
+        if std::mem::take(&mut self.pending_toggle_split) {
+            let this = cx.entity();
+            window.defer(cx, move |window, cx| {
+                this.update(cx, |workspace, cx| {
+                    workspace.toggle_center_orientation(window, cx);
+                });
+            });
+        }
+
         // And the same for the delete confirmation: an alert dialog is a
         // window-level overlay, so it opens after this element returns.
         if let Some(request) = self.pending_delete.take() {
@@ -1479,29 +1498,6 @@ impl Render for Workspace {
                 .into_any_element()
         };
 
-        // The centre split control. Its glyph names the state the click leads
-        // to — two columns to go side by side, three rows to stack — so the
-        // bar reads the next action without a tooltip. It sits just left of the
-        // right-hand dock toggle because it is the centre's own control.
-        let center_toggle = {
-            let target = cx.entity();
-            let (icon, tooltip) = match self.center_orientation {
-                CenterOrientation::Stacked => (IconName::Columns2, "Split side by side"),
-                CenterOrientation::SideBySide => (IconName::Rows3, "Stack request over response"),
-            };
-            Button::new("status-toggle-split")
-                .icon(icon)
-                .ghost()
-                .compact()
-                .tooltip(tooltip)
-                .on_click(move |_, window, cx| {
-                    target.update(cx, |workspace, cx| {
-                        workspace.toggle_center_orientation(window, cx)
-                    });
-                })
-                .into_any_element()
-        };
-
         v_flex()
             .size_full()
             .bg(palette.background)
@@ -1580,7 +1576,6 @@ impl Render for Workspace {
                 },
                 &status,
                 left_toggle,
-                center_toggle,
                 right_toggle,
             ))
     }
@@ -2214,7 +2209,6 @@ mod tests {
                         },
                         &chrome::Status::default(),
                         left_toggle,
-                        gpui_kit::Empty.into_any_element(),
                         right_toggle,
                     ))
             }

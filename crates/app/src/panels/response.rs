@@ -66,6 +66,9 @@ pub(crate) enum Event {
     DeleteCookie { name: String },
     /// Replace one cookie's value in the shared jar.
     UpdateCookie { name: String, value: String },
+    /// Flip the centre between stacked and side by side. The canvas owns the
+    /// split and the orientation state, so the pane only reports the intent.
+    ToggleSplit,
 }
 
 /// One line for the interaction log. Exhaustive, so a new variant must name
@@ -80,7 +83,18 @@ impl Event {
             Event::UpdateCookie { name, .. } => {
                 format!("event: response cookie update {name}")
             }
+            Event::ToggleSplit => "event: response toggle split".to_owned(),
         }
+    }
+}
+
+/// The split toggle's glyph and tooltip name the action the click leads to:
+/// showing the current state would offer the wrong verb.
+fn split_toggle_action(side_by_side: bool) -> (IconName, &'static str) {
+    if side_by_side {
+        (IconName::Rows3, "Stack request over response")
+    } else {
+        (IconName::Columns2, "Split side by side")
     }
 }
 
@@ -194,6 +208,10 @@ pub(crate) struct ResponsePanel {
     /// untouched, so this is what tells the pane its in-flight strip has
     /// become a failure view.
     painted: (ResponseState, Option<String>),
+    /// The centre's current split, pushed by the workspace like the tab list:
+    /// the pane draws the toggle's next-action glyph from it, but the workspace
+    /// owns the orientation and decides what the click does.
+    center_side_by_side: bool,
     focus_handle: FocusHandle,
 }
 
@@ -876,6 +894,7 @@ impl ResponsePanel {
             failure_log: None,
             failure_painted: false,
             painted: (ResponseState::Idle, None),
+            center_side_by_side: false,
             focus_handle: cx.focus_handle(),
         };
         panel.sync_history(cx);
@@ -889,6 +908,16 @@ impl ResponsePanel {
         // Highlight colours were resolved once into the display cache; a theme
         // change has to discard them so the next draw uses the new syntax theme.
         self.display = None;
+    }
+
+    /// Take the centre's orientation from the workspace, which owns it. The
+    /// header's toggle glyph names the state the click leads to, so it has to
+    /// follow every flip, install, and reset.
+    pub(crate) fn set_center_side_by_side(&mut self, side: bool, cx: &mut Context<Self>) {
+        if self.center_side_by_side != side {
+            self.center_side_by_side = side;
+            cx.notify();
+        }
     }
 
     /// Refresh the cached history when the current request or its newest
@@ -1122,6 +1151,24 @@ impl ResponsePanel {
                     )),
             )
             .children(self.render_history(cx))
+            .child(self.render_split_toggle(cx))
+            .into_any_element()
+    }
+
+    /// The centre-split toggle, at the header's right edge. It sits with the
+    /// response because the split is Request-over-Response; the glyph names the
+    /// action the click leads to (two columns to go side by side, three rows to
+    /// stack), and the workspace performs the flip. Shown here rather than in a
+    /// global bar so the control sits beside the pane it divides.
+    fn render_split_toggle(&self, cx: &mut Context<Self>) -> AnyElement {
+        let (icon, tooltip) = split_toggle_action(self.center_side_by_side);
+        Button::new("response-split-toggle")
+            .icon(icon)
+            .ghost()
+            .compact()
+            .tooltip(tooltip)
+            .debug_selector(|| "response-split-toggle".to_owned())
+            .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::ToggleSplit)))
             .into_any_element()
     }
 
@@ -2744,10 +2791,24 @@ mod tests {
     // `#[test]`, and `use super::*` would drag it in.
     use super::{
         display_key, failure_hint, find_rows, highlights_by_line, mark_runs, response_language,
-        summary_line,
+        split_toggle_action, summary_line,
     };
     use gpui_kit::HighlightStyle;
     use restbook_core::FailureKind;
+
+    /// The header puts the toggle's glyph and tooltip on the *next* action, not
+    /// the current state: a side-by-side centre offers "stack", a stacked one
+    /// offers "split". Reading the current state would name the opposite verb.
+    #[test]
+    fn the_split_toggle_names_the_next_action() {
+        let (icon, tooltip) = split_toggle_action(false);
+        assert_eq!(tooltip, "Split side by side");
+        assert!(matches!(icon, crate::icons::IconName::Columns2));
+
+        let (icon, tooltip) = split_toggle_action(true);
+        assert_eq!(tooltip, "Stack request over response");
+        assert!(matches!(icon, crate::icons::IconName::Rows3));
+    }
 
     #[test]
     fn the_summary_copy_string_joins_the_parts_and_styles_every_byte() {
@@ -3253,6 +3314,7 @@ mod render_tests {
         "response-pane",
         "response-summary",
         "response-tabs",
+        "response-split-toggle",
         "response-body-toolbar",
         "response-copy-body",
         "response-copy-summary",
@@ -3352,6 +3414,45 @@ mod render_tests {
                  button at {top}, toolbar at {toolbar}"
             );
         }
+
+        cx.quit();
+    }
+
+    /// The centre-split toggle belongs to the response header, not the body's
+    /// toolbar. It divides Request from Response, so it sits beside the status
+    /// summary and stays put on the Headers and Cookies tabs too. The assertion
+    /// is positional: the toggle's top is above the body toolbar, which only the
+    /// Body tab draws.
+    #[test]
+    fn the_split_toggle_lives_in_the_response_header() {
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+
+        let (_view, cx) = open(&mut cx, Some(json_response("{\"status\": \"OK\"}")));
+        draw(cx);
+
+        let text = tree::bounds_tree(cx, "response-split", TREE_SELECTORS);
+        let top_of = |selector: &str| -> f32 {
+            text.lines()
+                .filter(|line| line.contains(selector))
+                .find(|line| line.contains('@'))
+                .unwrap_or_else(|| panic!("{selector} should be in the tree:\n{text}"))
+                .split('@')
+                .nth(1)
+                .and_then(|rest| rest.split(',').nth(1))
+                .and_then(|top| top.split_whitespace().next())
+                .unwrap_or_else(|| panic!("a recorded top in {selector}"))
+                .parse()
+                .expect("a numeric top")
+        };
+
+        let toggle = top_of("response-split-toggle");
+        let toolbar = top_of("response-body-toolbar");
+        assert!(
+            toggle < toolbar,
+            "the split toggle belongs to the header, above the body toolbar: \
+             toggle at {toggle}, toolbar at {toolbar}"
+        );
 
         cx.quit();
     }
