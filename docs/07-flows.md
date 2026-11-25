@@ -34,7 +34,7 @@ Set once in `Workspace::install_layout` (`workspace/mod.rs`) on first run:
 | Region | Panes | Source |
 |---|---|---|
 | Left dock | `Collections` only, 260px wide | `install_layout` |
-| Center | `Request` over `Response` (a `v_split`; the status bar's split control flips it to an `h_split`) | `install_layout` |
+| Center | `Request` over `Response` (a `v_split`; the response header's split control flips it to an `h_split`) | `install_layout` |
 
 History and Environment are **constructed but not docked** by default. They are
 revealed on demand, which is the deliberate simplification noted in
@@ -48,15 +48,19 @@ untouched tab opens on one. A tab whose collection node was deleted while the
 app was closed — or a draft whose row is gone — is dropped rather than reopened
 against nothing, and one message names how many were dropped.
 
-The center opens as **Request over Response**, but it is no longer fixed: a
-control in the status bar, just left of the right-hand dock toggle, and the
-palette's **Toggle side-by-side** command flip it to a horizontal split and
-back. The choice is persisted: the dock stores the split's axis in
-`layout.json`, so a restart opens the same way, and **Reset layout** puts it
-back to stacked. Panes can be focused and closed from the palette (`Focus
-<pane>` / `Close <pane>`) and each pane's own dock menu; Request and Response
-are also in the titlebar's **View** menu, which leaves out the three panes that
-already have a status-bar toggle.
+The center opens as **Request over Response**, but it is no longer fixed. The
+control is at the right edge of the **response header**, beside the status
+summary: `Columns2` flips the centre to a horizontal split and `Rows3` stacks it
+again, so the glyph and tooltip always name the *next* action. It lives with the
+response because the split is Request-over-Response, and it moves with the pane
+rather than sitting in a global bar. The palette's **Toggle side-by-side**
+command does the same and is the only route while no response is on screen (the
+idle state is the empty-state screen, which draws no header). The choice is
+persisted: the dock stores the split's axis in `layout.json`, so a restart opens
+the same way, and **Reset layout** puts it back to stacked. Panes can be focused
+and closed from the palette (`Focus <pane>` / `Close <pane>`) and each pane's own
+dock menu; Request and Response are also in the titlebar's **View** menu, which
+leaves out the three panes that already have a status-bar toggle.
 
 ### Scroll and size
 
@@ -83,7 +87,6 @@ the environment switcher (one row per environment). A fixed menu never scrolls.
 | Status bar left | storage chip (`local database` or the workspace path) | `chrome::status_bar` |
 | Status bar right | last sent URL, or the engine error message | `chrome::status_bar`, `Workspace::status` |
 | Status bar, far right | dock toggle: `PanelRight` → the History + Environment dock | `chrome::status_bar` (`right_toggle`) |
-| Status bar, right of centre | split toggle: `Columns2` flips the centre to side by side, `Rows3` stacks it again | `Workspace::render` (`center_toggle`) |
 
 The titlebar's trailing History button was **removed**: the right dock now has
 its own toggle in the bottom-right corner, under the panel it opens. The window
@@ -204,7 +207,10 @@ entries, so it lists its own `Set-Cookie` rows instead, read-only.
 
 The copy controls sit in the body's toolbar rather than in the header strip: the
 header also draws for the Headers and Cookies tabs, so a copy button there
-offered a copy of payload the current tab does not show.
+offered a copy of payload the current tab does not show. The centre-split toggle
+is the opposite case and does live in the header, at its right edge: it divides
+Request from Response, not the body, so it means the same thing on every tab and
+should not disappear when the user switches to Headers or Cookies.
 
 ### Collections panel (in-pane)
 

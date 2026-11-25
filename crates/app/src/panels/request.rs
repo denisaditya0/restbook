@@ -573,17 +573,10 @@ impl RequestPanel {
 
     /// Route a key to the URL completion list while it is open.
     ///
-    /// A single-line `InputState` registers no handler for Up/Down, and Escape
-    /// propagates, so those keys reach this pane as plain key-down events.
-    /// Ctrl+N / Ctrl+P are the Emacs-style pair accepted here too, Tab and
-    /// Enter accept: the input's own `PressEnter` normally does Enter, and an
-    /// accept closes the list, so this only fires when that action was missed
-    /// (the click and Enter paths must not disagree).
-    ///
-    /// Tab accepts because `InputState` binds `tab` to `IndentInline`, which
-    /// would move the caret rather than take the highlighted row — the same
-    /// keystroke that accepts in the raw body's popover. The event is stopped
-    /// so that binding does not also run.
+    /// A single-line `InputState` has no Up/Down handler and lets Escape propagate,
+    /// so those keys arrive as plain key-down events (Ctrl+N / Ctrl+P here too). Tab
+    /// accepts and stops the event so `InputState`'s `tab` → `IndentInline` binding
+    /// cannot move the caret; Enter accepts when `PressEnter` did not.
     fn url_popup_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if !self.url_popup.is_open() {
             return;
@@ -1561,15 +1554,10 @@ mod enter_tests {
 
     /// Enter in the real Body tab, with the request panel around it.
     ///
-    /// The raw body is the kit's `Editor`, so the accept runs through the
-    /// popover's action path — or through the editor's keystroke interceptor,
-    /// which is what keeps the multi-line binding from inserting a newline
-    /// first. Rendering the whole pane (rather than a bare editor) is what
-    /// catches an interceptor that never got registered.
-    ///
-    /// Typing `$rand` narrows the list to `$randomInt`, which is the shape the
-    /// report used: a JSON string body next to an open reference. The exact
-    /// text is the assertion: a stray newline would show up here.
+    /// The raw body is the kit's `Editor`, so the accept runs through the popover's
+    /// action path or the editor's keystroke interceptor, which keeps the multi-line
+    /// binding from inserting a newline first. Rendering the whole pane (not a bare
+    /// editor) catches a missing interceptor; the body text is the assertion.
     #[gpui_kit::test]
     fn a_real_enter_key_accepts_a_generator_in_the_json_body(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);

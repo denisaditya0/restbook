@@ -1,10 +1,9 @@
 //! The changelog is the release body, so a version that ships without an entry
-//! would publish a release page and an update offer with no description.
+//! publishes a release page and an update offer with no description.
 //!
-//! `release.yml` fails the publish in that case, but the publish is the last
-//! place to find out: by then the tag exists and the artifacts are built. This
-//! runs on the pull request, so the version bump and its changelog entry arrive
-//! in the same review.
+//! `release.yml` also fails the publish in that case, but only after the tag
+//! exists and artifacts are built; this runs on the pull request, so the version
+//! bump and its entry arrive in the same review.
 
 use std::path::Path;
 

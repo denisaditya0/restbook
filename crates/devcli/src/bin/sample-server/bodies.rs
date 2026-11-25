@@ -1,12 +1,8 @@
 //! The deterministic bodies `sample-server` serves.
 //!
-//! Every body here is a pure function of its arguments: two runs produce the
-//! same bytes, so "Copy body" is diffable and a capture stays valid. That is
-//! why the ids are a scramble (`mix`) rather than a counter and why the gzip
-//! and base64 encodings are fixed.
-//!
-//! The shapes are load-bearing for the response pane's tests, so keep them as
-//! they are and add a route rather than editing one.
+//! Every body is a pure function of its arguments, so two runs produce the same
+//! bytes and a capture stays valid. The shapes are load-bearing for the response
+//! pane's tests: add a route rather than editing one.
 
 use std::io::Write;
 

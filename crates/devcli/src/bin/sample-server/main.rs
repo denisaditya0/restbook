@@ -1,18 +1,9 @@
 //! The local sample server: deterministic HTTP fixtures for the response pane.
 //!
-//! Some of what the response pane does is only observable against a specific
-//! body shape or timing, and a public echo service will not produce either on
-//! demand: a *minified* payload is a single line thousands of pixels wide, a
-//! body past `MAX_BODY_BYTES` is the only way to see the truncation banner, and
-//! a slow or chunked reply is the only way to watch the in-flight strip and
-//! Cancel.
-//!
-//!     cargo run -p restbook-devcli --bin sample-server            # :8787
-//!     cargo run -p restbook-devcli --bin sample-server -- --port 9000
-//!
-//! Nothing is served past loopback, and every body is deterministic, so two
-//! sends of the same request have the same bytes. The route tables live in
-//! `docs/05-ui-guide.md`, which a test below keeps in step with `ROUTES`.
+//! Some pane behavior is only observable against a specific body shape or timing
+//! a public echo service will not produce on demand: a minified payload, a body
+//! past `MAX_BODY_BYTES`, a slow reply. Nothing is served past loopback. The
+//! route tables live in `docs/05-ui-guide.md`, kept in step with `ROUTES` by test.
 
 use std::io;
 use std::time::Duration;

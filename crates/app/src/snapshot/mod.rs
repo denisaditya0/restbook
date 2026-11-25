@@ -1,11 +1,9 @@
-//! A shareable image of one send: the request as a cURL command, and the
-//! response as it reads.
+//! A shareable image of one send: the request as cURL, the response as it reads.
 //!
-//! This is a report, not a screenshot. A release build cannot read pixels back
-//! from its own window — `Platform::render_to_image` exists only under
-//! `test-support` — so the image is composed from [`RequestDef`] and
-//! [`ResponseRecord`] rather than captured. That also makes it deterministic:
-//! the same values produce the same text, which is what the tests compare.
+//! This is a report, not a screenshot: a release build cannot read pixels back
+//! from its own window, so the image is composed from [`RequestDef`] and
+//! [`ResponseRecord`]. That also makes it deterministic, which is what tests
+//! compare.
 
 use restbook_core::{Failure, RequestDef, ResponseBody, ResponseRecord};
 

@@ -1,25 +1,11 @@
 //! Shared setup for the app's UI tests.
 //!
-//! Every `#[gpui_kit::test]` in this crate needs the same things before it can
-//! assert anything: a data directory it owns, a theme installed before any pane
-//! snapshots its palette, and — for the ones that open a real dialog — the
-//! entrance animation settled so a click lands where it was aimed.
-//!
-//! This exists so the `workspace/mod.rs` split (`08-qol-backlog.md` 6.5) has a
-//! harness to move tests onto. It is also what makes a full-window test
-//! possible: [`Workspace::new`] reads `RESTBOOK_DATA_DIR`, so [`DataDir`]
-//! pointing it at a temp directory is the seam. Before this, no test could open
-//! a real `Workspace`, which is why the dock tests in `workspace/mod.rs` build
-//! panes by hand.
-//!
-//! A test that makes the window *raise a notification* — a save, a delete, a
-//! dock toggle — also has to give the window its root: `gpui_kit::open_window`
-//! wraps the app in `base::Root`, and that wrapper installs the component state
-//! `push_notification` and `open_dialog` look up. A bare `add_window_view` does
-//! not, and the first notice panics with "component window state is missing".
-//! `workspace::tests::save_creation` shows the shape.
-//!
-//! Test-only: declared `#[cfg(test)]` in `main.rs`.
+//! Every `#[gpui_kit::test]` needs a data directory it owns (via [`DataDir`],
+//! which points `RESTBOOK_DATA_DIR` at a temp dir) and a theme installed before
+//! any pane snapshots its palette. A test that raises a notification also needs
+//! the window root: `gpui_kit::open_window` wraps the app in `base::Root`, which
+//! installs the component state `push_notification` and `open_dialog` need; a
+//! bare `add_window_view` panics on the first notice.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -82,19 +68,11 @@ impl Drop for DataDir {
     }
 }
 
-/// What every UI test does before it builds a view.
-///
-/// Two things, both for reasons the kit's own tests give:
-///
-/// - **The theme**, because a pane snapshots its palette in its constructor
-///   (`Palette::new(cx)`), so installing after it exists leaves the pane on
-///   component defaults until the next theme change.
-/// - **Reduced motion**, because a dialog's entrance animation runs on the wall
-///   clock while a click is aimed a frame ahead; on a loaded machine the button
-///   moves between the aim and the click, and the click misses.
-///   `gpui-component`'s own dialog tests reduce motion for exactly this.
-///
-/// Call once, before `cx.new(...)`.
+/// What every UI test does before it builds a view: install the theme and
+/// reduce motion. The theme goes first because a pane snapshots its palette in
+/// its constructor (`Palette::new(cx)`). Reduced motion keeps a dialog's
+/// entrance animation from moving the button between a click's aim and its
+/// arrival; call once, before `cx.new(...)`.
 pub(crate) fn init_ui(cx: &mut TestAppContext) {
     cx.update(|cx| {
         crate::theme::ThemeRegistry::install(cx, "", 1.0, crate::theme::Appearance::Dark);

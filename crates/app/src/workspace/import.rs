@@ -1,12 +1,9 @@
 //! Import a file: parse it, land it, and show what happened.
 //!
-//! The engine parses and the store persists; this module is the seam between
-//! them, and the one place that decides what a name collision means. Nothing is
-//! written until the whole file has parsed, so a malformed file changes nothing.
-//!
-//! Parsing and landing are separate because the parsed file waits for one
-//! decision: whether it becomes new collections or appends into a place that
-//! already exists. The default is still one new collection per parsed one.
+//! The engine parses and the store persists; this module is the seam and the one
+//! place that decides what a name collision means. Nothing is written until the
+//! whole file has parsed, so a malformed file changes nothing. The default is one
+//! new collection per parsed one.
 
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -92,13 +89,12 @@ impl Report {
     }
 }
 
-/// Parse `text` as the format `file` names. The expensive half of an import,
-/// and the half that can fail without having written anything.
+/// Parse `text` as the format `file` names. The expensive half, and the one that
+/// can fail without having written anything.
 ///
-/// A failure names the reader that was tried, and whether the file name or the
-/// contents chose it. Without that, a wrong guess reports only what the wrong
-/// reader missed: a spec read as a HAR said "no log.entries" and nothing about
-/// why it was read as a HAR.
+/// A failure names the reader that was tried and whether the file name or the
+/// contents chose it; otherwise a wrong guess reports only what the wrong reader
+/// missed.
 fn parse(file: &str, text: &str) -> Result<BulkImport, String> {
     let (format, source) = match ImportFormat::from_file_name(file) {
         Some(format) => (format, "from the file name"),
@@ -129,10 +125,9 @@ fn parse(file: &str, text: &str) -> Result<BulkImport, String> {
 /// Save what `parsed` holds, either as new collections or into `target`.
 ///
 /// A name already in the store is reported as a duplicate rather than
-/// overwritten, which is the engine's rule for a batch import. Requests counted
-/// in the report are the ones actually saved, not the ones read. A `target`
-/// that the tree no longer holds is an error that writes nothing: landing the
-/// file somewhere else than the user chose would be worse than not landing it.
+/// overwritten, which is the engine's rule. Counted requests are the ones actually
+/// saved. A `target` the tree no longer holds errors and writes nothing: landing
+/// elsewhere would be worse than not landing it.
 fn land(
     store: &dyn Store,
     file: &str,

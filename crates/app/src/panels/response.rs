@@ -66,6 +66,9 @@ pub(crate) enum Event {
     DeleteCookie { name: String },
     /// Replace one cookie's value in the shared jar.
     UpdateCookie { name: String, value: String },
+    /// Flip the centre between stacked and side by side. The canvas owns the
+    /// split and the orientation state, so the pane only reports the intent.
+    ToggleSplit,
 }
 
 /// One line for the interaction log. Exhaustive, so a new variant must name
@@ -80,7 +83,18 @@ impl Event {
             Event::UpdateCookie { name, .. } => {
                 format!("event: response cookie update {name}")
             }
+            Event::ToggleSplit => "event: response toggle split".to_owned(),
         }
+    }
+}
+
+/// The split toggle's glyph and tooltip name the action the click leads to:
+/// showing the current state would offer the wrong verb.
+fn split_toggle_action(side_by_side: bool) -> (IconName, &'static str) {
+    if side_by_side {
+        (IconName::Rows3, "Stack request over response")
+    } else {
+        (IconName::Columns2, "Split side by side")
     }
 }
 
@@ -194,6 +208,10 @@ pub(crate) struct ResponsePanel {
     /// untouched, so this is what tells the pane its in-flight strip has
     /// become a failure view.
     painted: (ResponseState, Option<String>),
+    /// The centre's current split, pushed by the workspace like the tab list:
+    /// the pane draws the toggle's next-action glyph from it, but the workspace
+    /// owns the orientation and decides what the click does.
+    center_side_by_side: bool,
     focus_handle: FocusHandle,
 }
 
@@ -230,10 +248,9 @@ fn mark_runs(
 /// Merge syntax runs and search marks into one sorted, non-overlapping list.
 ///
 /// `StyledText::with_highlights` walks ranges in order and assumes they do not
-/// overlap. Appending a mark that sits inside a syntax run put it *after* the
-/// run, so the mark was painted past the end of the text and nothing appeared
-/// at the match. Splitting the run around the mark keeps the token's colour on
-/// either side and gives the mark its background.
+/// overlap; a mark inside a syntax run was painted past the text end. Splitting
+/// the run around the mark keeps the token's colour on either side and gives the
+/// mark its background.
 fn merge_highlight_runs(
     text_len: usize,
     base: &[(Range<usize>, HighlightStyle)],
@@ -876,6 +893,7 @@ impl ResponsePanel {
             failure_log: None,
             failure_painted: false,
             painted: (ResponseState::Idle, None),
+            center_side_by_side: false,
             focus_handle: cx.focus_handle(),
         };
         panel.sync_history(cx);
@@ -889,6 +907,16 @@ impl ResponsePanel {
         // Highlight colours were resolved once into the display cache; a theme
         // change has to discard them so the next draw uses the new syntax theme.
         self.display = None;
+    }
+
+    /// Take the centre's orientation from the workspace, which owns it. The
+    /// header's toggle glyph names the state the click leads to, so it has to
+    /// follow every flip, install, and reset.
+    pub(crate) fn set_center_side_by_side(&mut self, side: bool, cx: &mut Context<Self>) {
+        if self.center_side_by_side != side {
+            self.center_side_by_side = side;
+            cx.notify();
+        }
     }
 
     /// Refresh the cached history when the current request or its newest
@@ -1071,15 +1099,12 @@ impl ResponsePanel {
         (text, truncated)
     }
 
-    /// The response header: what was received on the left, how it went on the
-    /// right — `Body | Headers 3 | Cookies` … `200 OK · 593 ms · 12.17 KB ·
-    /// 🕘 1 minute ago`. One line, because the response is read far more often
-    /// than its headers are compared.
+    /// The response header: what was received on the left, how it went on the right —
+    /// `Body | Headers 3 | Cookies` … `200 OK · 593 ms · 12.17 KB · 🕘 1 minute ago`.
     ///
-    /// The copy controls are **not** here. They act on the body, which the
-    /// Headers and Cookies tabs do not show, so the header was offering a copy
-    /// of something absent from the tab it was drawn under. They live in the
-    /// body's own toolbar; see [`Self::render_body_toolbar`].
+    /// The copy controls live in the body's own toolbar instead, because they act on
+    /// the body, which the Headers and Cookies tabs do not show; see
+    /// [`Self::render_body_toolbar`].
     fn render_header(&self, response: &ResponseRecord, cx: &mut Context<Self>) -> AnyElement {
         let palette = &self.palette;
         // One selectable run, not three spans of chrome: the summary the user
@@ -1122,6 +1147,24 @@ impl ResponsePanel {
                     )),
             )
             .children(self.render_history(cx))
+            .child(self.render_split_toggle(cx))
+            .into_any_element()
+    }
+
+    /// The centre-split toggle, at the header's right edge. It sits with the
+    /// response because the split is Request-over-Response; the glyph names the
+    /// action the click leads to (two columns to go side by side, three rows to
+    /// stack), and the workspace performs the flip. Shown here rather than in a
+    /// global bar so the control sits beside the pane it divides.
+    fn render_split_toggle(&self, cx: &mut Context<Self>) -> AnyElement {
+        let (icon, tooltip) = split_toggle_action(self.center_side_by_side);
+        Button::new("response-split-toggle")
+            .icon(icon)
+            .ghost()
+            .compact()
+            .tooltip(tooltip)
+            .debug_selector(|| "response-split-toggle".to_owned())
+            .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::ToggleSplit)))
             .into_any_element()
     }
 
@@ -1456,14 +1499,10 @@ impl ResponsePanel {
 
     /// The body's own toolbar: the format switch and both copy controls.
     ///
-    /// These describe the payload, so they belong beside it rather than in the
-    /// header, which also draws for the Headers and Cookies tabs. Moving them
-    /// here is what makes the header one line of facts — status, time, size —
-    /// with no controls whose target is off-screen.
-    ///
-    /// The summary copy stays even though the summary is selectable: a drag is
-    /// the fine-grained gesture, and the button is the one-click "give me the
-    /// whole thing" that does not depend on hitting a row boundary.
+    /// These describe the payload, so they belong beside it rather than in the header,
+    /// which also draws for the Headers and Cookies tabs. The summary copy stays even
+    /// though the summary is selectable: the button is the one-click "give me the whole
+    /// thing" that needs no row boundary.
     fn render_body_toolbar(&self, response: &ResponseRecord, cx: &mut Context<Self>) -> AnyElement {
         let palette = &self.palette;
         let (summary, _) = summary_for(response, palette);
@@ -2224,13 +2263,11 @@ impl ResponsePanel {
             .into_any_element()
     }
 
-    /// `Idle` means nothing has been sent (or the response was wiped), so
-    /// there is no pending branch here: a live send renders through
-    /// [`ResponsePanel::render_status`].
+    /// `Idle` means nothing has been sent (or the response was wiped), so there is no
+    /// pending branch here; a live send renders through [`ResponsePanel::render_status`].
     ///
-    /// The empty state names the next actions and their live shortcuts, the
-    /// same rows the shortcuts sheet draws, so the keys read per OS instead of
-    /// a hardcoded glyph.
+    /// The empty state names the next actions and their live shortcuts, the same rows
+    /// the shortcuts sheet draws, so the keys read per OS instead of a hardcoded glyph.
     fn render_idle(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let actions = vec![
             Action::new("Send request", shortcut(&SendRequest, window)),
@@ -2744,10 +2781,24 @@ mod tests {
     // `#[test]`, and `use super::*` would drag it in.
     use super::{
         display_key, failure_hint, find_rows, highlights_by_line, mark_runs, response_language,
-        summary_line,
+        split_toggle_action, summary_line,
     };
     use gpui_kit::HighlightStyle;
     use restbook_core::FailureKind;
+
+    /// The header puts the toggle's glyph and tooltip on the *next* action, not
+    /// the current state: a side-by-side centre offers "stack", a stacked one
+    /// offers "split". Reading the current state would name the opposite verb.
+    #[test]
+    fn the_split_toggle_names_the_next_action() {
+        let (icon, tooltip) = split_toggle_action(false);
+        assert_eq!(tooltip, "Split side by side");
+        assert!(matches!(icon, crate::icons::IconName::Columns2));
+
+        let (icon, tooltip) = split_toggle_action(true);
+        assert_eq!(tooltip, "Stack request over response");
+        assert!(matches!(icon, crate::icons::IconName::Rows3));
+    }
 
     #[test]
     fn the_summary_copy_string_joins_the_parts_and_styles_every_byte() {
@@ -3213,11 +3264,9 @@ mod render_tests {
 
     /// The tab badge's count is parsed once, when the body is decoded.
     ///
-    /// It used to split every `Set-Cookie` header inside `render_tabs`, which
-    /// runs on every frame; a scroll alone repaints continuously, so a response
-    /// with many cookies paid for the badge on each one. What is asserted is the
-    /// cache: the count is stored with the decoded body, so a repaint reads it
-    /// instead of recomputing it.
+    /// Recomputing it in `render_tabs` would split every `Set-Cookie` header on every
+    /// frame, and a scroll repaints continuously. The count is cached with the decoded
+    /// body, so a repaint reads it instead of recomputing it.
     #[test]
     fn the_cookie_count_is_cached_with_the_body() {
         let mut record = json_response("{\"a\":1}");
@@ -3253,6 +3302,7 @@ mod render_tests {
         "response-pane",
         "response-summary",
         "response-tabs",
+        "response-split-toggle",
         "response-body-toolbar",
         "response-copy-body",
         "response-copy-summary",
@@ -3270,11 +3320,10 @@ mod render_tests {
 
     /// 6.2: the recorded bounds as a deterministic text tree.
     ///
-    /// A real screenshot needs a GPU and a font stack, which the mock window
-    /// does not have. What it does record is the bounds of every element that
-    /// opted in with `debug_selector`, so the tree is the assertion and the file
-    /// under `target/preview/` is the visual diff: two builds can be compared
-    /// with `git diff`, and a pane whose layout moved shows up as changed lines.
+    /// A real screenshot needs a GPU and a font stack, which the mock window lacks. It
+    /// records the bounds of every element that opted in with `debug_selector`, so the
+    /// tree is the assertion and the file under `target/preview/` is the visual diff: a
+    /// pane whose layout moved shows up as changed lines.
     #[test]
     fn a_pane_has_a_deterministic_element_tree() {
         let mut cx = TestAppContext::single();
@@ -3307,11 +3356,10 @@ mod render_tests {
 
     /// The copy controls belong to the body, not the header strip.
     ///
-    /// The header also draws for the Headers and Cookies tabs, so a copy button
-    /// there offers a copy of something the current tab does not show. They
-    /// moved into the body's own toolbar, which only the Body tab draws. The
-    /// assertion is positional: each button's top edge is at or below the
-    /// toolbar's, and the toolbar is below the header's summary row.
+    /// The header also draws for the Headers and Cookies tabs, so a copy button there
+    /// offers something the current tab does not show; the toolbar only the Body tab
+    /// draws does. The assertion is positional: each button's top edge is at or below
+    /// the toolbar's, which is below the header's summary row.
     #[test]
     fn the_copy_controls_live_in_the_body_toolbar() {
         let mut cx = TestAppContext::single();
@@ -3352,6 +3400,45 @@ mod render_tests {
                  button at {top}, toolbar at {toolbar}"
             );
         }
+
+        cx.quit();
+    }
+
+    /// The centre-split toggle belongs to the response header, not the body's
+    /// toolbar. It divides Request from Response, so it sits beside the status
+    /// summary and stays put on the Headers and Cookies tabs too. The assertion
+    /// is positional: the toggle's top is above the body toolbar, which only the
+    /// Body tab draws.
+    #[test]
+    fn the_split_toggle_lives_in_the_response_header() {
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+
+        let (_view, cx) = open(&mut cx, Some(json_response("{\"status\": \"OK\"}")));
+        draw(cx);
+
+        let text = tree::bounds_tree(cx, "response-split", TREE_SELECTORS);
+        let top_of = |selector: &str| -> f32 {
+            text.lines()
+                .filter(|line| line.contains(selector))
+                .find(|line| line.contains('@'))
+                .unwrap_or_else(|| panic!("{selector} should be in the tree:\n{text}"))
+                .split('@')
+                .nth(1)
+                .and_then(|rest| rest.split(',').nth(1))
+                .and_then(|top| top.split_whitespace().next())
+                .unwrap_or_else(|| panic!("a recorded top in {selector}"))
+                .parse()
+                .expect("a numeric top")
+        };
+
+        let toggle = top_of("response-split-toggle");
+        let toolbar = top_of("response-body-toolbar");
+        assert!(
+            toggle < toolbar,
+            "the split toggle belongs to the header, above the body toolbar: \
+             toggle at {toggle}, toolbar at {toolbar}"
+        );
 
         cx.quit();
     }

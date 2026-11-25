@@ -1,12 +1,9 @@
 //! Desktop shell for restbook: the window is a [`Workspace`], a docked
 //! [`DockArea`] over a [`Document`]. `DockArea` draws nothing itself, so panes
-//! take their look from `DockSkin`. The engine (`restbook-core` ->
-//! `transport` -> `store`) stays behind one [`Workspace::send`] call; panes
-//! only report what the user did, talking through constructor args, their own
-//! `cx`, and at most one weak parent handle — never a global, never each other.
-//!
-//! `--preview <pane>` (or `--preview all`) replaces the workspace with one pane
-//! over fixture data; see [`preview`].
+//! take their look from `DockSkin`. The engine stays behind one [`Workspace::send`]
+//! call; panes report what the user did through constructor args and their own
+//! `cx` — never a global, never each other. `--preview <pane>` or `--preview all`
+//! replaces the workspace with one pane over fixture data; see [`preview`].
 
 // Without this the exe keeps the console subsystem Rust defaults to, so every
 // launch from Explorer, a Start-menu entry or the installer's postinstall run
@@ -42,12 +39,10 @@ use gpui_kit::*;
 
 /// The smallest the window may be dragged to.
 ///
-/// `DockArea` gives every pane slot a hard 100 px floor (`PANEL_MIN_SIZE` in
-/// `gpui-base`) and exposes no per-split minimum, so a window with no floor
-/// could be dragged to a sliver where panes render narrower than the 100 px the
-/// dock thinks they have. This is the app-level lever that does exist: the
-/// panes are responsive below their own breakpoints, and the window stops here
-/// rather than at nothing.
+/// `DockArea` floors every pane slot at 100 px but exposes no per-split minimum,
+/// so without this a window could shrink until panes render narrower than the
+/// dock thinks they are. The panes are responsive below their breakpoints; the
+/// window stops here rather than at nothing.
 const MIN_WINDOW_WIDTH: f32 = 640.;
 const MIN_WINDOW_HEIGHT: f32 = 480.;
 

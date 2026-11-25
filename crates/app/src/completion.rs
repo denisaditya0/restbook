@@ -1,11 +1,8 @@
-//! `{{name}}` completion for the request editor, over two surfaces. The raw
-//! body is an `EditorState`, the only input with a completion hook:
-//! [`CompletionProvider`]/[`VariableCompletions`] feeds the built-in popover.
-//! The URL bar and kv value fields are plain `InputState`s, so [`Autocomplete`]
-//! tracks the reference and row. Both read the same [`suggestions`], with
-//! secrets masked as in the inspector. An accept replaces the whole reference,
-//! including a `}}` the editor's auto-close has already inserted after the
-//! caret — otherwise the accepted row would be followed by an orphan pair.
+//! `{{name}}` completion over two surfaces. The raw body is an `EditorState`
+//! fed by [`CompletionProvider`]/[`VariableCompletions`]; the URL bar and kv
+//! value fields are plain `InputState`s tracked by [`Autocomplete`]. Both read
+//! the same [`suggestions`], secrets masked. An accept replaces the whole
+//! reference, including a `}}` auto-close already inserted after the caret.
 
 use std::ops::Range as ByteRange;
 use std::rc::Rc;
@@ -41,20 +38,10 @@ impl VariableCompletions {
 
 /// Accept the raw body's highlighted completion from a plain Enter key.
 ///
-/// The kit routes `enter` through its overlay handler, and that is the path a
-/// normal key press takes. This is the same accept for the frame in which the
-/// binding would do something else — the body is multi-line, so its own `enter`
-/// inserts a newline — which is why the editor consumes the keystroke before
-/// dispatch and calls this. Returns whether a row was accepted; an accepted row
-/// closes the menu, so a second call cannot accept twice.
-///
-/// Routing can have nowhere to go: the handler is installed by the kit's
-/// render pass and looks the menu up in a per-window registry, so a key that
-/// arrives before that pass ran (or after the registry dropped the editor) is
-/// told `false` even though the menu is visibly open. The direct insert is the
-/// same call the click path makes; index 0 is the row `show` selects, and with
-/// no handler the user cannot have moved the highlight, so it is also the row
-/// on screen.
+/// The kit's overlay handler is the normal path, but the multi-line body's own
+/// `enter` inserts a newline, so the editor consumes the keystroke and calls
+/// this. Returns whether a row was accepted (an accepted row closes the menu);
+/// with no handler installed, the direct insert targets index 0.
 pub(crate) fn accept_body_completion(
     state: &mut EditorState,
     window: &mut Window,

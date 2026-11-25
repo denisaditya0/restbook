@@ -179,9 +179,8 @@ fn request_of(
 /// Path-level parameters apply to every operation under them, so both levels
 /// are read; an operation-level parameter wins by `(name, in)`.
 ///
-/// A parameter is commonly a `$ref` into `components.parameters`, so each entry
-/// is resolved before it is read: Cloudflare's document declares every path
-/// parameter that way, and an unresolved entry made 462 operations look
+/// A parameter is usually a `$ref` into `components.parameters`, so each entry
+/// is resolved before it is read; an unresolved entry made 462 operations look
 /// unfillable.
 fn parameters(root: &Value, item: &Map<String, Value>, operation: &Value) -> Vec<Value> {
     let mut merged: Vec<Value> = Vec::new();
@@ -577,15 +576,10 @@ mod tests {
     }
 
     /// A Cloudflare-sized document (29 MB, 3,934 requests) is a few seconds of
-    /// JSON in a debug build, so the import is a visible wait even though it runs
-    /// off the UI thread. That cost is linear in the document — the guess and the
-    /// parse are each one pass — and this test is what keeps it that way: four
-    /// times the paths may not cost more than eight times the time, which is the
-    /// gap between one pass per path and a scan per path.
-    ///
-    /// Measured on the development machine for a 1.5 MB, 4,000-request document:
-    /// ~78 ms guess + ~146 ms parse in release, ~264 ms + ~491 ms in debug. The
-    /// bound is generous because a debug build is not a benchmark.
+    /// JSON in a debug build, so the import is a visible wait even off the UI
+    /// thread. That cost must stay linear — one pass per document — so four times
+    /// the paths may not cost more than eight times the time. The bound is
+    /// generous because a debug build is not a benchmark.
     #[test]
     fn a_large_document_parses_in_linear_time() {
         let (some_requests, some) = cost(500);

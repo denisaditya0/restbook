@@ -1,10 +1,9 @@
 //! The SVG a snapshot is drawn from.
 //!
-//! Text is emitted one `<text>` per line rather than as wrapped runs: the
-//! layout already knows where every line goes. A block is drawn as a single
-//! column, and the canvas widens to hold the longest line up to [`MAX_WIDTH`];
-//! only a line past that cap is wrapped, so a pretty-printed body stays on the
-//! lines it was written with instead of being folded into narrow columns.
+//! Text is one `<text>` per line, since the layout already knows where every
+//! line goes. A block is a single column and the canvas widens to hold the
+//! longest line up to [`MAX_WIDTH`]; only a line past that cap wraps, so a
+//! pretty-printed body keeps the lines it was written with.
 
 use super::Snapshot;
 

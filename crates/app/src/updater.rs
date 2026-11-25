@@ -1,16 +1,9 @@
-//! Update checks and installs: what version is published, whether it is newer
-//! than this build, and — once the user asks for it — the download that replaces
-//! this one. A check only reads a manifest. The install downloads the asset for
-//! this platform, verifies it against the digest the manifest publishes, and
-//! hands it to the OS: on Windows that is the bundled Inno installer and the app
-//! quits so the exe can be replaced, while macOS and Linux open the package and
-//! leave this build running.
+//! Update checks and installs: the published version, whether it is newer than
+//! this build, and — once the user asks — the download that replaces it. The
+//! install verifies the asset against the manifest's digest.
 //!
-//! A packaged app is launched from Explorer or Finder with no useful
-//! environment, so the manifest URL is baked in at compile time: there is one
-//! release channel, and `releases/latest` is it. `RESTBOOK_UPDATE_URL` still
-//! overrides the URL, at build time or at runtime, which is how a test or a
-//! preview build points one binary somewhere else.
+//! A packaged app has no useful environment, so the channel URL is baked in at
+//! compile time; `RESTBOOK_UPDATE_URL` overrides it.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

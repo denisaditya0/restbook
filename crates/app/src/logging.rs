@@ -1,15 +1,8 @@
-//! Where log lines go when nobody is looking at a terminal. A GUI binary
-//! launched from Explorer, a shortcut, or an editor task has no stderr, and
-//! GPUI installs no sink, so `main.rs` installs one here: a tee where
-//! `env_logger` formats and the same bytes go to stderr (when attached) and to
-//! `<data dir>/restbook.log` (`RESTBOOK_LOG_FILE`; `RUST_LOG` filters). `init`
-//! also installs a panic hook, since a panic never reaches a log line.
+//! Where log lines go when no terminal is attached: `main.rs` tees `env_logger`
+//! output to stderr (when attached) and to `<data dir>/restbook.log`
+//! (`RESTBOOK_LOG_FILE`; `RUST_LOG` filters), and installs a panic hook.
 //!
-//! The normal file is deliberately quiet: facts, failures, one send outcome.
-//! The play-by-play (every click and command, full URLs, bodies) goes to a
-//! separate capture file that only exists while the user has asked for one.
-//! A capture is never written into `restbook.log`, so expiring it cannot erase
-//! the ordinary record.
+//! The ordinary file is quiet; play-by-play goes to a separate expiring capture.
 
 use std::fs::{self, File};
 use std::io::{self, Write};

@@ -311,11 +311,9 @@ pub(crate) fn enable_workspace(dir: &Path) -> Result<(), EnableWorkspaceError> {
 
 /// Start a second copy of this build with `root` as `RESTBOOK_WORKSPACE`.
 ///
-/// Switching in place would rebuild the store, the panes, and every tab from a
-/// different root; a relaunch is the smaller seam, and it matches the rule the
-/// storage picker already states: the choice takes effect the next time restbook
-/// starts. The child inherits the current directory, so a relative root still
-/// resolves the way the current process resolved it.
+/// Switching in place would rebuild the store, panes, and every tab from a
+/// different root; a relaunch is the smaller seam. The child inherits the current
+/// directory, so a relative root still resolves the way the current process did.
 pub(crate) fn relaunch_in_workspace(root: &Path) -> std::io::Result<()> {
     let exe = std::env::current_exe()?;
     relaunch_command(&exe, root).spawn()?;
@@ -338,14 +336,12 @@ fn workspace_name(root: &Path) -> String {
         .unwrap_or_else(|| APP_NAME.to_owned())
 }
 
-/// Open a history store at `state_dir`, preferring SQLCipher when it was
-/// compiled in.
+/// Open a history store at `state_dir`, preferring SQLCipher when compiled in.
 ///
-/// `state_dir` is created on demand; a directory that cannot be created falls
-/// through to the in-memory store, so the app still starts read-only instead of
-/// losing the window. `policy` decides what happens when encryption is
-/// unavailable: a JSONL file in the data directory, or nothing on disk in a
-/// workspace.
+/// `state_dir` is created on demand; one that cannot be created falls through to
+/// the in-memory store, so the app still starts read-only. `policy` decides what
+/// happens when encryption is unavailable: a JSONL file in the data directory, or
+/// nothing on disk in a workspace.
 pub(crate) fn open_history(state_dir: &Path, policy: HistoryPolicy) -> History {
     let _ = restbook_store::secure::create_dir(state_dir);
     let jsonl_path = state_dir.join(HISTORY_FILE);
@@ -485,14 +481,12 @@ fn import_legacy_jsonl(store: &dyn Store, new_path: &Path) {
     }
 }
 
-/// Hand a workspace's plaintext history to the encrypted store once, then
-/// delete the file.
+/// Hand a workspace's plaintext history to the encrypted store once, then delete
+/// the file.
 ///
-/// Unlike [`import_legacy_jsonl`], which renames the source to mark it imported,
-/// this removes it: a `.jsonl.imported` beside the database would leave a
-/// readable copy of every body in the tree the user shares, which is the leak
-/// this whole mode exists to close. A failed import leaves the file in place so
-/// the next start retries.
+/// Renaming it imported, as [`import_legacy_jsonl`] does, would leave a readable
+/// copy of every body in the shared tree — the leak this mode exists to close. A
+/// failed import leaves the file in place so the next start retries.
 #[cfg(feature = "sqlcipher")]
 fn import_workspace_jsonl(store: &dyn Store, path: &Path) {
     if !path.exists() {

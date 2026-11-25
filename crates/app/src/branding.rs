@@ -1,25 +1,9 @@
-//! The app's identity, and what each OS does with it.
+//! The app's identity: the name and reverse-DNS id the operating system keys
+//! this app on. Presentation (colors, chrome, icon files) lives elsewhere; this
+//! is what the OS needs to call the app by name.
 //!
-//! Most of "branding" is *presentation*: it lives in `theme.rs` (colors), in the
-//! window's own chrome — the workspace chip in `workspace::chrome` — and in the
-//! icon files under `crates/app/icons/`. What is here is the other half: the
-//! identity the operating system needs in order to call this app by name.
-//!
-//! | Concern | Owner | Notes |
-//! |---|---|---|
-//! | Colors | `theme.rs` | `Palette`, one named role per painted thing |
-//! | Window chrome | `workspace/chrome.rs` | The chip, breadcrumb and status bar |
-//! | Source icon | `crates/app/icons/` | One SVG per size the platforms consume |
-//! | Identity | this module | Window title, `app_id`, macOS `CFBundleName` |
-//!
-//! Nothing here branches per OS in code. Every constant is the same value
-//! everywhere, and the platform picks up the ones it has a notion of: Linux uses
-//! `APP_ID` as the window's `app_id` and matches it against the `.desktop` entry
-//! and the installed icon, macOS takes its bundle name from the `Info.plist`
-//! that packaging writes from [`BUNDLE_NAME`], Windows gets a taskbar identity
-//! from the installer's `AppUserModelID`, which must equal [`APP_ID`]. A
-//! `#[cfg]` here would mean the identity differed between builds of the same
-//! version, which is the one thing an identifier must not do.
+//! Nothing here branches per OS: a `#[cfg]` would let the identity differ
+//! between builds of one version, which an identifier must not do.
 
 /// The name shown in the window title and in the OS's own labels: the menu bar,
 /// the task switcher, an error dialog owned by the window.
@@ -30,22 +14,9 @@ pub(crate) const NAME: &str = "restbook";
 /// taskbar, so it stays the product name rather than the open request.
 pub(crate) const WINDOW_TITLE: &str = NAME;
 
-/// The reverse-DNS identifier every desktop OS keys app identity on.
-///
-/// This is the load-bearing constant for packaging, so it is named once and
-/// referenced everywhere rather than spelled out at each use site:
-///
-/// - **Linux** — the window's `app_id`. A compositor matches the icon, the
-///   `.desktop` entry (`Name=` and `StartupWMClass=`), and the taskbar grouping
-///   on this string. `share/applications/<APP_ID>.desktop` and
-///   `share/icons/hicolor/<size>/apps/<APP_ID>.png` must both carry it.
-/// - **Windows** — `APP_ID` is what the installer's `AppUserModelID` must
-///   equal, so a shortcut and a running window resolve to one taskbar identity
-///   instead of a generic one.
-/// - **macOS** — unused. The bundle directory name, `CFBundleIdentifier` and
-///   `CFBundleName` in `Info.plist` are what Cocoa reads; `Info.plist`'s
-///   identifier should carry this value, and its name should carry
-///   [`BUNDLE_NAME`].
+/// The reverse-DNS identifier every desktop OS keys app identity on: Linux's
+/// window `app_id`, `.desktop` entry and icon filenames; Windows' installer
+/// `AppUserModelID`. macOS reads the `Info.plist` instead.
 ///
 /// It must not change after a release: renaming it orphans existing user data
 /// on Linux, where the data directory is derived from the app name.
@@ -58,14 +29,9 @@ pub(crate) const APP_ID: &str = "com.restbook.restbook";
 /// [`APP_ID`] — a bundle identifier is never a display name.
 pub(crate) const BUNDLE_NAME: &str = NAME;
 
-/// The icon file stem, without extension: `icons/restbook.svg`, and
-/// `restbook.png` / `restbook.ico` / `restbook.icns` once packaging rasterizes
-/// it.
-///
-/// Read by `scripts/package.sh` and `scripts/icons.sh` rather than by the app:
-/// nothing at runtime draws this icon, so the constant is here to keep the name
-/// in one place, next to the `app_id` that a Linux icon file is named after. The
-/// `#[allow]` is because no runtime call site exists to keep it live.
+/// The icon file stem without extension: `icons/restbook.svg`, rasterized by
+/// `scripts/icons.sh` and named after the Linux icon file's `app_id`. Read by
+/// packaging, not at runtime, hence the `#[allow(dead_code)]`.
 #[allow(dead_code)]
 pub(crate) const ICON_STEM: &str = NAME;
 

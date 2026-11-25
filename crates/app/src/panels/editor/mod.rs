@@ -205,13 +205,12 @@ impl RequestEditor {
         raw_text.update(cx, |state, _| {
             state.lsp_mut().completion_provider = Some(VariableCompletions::new(variables.clone()));
         });
-        // Accepting the raw body's completion has to happen before the kit's
+        // Accepting the raw body's completion must happen before the kit's
         // `enter` binding: the body is multi-line, so that binding inserts a
-        // newline first, and a key-down fallback would then be accepting over a
-        // body the user just split. An interceptor runs ahead of bindings and
-        // may consume the keystroke. It stays out of the way unless this editor
-        // owns the caret and its popover is open, so Enter elsewhere — and
-        // Shift+Enter, which is the deliberate newline — is untouched.
+        // newline first and a key-down fallback would accept over a body the user
+        // just split. An interceptor runs ahead of bindings and may consume the
+        // keystroke; it stays out of the way unless this editor owns the caret and
+        // its popover is open, leaving Enter and Shift+Enter untouched.
         let accept_body = raw_text.clone();
         let _keystroke_guard = cx.intercept_keystrokes(move |event, window, cx| {
             if !plain_enter(&event.keystroke) {
@@ -615,16 +614,10 @@ impl RequestEditor {
 
     /// Route a key to a value field's completion list while it is open.
     ///
-    /// A single-line `InputState` registers no handler for Up/Down, and Escape
-    /// propagates, so those keys reach the row as plain key-down events;
-    /// Ctrl+N / Ctrl+P are the same Emacs-style pair the URL list accepts. Tab
-    /// and Enter accept: the input's own `PressEnter` normally does Enter, and
-    /// an accept closes the list, so this only fires when that action was
-    /// missed.
-    ///
-    /// Tab accepts because `InputState` binds `tab` to `IndentInline`, which
-    /// would move the caret rather than take the highlighted row. The event is
-    /// stopped so that binding does not also run.
+    /// A single-line `InputState` has no Up/Down handler and lets Escape propagate,
+    /// so those keys arrive as plain key-down events (Ctrl+N / Ctrl+P as in the URL
+    /// list). Tab stops the event so `InputState`'s `tab` → `IndentInline` binding
+    /// cannot move the caret; Enter accepts when `PressEnter` did not.
     fn value_popup_key(
         &mut self,
         value: Entity<InputState>,
@@ -947,14 +940,12 @@ mod enter_tests {
         assert_eq!(text, "hello\n");
     }
 
-    /// The interceptor is what keeps the multi-line binding from turning an
-    /// accept into a newline.
+    /// The interceptor keeps the multi-line binding from turning an accept into a
+    /// newline.
     ///
-    /// The kit's overlay handler is installed by a render pass, so a key can
-    /// arrive while the registry has no host for the editor and routing answers
-    /// `false`. Without the interceptor that key would fall through to the
-    /// `enter` binding and split the body; the interceptor accepts directly and
-    /// stops propagation, so the body is exactly the accepted reference.
+    /// The kit's overlay host is installed by a render pass, so a key can arrive
+    /// before routing has a host and fall through to the `enter` binding. The
+    /// interceptor accepts directly and stops propagation instead.
     #[gpui_kit::test]
     fn the_interceptor_accepts_before_the_newline_binding(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);

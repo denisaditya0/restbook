@@ -40,15 +40,10 @@ impl TitlePart {
     }
 }
 
-/// The window titlebar.
+/// The window titlebar: the workspace chip, one breadcrumb part per level,
+/// `trailing`, then the [`TitleBar`]'s own window controls.
 ///
-/// Left to right: the workspace chip (this app, like a workspace switcher),
-/// then the breadcrumb — one part per level of where the open request lives,
-/// then whatever the caller puts in `trailing`. The window controls are added
-/// by [`TitleBar`] itself and are already budgeted into its right padding.
-///
-/// The dock toggles are not here: they sit in the status bar's two bottom
-/// corners, under the docks they open. See [`status_bar`].
+/// The dock toggles live in the status bar instead. See [`status_bar`].
 pub(crate) fn titlebar(
     palette: &Palette,
     metrics: &Metrics,
@@ -142,17 +137,12 @@ pub(crate) fn titlebar(
         .into_any_element()
 }
 
-/// Take the press for a control that lives in the bar.
+/// Swallow the press so a control in the titlebar still receives clicks.
 ///
-/// `TitleBar` arms a window move on *any* left press inside the bar, and the
-/// platform's move loop then consumes the release, so a `Button` in the bar
-/// only ever sees the mouse-down and never its `on_click`. Swallowing the press
-/// keeps the bar out of the move for that element alone: an empty stretch of
-/// the bar still drags the window. Every interactive child in the bar has to go
-/// through this; without it the control looks dead.
-///
-/// Remove this once the kit version in use carries the fix where the bar checks
-/// `default_prevented()` before starting a move (gpui-kit PR #3918).
+/// `TitleBar` arms a window move on any left press, and the platform's move loop
+/// consumes the release, so a `Button` only ever sees the mouse-down. Wrapping the
+/// child keeps the bar draggable everywhere else; without this the control looks
+/// dead. Remove once the kit checks `default_prevented()` before moving.
 fn press_through(child: AnyElement) -> AnyElement {
     div()
         .flex_none()
@@ -161,20 +151,12 @@ fn press_through(child: AnyElement) -> AnyElement {
         .into_any_element()
 }
 
-/// The active-environment chip, for the window's titlebar.
+/// The active-environment chip, for the titlebar.
 ///
-/// It lives in the titlebar rather than in a pane because the choice is
-/// window-wide: the next send resolves `{{vars}}` against it whatever tab is
-/// open. Keeping it out of the Collections pane is what lets that pane be about
-/// collections only, and it matches where Postman and Bruno put the same
-/// control. Not a [`TitlePart`]: that slot is read-only text, and this one
-/// opens a menu.
-///
-/// `cap` bounds the width, because a long environment name in a titlebar
-/// pushes the window controls out of reach. It must clear the placeholder's own
-/// width: a narrower cap ellipsises `No environment` before any environment is
-/// picked. The caller wraps the result in [`press_through`], since a button in
-/// the titlebar otherwise only sees the mouse-down.
+/// The choice is window-wide — the next send resolves `{{vars}}` against it
+/// whatever tab is open — so it sits in the bar, not a pane. `cap` bounds the
+/// width so a long name cannot push the window controls out of reach, and must
+/// clear the placeholder or `No environment` ellipsises before one is picked.
 pub(crate) fn environment_chip(
     active: Option<&str>,
     environments: Vec<String>,
@@ -329,26 +311,16 @@ impl std::fmt::Debug for FlashAction {
 
 /// The window-wide status line.
 ///
-/// Left to right: the storage chip, then `left_toggle` at the far left; the
-/// last exchange's URL or error, then `right_toggle` at the far right.
-///
-/// The active environment is **not** here: it has a chip in the titlebar, and
-/// repeating it in both bars was a second place to read the same fact. The
-/// status bar says where the data lives and what the last send did, which are
-/// the two things nothing else on screen reports.
-///
-/// The two dock toggles live here rather than in the titlebar because this bar
-/// is the window's bottom edge: the sidebar control sits in the bottom-left
-/// corner under the sidebar it opens, the tools control in the bottom-right
-/// corner under the tools dock. That also keeps the titlebar for window chrome
-/// and the breadcrumb, which is what a reader expects to drag the window by.
+/// Left to right: `left_toggle` and the storage chip, the last exchange's URL or
+/// error, then `right_toggle`. The dock toggles sit at the bottom corners under
+/// the docks they open, keeping the titlebar free for dragging. The active
+/// environment is not repeated here; it has its own titlebar chip.
 pub(crate) fn status_bar(
     palette: &Palette,
     metrics: &Metrics,
     workspace: &WorkspaceChip,
     status: &Status,
     left_toggle: AnyElement,
-    center_toggle: AnyElement,
     right_toggle: AnyElement,
 ) -> AnyElement {
     let mut right = h_flex().items_center().gap(px(metrics.space_md));
@@ -441,7 +413,6 @@ pub(crate) fn status_bar(
                 .child(storage_chip)
                 .child(history_chip)
                 .child(div().flex_1())
-                .child(center_toggle)
                 .child(right)
                 .child(right_toggle),
         )
@@ -562,20 +533,14 @@ mod tests {
 
     /// The confirmation is the kit's notification, not ours.
     ///
-    /// The hand-drawn toast lived in the workspace's own element tree, under
-    /// the dock, so an open dialog covered it — a save reported from behind a
-    /// dialog was invisible. A notification is a window-level layer drawn above
-    /// dialogs, so the invariant is that chrome no longer paints one: if this
-    /// module ever grows a toast renderer again, it competes with the layer
-    /// instead of using it.
+    /// A notification is a window-level layer drawn above dialogs, so chrome must
+    /// not paint its own toast: a second renderer at that offset cannot rise
+    /// above a dialog and only competes with the layer.
     #[test]
     fn chrome_does_not_paint_its_own_toast() {
         let source = include_str!("chrome.rs");
-        // The old toast was a dock-tree element pinned above the status bar.
-        // The notification layer owns drawing now, and a second renderer at
-        // that offset competes with it and cannot rise above a dialog. The
-        // marker is the offset, spelled so this assertion does not match
-        // itself.
+        // The marker is the old toast's offset, spelled so this assertion does
+        // not match itself.
         let toast_offset = ["status_height", " + 10."].concat();
         assert!(
             !source.contains(&toast_offset),
@@ -586,10 +551,8 @@ mod tests {
 
 /// The environment chip as laid out by the real renderer.
 ///
-/// It moved out of the Collections pane and into the titlebar, so what needs
-/// pinning is the painted width: the chip is content-sized, and a cap narrower
-/// than its own placeholder ellipsises `No environment` to `No enviro…` before
-/// any environment is picked.
+/// The chip is content-sized, and a cap narrower than its own placeholder
+/// ellipsises `No environment` before any environment is picked.
 #[cfg(test)]
 mod render_tests {
     use gpui_kit::{IntoElement as _, ParentElement as _, Styled as _, TestAppContext};
@@ -686,7 +649,6 @@ mod render_tests {
                         history: self.0,
                     },
                     &super::Status::default(),
-                    gpui_kit::Empty.into_any_element(),
                     gpui_kit::Empty.into_any_element(),
                     gpui_kit::Empty.into_any_element(),
                 ))

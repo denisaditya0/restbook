@@ -1,10 +1,6 @@
 //! A Git-friendly workspace on disk: one `collection.json` per collection under
 //! `collections/<slug>/`, environments under `environments/`, gitignored local
-//! state in `restbook.local.json`, and history in the gitignored `.restbook/`
-//! state directory.
-//!
-//! Which store serves that history is not this crate's decision: the workspace
-//! is handed one and only delegates the trait methods to it.
+//! state in `restbook.local.json`, and history in the gitignored `.restbook/`.
 //!
 //! Saves are VCS-stable: keys are sorted, secrets become placeholders (real
 //! values stay local), and every write is temp-file plus rename.
@@ -106,12 +102,9 @@ pub struct FolderStore {
 }
 
 impl FolderStore {
-    /// Open (or create) a workspace at `root`, with a history that lives only
-    /// in memory.
-    ///
-    /// For callers that never touch history — an import harness, most tests.
-    /// The desktop app opens a workspace through [`with_history`], because it
-    /// is the app, not the store, that decides how history is protected.
+    /// Open (or create) a workspace at `root`, with an in-memory history.
+    /// The desktop app uses [`with_history`] instead, since it decides how
+    /// history is protected.
     ///
     /// [`with_history`]: FolderStore::with_history
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {

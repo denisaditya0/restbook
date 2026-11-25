@@ -1,10 +1,8 @@
 //! Which values are credentials, and what a file puts in their place.
 //!
-//! One definition, used by both the folder workspace and [`crate::import`]. A
-//! tracked workspace file redacts a secret because the real value stays in
-//! `restbook.local.json`; an export redacts it because the file leaves the
-//! machine. Walking the same slots is what keeps one list from being safe while
-//! the other ships the value.
+//! One definition, used by both the folder workspace and [`crate::import`]: a
+//! tracked workspace file redacts a secret because the value stays in
+//! `restbook.local.json`, an export because the file leaves the machine.
 
 use crate::model::{Auth, Body, Collection, CollectionItem, Environment, Kv, RequestDef};
 
@@ -15,12 +13,9 @@ pub const REDACTED: &str = "<restbook:redacted>";
 /// One value that is a credential, plus the names a local workspace uses to
 /// find it again.
 ///
-/// `kind` is the file the value came from — `"req"` for a saved request's auth,
-/// `"env"` for an environment variable, or the row family for a secret [`Kv`]
-/// (`"header"`, `"param"`, `"form"`). `owner` is the collection id or the
-/// environment name, and `row` is the auth field or the row's key. The tuple is
-/// only a lookup key, so it must stay stable across a rename of the workspace
-/// path — hence an id or a name, never a path.
+/// `kind` is the source file (`"req"`, `"env"`, or a [`Kv`] family like
+/// `"header"`), `owner` the collection id or environment name, and `row` the
+/// auth field or key. The tuple must survive a rename: an id or name, not a path.
 pub struct SecretSlot<'a> {
     pub kind: &'static str,
     pub owner: &'a str,

@@ -252,10 +252,23 @@ there or it does not happen.
   the seam the whole layout exists to protect.
 - **Inferred types over annotations.** Clippy runs with `-D warnings` in CI, so
   do not assign locals to `String`/`Vec<T>` that inference already gives you.
-- **Default to no comment.** Write one for a constraint, an external quirk, or an
-  invariant the code cannot show — one line where possible. Do not restate a
-  name, narrate steps, or record history. The existing code sets the bar: look at
-  a neighbouring file before adding prose.
+- **Comments: 2-6 lines or none.** Default to no comment; add one only for a
+  constraint, an external quirk, or an invariant the code cannot show, and keep
+  it to 2-6 lines. A block longer than six is a smell: compress it to the rule
+  and the reason. Exceed six only for a genuinely technical fact (linker or
+  platform quirk, encryption/protocol invariant, schema migration) where cutting
+  would lose meaning; cap those at about ten.
+  - **No history.** Drop "no longer", "used to", "previously", "now", "moved",
+    PR/commit references, and anecdotes about how the code got here. State the
+    current rule positively.
+  - **No restating.** Do not narrate steps, list what a function does, or turn a
+    name into a sentence. If the code shows it, the comment does not need it.
+  - **Stale means delete.** A comment that is wrong or obsolete is removed or
+    rewritten, never left beside a second account of the new behavior.
+  - **Keep the prefix and attachment.** `//!` documents the module, `///` the
+    item directly below it; one blank `//!` or `///` line between paragraphs.
+  The existing code sets the bar: look at a neighbouring file before adding
+  prose.
 - **Tests express intent.** Name them as facts about behavior, and keep the
   module split the file already has: `tests` for logic, `render_tests` for the
   painted tree, `enter_tests` for keyboard routing. Those three exist because

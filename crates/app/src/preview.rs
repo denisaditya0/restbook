@@ -1,27 +1,9 @@
 //! The developer preview: one pane over fixture data, on demand.
 //!
-//! `TestAppContext` render tests prove a pane lays out and paints, but nothing
-//! puts it on a screen without the whole window, dock, store and updater. This
-//! module fills that gap. `main` reads `--preview <pane>` from plain
-//! `std::env::args`, and instead of the workspace the window root becomes one
-//! pane wired exactly as the workspace wires it: a fixture [`Document`], a
-//! [`MemoryStore`] holding a few seeded sends, and the real [`Settings`] entity
-//! (so the preview opens on the user's theme and zoom).
-//!
-//! `--preview all` lays every pane out at once, which is how a change to the
-//! shared theme is checked in one window. Nothing here sends a request, writes
-//! the user's store, or saves a layout: the store is in memory and the panes are
-//! the production ones.
-//!
-//! Degrading gracefully:
-//!
-//! - A pane name the preview does not know opens a window naming the valid ones
-//!   rather than falling through to a normal launch, which would look like the
-//!   flag was ignored.
-//! - A pane that cannot be built is reported in that pane's cell instead of
-//!   taking the window down. Today every constructor succeeds and the fixture
-//!   loader's `Result`s are only logged, but [`build_pane`] returns a `Result`
-//!   so a pane with genuinely fallible setup has somewhere to say so.
+//! `--preview <pane>` (or `--preview all`) replaces the workspace with one pane
+//! wired as the workspace wires it — a fixture [`Document`], a [`MemoryStore`]
+//! of seeded sends, and the real [`Settings`]. Nothing sends, writes the user's
+//! store, or saves a layout; an unknown pane name names the valid ones.
 
 use std::sync::Arc;
 
@@ -295,12 +277,9 @@ impl PreviewRoot {
     }
 
     /// The one-line label above the pane: what is showing and that it is
-    /// fixture data.
-    ///
-    /// It is a [`TitleBar`] rather than a plain strip so the preview window
-    /// still drags and closes: the platform titlebar is hidden for the real
-    /// window (the workspace draws its own), and a preview without one would
-    /// have no way to move or close it.
+    /// fixture data. A [`TitleBar`] so the preview window still drags and
+    /// closes — the platform titlebar is hidden for the real window, so a plain
+    /// strip would leave no way to move or close it.
     fn render_bar(&self, cx: &App) -> AnyElement {
         let palette = Palette::new(cx);
         let metrics = Metrics::current(cx);
@@ -653,11 +632,10 @@ fn seeded<T>(result: restbook_core::Result<T>, what: &str) {
 
 /// Render-test support: a pane's recorded bounds as a deterministic text tree.
 ///
-/// A real screenshot diff needs a GPU and a font stack the tests do not have.
-/// What the mock window *does* record is the bounds of every element that opted
-/// in with `debug_selector`, and that is enough to catch a pane whose layout
-/// moved, collapsed, or lost a row: the tree is the assertion, and the written
-/// file is the visual diff (plain text, so `git diff` is the comparison).
+/// A screenshot diff needs a GPU and a font stack the tests lack; the mock window
+/// records the bounds of every `debug_selector` element, which is enough to
+/// catch a pane whose layout moved, collapsed, or lost a row. The written file
+/// is the visual diff, in plain text so `git diff` compares it.
 #[cfg(test)]
 pub(crate) mod tree {
     use std::fmt::Write as _;

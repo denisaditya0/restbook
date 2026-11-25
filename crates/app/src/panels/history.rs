@@ -631,12 +631,10 @@ fn search(
 
 /// The rows that belong to one request.
 ///
-/// A saved request or a draft owns its rows, so it is asked for by owner: two
-/// requests with the same URL (a copy, or the same endpoint filed twice) must
-/// not share a send log. `Standalone` has no owner, so the URL is the best
-/// scope available; a backend that cannot answer by owner (`None`) gets the
-/// same fallback. One implementation, so the History pane and the response
-/// pane's “Earlier sends” count cannot disagree.
+/// A saved request or draft owns its rows and is asked for by owner, so two
+/// requests with the same URL (a copy, or the same endpoint filed twice) do not
+/// share a send log. `Standalone` and a backend that cannot answer by owner fall
+/// back to the URL. One implementation, so the History and response panes agree.
 pub(crate) fn scoped_rows(
     store: &dyn Store,
     origin: &Origin,

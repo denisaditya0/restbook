@@ -1,10 +1,9 @@
 //! Where the dock layout and the open tabs are remembered between runs.
 //!
-//! Only the arrangement and the names of the open tabs are persisted, never the
-//! panels: the workspace builds the panes on every start, so a stale panel name
-//! is dropped on load. The file carries this app's own version, separate from
-//! `DockAreaState`'s schema version, so a changed default arrangement discards
-//! layouts an older build saved.
+//! Only the arrangement and the open tabs' names are persisted, never the panels:
+//! the workspace rebuilds the panes on every start, so a stale name is dropped on
+//! load. The file carries this app's own version, so a changed default arrangement
+//! discards layouts an older build saved.
 
 use std::path::Path;
 use std::time::{Duration, SystemTime};
@@ -19,17 +18,15 @@ use crate::theme;
 use super::{CenterOrientation, PanelName, Workspace};
 
 /// Bump when the default arrangement changes in a way an older saved layout
-/// should not override. A file written under an earlier version is discarded;
-/// the user gets the new default and a fresh file on the next save.
+/// should not override: a file from an earlier version is discarded, the user gets
+/// the new default, and a fresh file is written on the next save.
 ///
 /// 1 — History / Collections / Environment shared the left dock.
 /// 2 — Collections alone is the left dock.
-/// 3 — History and Environment moved to the right tools dock, so a saved
-///     layout from 2 would put the environment back in the sidebar.
+/// 3 — History and Environment moved to the right tools dock.
 ///
-/// The open tabs are not a version concern: they are a defaulted field, so a
-/// file from any version parses and a launch without `tabs` merely restores
-/// none. Bumping for them would discard every existing 0.2.0 layout.
+/// Open tabs are a defaulted field, not a version concern: a file from any version
+/// parses, and a launch without `tabs` restores none.
 const LAYOUT_VERSION: u32 = 3;
 
 /// The persisted file: our version plus the library's state.
@@ -100,19 +97,12 @@ pub(crate) fn load_tabs(path: &Path) -> Option<SavedTabs> {
 }
 
 impl Workspace {
-    /// The last layout edit and the live draft are written when the window
-    /// closes.
+    /// The last layout edit and the live draft are written when the window closes.
     ///
-    /// The platform asks before it destroys the window, so this is the last
-    /// point where a window still exists and the store can be written without
-    /// a task being dropped at process exit.
-    ///
-    /// What follows is gpui-pre's own teardown on Windows, not this app's: its
-    /// `WindowsWindow::drop` revokes drag-and-drop and destroys an HWND that
-    /// the OS already destroyed for an OS-initiated close, and a window-scoped
-    /// task can wake after its window was removed. `flush` marks the process as
-    /// closing, and the log sink then drops those target-less records, so a
-    /// clean shutdown ends at the line above instead of four `ERROR` lines.
+    /// `on_window_should_close` runs before the window is destroyed, the last point
+    /// where the store can be written without a task being dropped at process exit.
+    /// gpui-pre's teardown on Windows logs target-less errors after this point;
+    /// `flush` marks the process as closing so the log sink drops them.
     pub(crate) fn save_on_close(&self, window: &mut Window, cx: &mut Context<Self>) {
         let workspace = cx.entity().downgrade();
         window.on_window_should_close(cx, move |_, cx| {
@@ -137,11 +127,9 @@ impl Workspace {
     /// Install the panes from the saved arrangement when there is one, the default
     /// otherwise.
     ///
-    /// The saved state is read for its *names and slot sizes* only: `DockArea::load`
-    /// would rebuild panels from the registry, which this app deliberately does
-    /// not use. Reading the names and re-adding the same entities survives a
-    /// restart with no rebuild, and the sizes keep the proportions the user
-    /// dragged instead of snapping back to the defaults.
+    /// The saved state is read for its names and slot sizes only: `DockArea::load`
+    /// would rebuild panels from the registry, which this app deliberately does not
+    /// use. Re-adding the entities survives a restart, and sizes keep user drags.
     pub(crate) fn install_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(state) = self::load(&self.layout_path) {
             let left = panel_names(state.left_dock.as_ref().map(|dock| dock.panel()));
@@ -265,6 +253,11 @@ impl Workspace {
                 dock.remove_dock(DockPlacement::Right, window, cx);
             }
         });
+
+        // The header's toggle glyph names the orientation that is now installed,
+        // so it follows every path that rebuilds the centre — the saved layout,
+        // the first-run default, and a reset.
+        self.push_center_orientation(cx);
     }
 
     /// layout debounce. A burst of typing costs one write; only the active tab is
@@ -306,15 +299,12 @@ impl Workspace {
         }));
     }
 
-    /// Write the active tab to the drafts table, or clear its row once it has been
-    /// filed into a collection. A blank URL is not worth restoring, so an empty new
-    /// tab leaves nothing behind.
+    /// Write the active tab to the drafts table, or clear its row once filed into a
+    /// collection. A blank URL is not worth restoring.
     ///
-    /// This only runs at the end of a quiet debounce, never on a keystroke. A new
-    /// draft's first insert is therefore synchronous: it is what gives the tab its
-    /// row id, and until that id is bound every later write (and the close flush)
-    /// would insert again instead of updating. Once bound, updates stay on the
-    /// background executor, where a slow disk cannot stall the window.
+    /// Runs only at the end of a quiet debounce, never on a keystroke. A new draft's
+    /// first insert is synchronous because it assigns the row id every later write
+    /// needs; once bound, updates stay on the background executor.
     fn persist_draft(&mut self, cx: &mut Context<Self>) {
         // Nothing to persist when the last tab was closed.
         if self.tabs.is_empty() {
@@ -413,14 +403,12 @@ impl Workspace {
         .detach();
     }
 
-    /// Write one tab's draft synchronously. Used when the tab is leaving the
-    /// screen (a switch or a quit): the background writer reads whichever tab
-    /// is active when it wakes, and a task spawned here would be dropped with
-    /// the process.
+    /// Write one tab's draft synchronously. Used when the tab is leaving the screen
+    /// (a switch or a quit): the background writer reads whichever tab is active
+    /// when it wakes, and a task spawned here would be dropped with the process.
     ///
-    /// `dirty` says a debounce was armed, so there are edits the store has not
-    /// seen. Without it, a row that is already stored is left untouched so its
-    /// `updated_at` does not reorder the Unsaved list on every switch.
+    /// `dirty` says a debounce was armed. Without it an already-stored row is left
+    /// untouched so its `updated_at` does not reorder the Unsaved list.
     pub(crate) fn persist_tab_draft(&mut self, index: usize, dirty: bool, cx: &mut Context<Self>) {
         let (existing, has_node) = match self.tabs.get(index) {
             Some(tab) => (tab.draft, tab.node.is_some()),
@@ -476,13 +464,12 @@ impl Workspace {
             .update(cx, |panel, cx| panel.refresh_drafts(cx));
     }
 
-    /// The open tabs as the layout file records them. A tab bound to neither a
-    /// node nor a draft row has nothing to restore and is skipped, which is also
-    /// what keeps a pristine blank page out of the file.
+    /// The open tabs as the layout file records them. A tab bound to neither a node
+    /// nor a draft row has nothing to restore and is skipped, keeping a blank page
+    /// out of the file.
     ///
-    /// `active` indexes `entries`, not the live strip: the two lists differ by
-    /// the skipped tabs, and a restore has to land on the same request rather
-    /// than on whichever slot happens to survive.
+    /// `active` indexes `entries`, not the live strip: the two differ by the skipped
+    /// tabs, and a restore must land on the same request, not a surviving slot.
     pub(crate) fn tabs_snapshot(&self) -> SavedTabs {
         let mut entries = Vec::new();
         let mut active = None;

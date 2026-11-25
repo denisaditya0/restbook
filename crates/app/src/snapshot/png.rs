@@ -1,13 +1,9 @@
 //! SVG to PNG.
 //!
-//! The snapshot is described as SVG and rasterized here. This is the one place
-//! the app depends on a renderer rather than on GPUI: a release build cannot
-//! read pixels back from its own window, so an image has to be produced from
-//! what the model says rather than captured from the screen.
-//!
-//! Fonts come from the system rather than from the binary: the SVG names a
-//! monospace family, and `fontdb` resolves it the same way the OS would. A
-//! machine with no such family still renders, just in whatever the fallback is.
+//! The snapshot is described as SVG and rasterized here — the one place the app
+//! depends on a renderer rather than GPUI, because a release build cannot read
+//! pixels back from its window. Fonts come from the system via `fontdb`; a
+//! machine without the named family still renders with the fallback.
 
 /// Rasterize an SVG document to PNG bytes at `scale` (2 draws the image at
 /// twice its logical size, which is what keeps text crisp on a retina display

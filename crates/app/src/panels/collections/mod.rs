@@ -1,10 +1,9 @@
 //! The Collections pane: saved requests in nested folders.
 //!
 //! A collection is a user-edited tree persisted as one store row, so every edit
-//! mutates the working copy and saves the collection it touched. Opening a
-//! request is an [`Event`] for the canvas; the tree walks and edits below the
-//! view live in [`tree`], so they stay unit-testable without an `App` or a
-//! `Window`.
+//! mutates the working copy and saves. Opening a request is an [`Event`] for the
+//! canvas; the tree walks and edits live in [`tree`] so they stay testable
+//! without an `App` or a `Window`.
 
 mod tree;
 
@@ -167,10 +166,8 @@ struct RowVerbs {
 /// One visible row of the tree, flattened so the virtual list can build a row
 /// without walking `collections`.
 ///
-/// The pane used to rebuild every row on every frame, so an import that landed
-/// ~6,000 nodes made each repaint cost seconds. The tree is now flattened once
-/// per query/revision/sort change into these rows, and `uniform_list` builds
-/// only the slice in view.
+/// The tree is flattened once per query/revision/sort change, and `uniform_list`
+/// builds only the slice in view.
 #[derive(Clone)]
 struct FlatRow {
     kind: RowKind,
@@ -629,9 +626,8 @@ impl CollectionsPanel {
     /// the tree shows where it landed. Returns its id, or `None` when the write
     /// failed (already reported by [`Self::persist`]).
     ///
-    /// Callers that have a window announce the creation; the save dialog does
-    /// not, because its own "Request saved." is the sentence for the step the
-    /// user asked for.
+    /// Callers with a window announce the creation; the save dialog does not,
+    /// because its own "Request saved." covers the step the user asked for.
     pub(crate) fn create_collection(
         &mut self,
         name: &str,
@@ -702,13 +698,11 @@ impl CollectionsPanel {
         }
     }
 
-    /// Save the open request into a destination. Called by the pane's + menu, the
-    /// workspace's `Ctrl+S`, and the request pane's Save button. `node`, when
-    /// given, updates that node in place rather than appending; `name` falls back
-    /// to `"{method} {url}"`; `target` is where the save lands, and `None` means
-    /// the sidebar's selection, which is what the pane's own + menu means.
-    /// Returns the node id to bind the tab; a target that no longer exists is a
-    /// normal state and yields `None`, not an error.
+    /// Save the open request into a destination (pane + menu, `Ctrl+S`, or the
+    /// request pane's Save button). `node` updates a node in place; `name` falls
+    /// back to `"{method} {url}"`; `target` is where the save lands, and `None`
+    /// means the sidebar's selection. Returns the node id to bind the tab, or
+    /// `None` for a vanished target (a normal state, not an error).
     fn save_request(
         &mut self,
         node: Option<&str>,

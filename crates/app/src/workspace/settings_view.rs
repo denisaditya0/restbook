@@ -1,14 +1,9 @@
-//! The Settings dialog: a left-hand category sidebar over one page of controls,
-//! the way Zed presents preferences.
+//! The Settings dialog: a left-hand category sidebar over one page of controls.
 //!
-//! A dialog, not a second window or a dock pane: it is drawn by the workspace,
-//! which owns the store, root, and settings entity, so it reads live values and
-//! Escape dismisses it. Pages group the choices by the thing they change —
-//! General, History, Privacy, Updates, Storage, About — and every page also gets
-//! the kit's search field, so a setting is reachable by typing its name.
-//!
-//! Request defaults (timeout, redirects, TLS) stay with the request's Settings
-//! editor tab: they travel with a shared collection and are not app-level.
+//! A dialog, not a second window or dock pane: the workspace owns the store and
+//! settings, so it reads live values and Escape dismisses it. Pages group choices
+//! by what they change, each with the search field. Request defaults (timeout,
+//! redirects, TLS) stay with the request's Settings tab.
 
 use std::path::PathBuf;
 
@@ -548,18 +543,12 @@ fn zoom_field(settings: &Entity<Settings>) -> SettingField<f64> {
     .default_value(100.0)
 }
 
-/// The version row: the compiled version, the check, and the install. Everything
-/// the check learns is rendered here rather than in a floating toast, because the
-/// dialog is open and the page is where the user is looking.
 /// The sentence under the Version row.
 ///
 /// It names where an update comes from, not the manifest URL: the URL is a path
-/// inside the repository and says nothing a user can act on. `RESTBOOK_UPDATE_URL`
-/// overrides the address, and a failed check logs the exact one for when the
-/// address is what is wrong.
-///
-/// Split out from [`version_item`] because that reads the process environment;
-/// this is the part worth pinning.
+/// inside the repository, and `RESTBOOK_UPDATE_URL` overrides it. A failed check
+/// logs the exact address for when that is what is wrong. Split out from
+/// [`version_item`] because only this part is worth pinning.
 fn version_description(has_channel: bool) -> String {
     if has_channel {
         "Downloads from GitHub releases".to_owned()
@@ -568,6 +557,8 @@ fn version_description(has_channel: bool) -> String {
     }
 }
 
+/// The version row: the compiled version, the check, and the install. What the
+/// check learns is rendered here rather than in a floating toast.
 fn version_item(updates: &Entity<Updates>) -> SettingItem {
     let description = version_description(updater::manifest_url().is_some());
 

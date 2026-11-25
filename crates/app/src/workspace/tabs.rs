@@ -1,12 +1,9 @@
 //! The open-tab model, owned in one place.
 //!
-//! A [`Tab`] is what a tab holds; a [`TabEntry`] is the strip's read-only
-//! projection of it. The workspace keeps the whole set in [`TabState`] and hands
-//! the request pane only entries, so no tab field is maintained twice.
-//!
-//! A tab's identity is its [`TabId`], not its position: closing a tab shifts
-//! every index after it, and a send, a draft write, or a dialog can outlive the
-//! slot it started from.
+//! A [`Tab`] is what a tab holds; a [`TabEntry`] is the strip's read-only projection
+//! of it. [`TabState`] keeps the whole set and hands the request pane only entries,
+//! so no field is maintained twice. Identity is the [`TabId`], not the position:
+//! closing shifts every later index, and async work can outlive its slot.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -294,14 +291,10 @@ fn new_tab_id() -> TabId {
 
 /// Rebuild the open tabs from what the layout file recorded.
 ///
-/// A bound tab is resolved from the collection tree, so a node that was deleted
-/// since the last run drops the tab instead of opening a request that is no
-/// longer there. A draft is resolved the same way from its store row. The
-/// survivors keep their saved order, the dropped ones are counted for the
-/// caller's single message, and the active index lands on the same request even
-/// when an entry before it was dropped.
-///
-/// Returns the tabs, the number dropped, and the active index among survivors.
+/// A bound tab is resolved from the collection tree, a draft from its store row;
+/// one that no longer resolves is dropped rather than opened missing. Survivors
+/// keep their saved order, dropped ones are counted for the caller's single
+/// message, and the active index lands on the same request.
 pub(super) fn resolve_saved_tabs(
     saved: &SavedTabs,
     find_node: impl Fn(&str) -> Option<RequestDef>,
@@ -483,13 +476,11 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Write the open request into `node` (an existing collection node), into
-    /// `target` under `name`, or into a collection `create` names that does not
-    /// exist yet.
+    /// Write the open request into `node`, into `target` under `name`, or into a
+    /// collection `create` names that does not exist yet.
     ///
-    /// The node the save landed on is written back onto the tab, so a tab saved
-    /// for the first time is bound to it and the next Save updates rather than
-    /// duplicates.
+    /// The landed node is written back onto the tab, so a first save binds the tab
+    /// and the next Save updates rather than duplicates.
     pub(super) fn commit_save(
         &mut self,
         node: Option<String>,
@@ -578,12 +569,10 @@ impl Workspace {
 
     /// Open a saved request from the sidebar.
     ///
-    /// A node that is already open is brought forward rather than re-adopted,
-    /// so the tab on screen is never overwritten. Otherwise the request gets a
-    /// tab of its own, except when the window is sitting on its lone untouched
-    /// placeholder: taking that tab over keeps startup from stranding an empty
-    /// request beside the one that was just opened. A tab the user made with
-    /// New tab is theirs to keep, even before its first edit.
+    /// An already-open node is brought forward rather than re-adopted. Otherwise the
+    /// request gets its own tab, except when the window sits on its lone untouched
+    /// placeholder: taking that over keeps startup from stranding an empty request.
+    /// A tab the user made with New tab is theirs to keep, even before its first edit.
     pub(crate) fn open_saved(&mut self, node: String, request: RequestDef, cx: &mut Context<Self>) {
         if let Some(index) = self
             .tabs

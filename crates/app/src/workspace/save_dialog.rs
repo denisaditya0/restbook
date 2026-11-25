@@ -1,18 +1,9 @@
 //! The first-save dialog: a name and a destination.
 //!
-//! A draft has neither, so the save asks for both. The destination is a picker
-//! over every collection and its folders rather than the sidebar's highlight: a
-//! save should not fail because nothing was clicked last, and the highlight is
-//! navigation again.
-//!
-//! The typed name lives on the workspace (`save_name`, `save_new_collection_name`)
-//! because the dialog's content closure is rebuilt on every notify, so an input
-//! created inside it would lose the caret. The destination choice lives in the
-//! picker's own entity, which this dialog creates once and captures.
-//!
-//! *New collection…* is a row of the picker rather than a separate flow: a first
-//! run has no collection to save into, and making one elsewhere would cost the
-//! typed request name and the dialog.
+//! A draft has neither, so the save asks for both. The destination is a picker over
+//! every collection and folder rather than the sidebar highlight, so a save does
+//! not depend on what was last clicked. The typed name lives on the workspace
+//! because the content closure is rebuilt on every notify, losing an input's caret.
 
 use std::cell::Cell;
 use std::rc::Rc;

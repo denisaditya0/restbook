@@ -206,13 +206,9 @@ impl Document {
     }
 
     /// What the response pane paints, as one comparable value: the state it
-    /// renders and the failure text it shows.
-    ///
-    /// A send that resolves without a response leaves the URL and the response
-    /// stamp untouched — there is nothing to stamp — so a pane keyed on those
-    /// alone keeps painting the in-flight strip after the failure has landed.
-    /// Keying the paint on this value is what puts the failure view on the next
-    /// frame instead of leaving it for the next unrelated repaint.
+    /// renders and the failure text. A failure leaves the URL and response stamp
+    /// untouched, so a pane keyed on those keeps painting the in-flight strip;
+    /// keying on this value lands the failure view on the next frame.
     pub(crate) fn paint_key(&self) -> (ResponseState, Option<String>) {
         (
             self.response_state(),
