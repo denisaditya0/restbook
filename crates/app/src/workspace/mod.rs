@@ -72,6 +72,39 @@ const DOCK_VERSION: usize = 1;
 /// The layout file lives beside the history in the same data directory.
 const LAYOUT_FILE: &str = "layout.json";
 
+/// How the centre's two panes are arranged. The canvas owns this: it is the only
+/// module that builds a [`DockLayout`](gpui_kit::component::dock::DockLayout), and
+/// the dock persists the split's axis, so a restart reads the choice back from
+/// `layout.json` without a field of our own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum CenterOrientation {
+    /// Request over Response, the first-run arrangement.
+    #[default]
+    Stacked,
+    /// Request beside Response, each taking half the width.
+    SideBySide,
+}
+
+impl CenterOrientation {
+    /// The orientation a persisted centre split recorded. Anything that is not a
+    /// horizontal stack — a fresh file, or a centre that holds tabs rather than a
+    /// split — reads as the default.
+    pub(crate) fn from_axis(axis: Option<Axis>) -> Self {
+        match axis {
+            Some(Axis::Horizontal) => CenterOrientation::SideBySide,
+            _ => CenterOrientation::Stacked,
+        }
+    }
+
+    /// The other orientation, for the toggle.
+    fn flipped(self) -> Self {
+        match self {
+            CenterOrientation::Stacked => CenterOrientation::SideBySide,
+            CenterOrientation::SideBySide => CenterOrientation::Stacked,
+        }
+    }
+}
+
 pub(crate) struct Workspace {
     /// One transport for the life of the app: it owns the tokio runtime and
     /// the pooled reqwest clients, both of which are expensive to build.
@@ -107,6 +140,11 @@ pub(crate) struct Workspace {
     /// tab shifts every index after it, and the response still has to find the
     /// tab that asked for it.
     sending: Option<u64>,
+    /// Which way the centre split runs. Kept in memory so the status-bar control
+    /// can name the next action; the dock persists the axis itself (see
+    /// [`CenterOrientation`]). Set from the saved layout on install and flipped by
+    /// [`Workspace::toggle_center_orientation`].
+    center_orientation: CenterOrientation,
     dock: Entity<DockArea>,
     layout_path: PathBuf,
     save_task: Option<Task<()>>,
@@ -377,6 +415,7 @@ impl Workspace {
             tabs,
             closed: Vec::new(),
             sending: None,
+            center_orientation: CenterOrientation::default(),
             dock,
             layout_path: state_dir.join(LAYOUT_FILE),
             save_task: None,
@@ -925,6 +964,7 @@ impl Workspace {
             // whole dock), same open *and* close behavior.
             Command::ToggleEnvironment => self.toggle_tools(window, cx),
             Command::ToggleCollections => self.toggle_sidebar(window, cx),
+            Command::ToggleSideBySide => self.toggle_center_orientation(window, cx),
             Command::ResetLayout => self.reset_layout(window, cx),
             Command::OpenSettings => self.open_settings(window, cx),
             Command::ShowShortcuts => self.open_shortcuts(window, cx),
@@ -1439,6 +1479,29 @@ impl Render for Workspace {
                 .into_any_element()
         };
 
+        // The centre split control. Its glyph names the state the click leads
+        // to — two columns to go side by side, three rows to stack — so the
+        // bar reads the next action without a tooltip. It sits just left of the
+        // right-hand dock toggle because it is the centre's own control.
+        let center_toggle = {
+            let target = cx.entity();
+            let (icon, tooltip) = match self.center_orientation {
+                CenterOrientation::Stacked => (IconName::Columns2, "Split side by side"),
+                CenterOrientation::SideBySide => (IconName::Rows3, "Stack request over response"),
+            };
+            Button::new("status-toggle-split")
+                .icon(icon)
+                .ghost()
+                .compact()
+                .tooltip(tooltip)
+                .on_click(move |_, window, cx| {
+                    target.update(cx, |workspace, cx| {
+                        workspace.toggle_center_orientation(window, cx)
+                    });
+                })
+                .into_any_element()
+        };
+
         v_flex()
             .size_full()
             .bg(palette.background)
@@ -1517,6 +1580,7 @@ impl Render for Workspace {
                 },
                 &status,
                 left_toggle,
+                center_toggle,
                 right_toggle,
             ))
     }
@@ -1526,6 +1590,41 @@ impl Render for Workspace {
 mod tests {
     use super::updates;
     use super::{close_needs_confirmation, close_tabs_copy, wrap_index};
+
+    /// The centre's persisted axis is the only record of the split direction, so
+    /// reading it back has to invert the build exactly: a horizontal stack is
+    /// side by side, and anything else is the default stacked layout.
+    #[test]
+    fn the_centre_orientation_reads_back_from_the_saved_axis() {
+        use super::CenterOrientation;
+        use gpui_kit::Axis;
+
+        assert_eq!(
+            CenterOrientation::from_axis(Some(Axis::Horizontal)),
+            CenterOrientation::SideBySide
+        );
+        assert_eq!(
+            CenterOrientation::from_axis(Some(Axis::Vertical)),
+            CenterOrientation::Stacked
+        );
+        // A fresh file, or a centre that holds tabs rather than a split, has no
+        // axis to read and must not guess side by side.
+        assert_eq!(
+            CenterOrientation::from_axis(None),
+            CenterOrientation::Stacked
+        );
+    }
+
+    /// The toggle alternates, and it is an involution: two flips are the start.
+    #[test]
+    fn the_centre_orientation_toggle_alternates() {
+        use super::CenterOrientation;
+
+        let stacked = CenterOrientation::Stacked;
+        let side = stacked.flipped();
+        assert_eq!(side, CenterOrientation::SideBySide);
+        assert_eq!(side.flipped(), stacked);
+    }
 
     /// The lane's rule: a skipped version does not offer itself again, but
     /// skipping `0.1.4` must not silence `0.1.5`.
@@ -2115,6 +2214,7 @@ mod tests {
                         },
                         &chrome::Status::default(),
                         left_toggle,
+                        gpui_kit::Empty.into_any_element(),
                         right_toggle,
                     ))
             }

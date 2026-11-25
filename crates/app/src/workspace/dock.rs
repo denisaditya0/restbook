@@ -21,7 +21,7 @@ use crate::theme;
 
 use super::delete::Deleted;
 use super::persistence::{HISTORY_WIDTH, TOOL_WIDTH};
-use super::{chrome, PanelName, Workspace, WorkspaceNotice};
+use super::{chrome, CenterOrientation, PanelName, Workspace, WorkspaceNotice};
 
 impl Workspace {
     /// A tab group of the named panes, in order.
@@ -49,12 +49,14 @@ impl Workspace {
         }
     }
 
-    /// The named panes stacked vertically, top to bottom.
+    /// The named panes in one split, in order.
     ///
-    /// `sizes` is a restored stack's slot sizes, in the same order as `names`.
-    /// It is only a starting point: the user drags the handle from there, and
-    /// an absent or short list leaves that slot unconstrained, which makes the
-    /// split share the space evenly.
+    /// The split's axis follows the workspace's `center_orientation`: Request
+    /// over Response by default, or side by side when the user flips it. `sizes`
+    /// is a restored split's slot sizes, in the same order as `names`. It is only
+    /// a starting point: the user drags the handle from there, and an absent or
+    /// short list leaves that slot unconstrained, which makes the split share the
+    /// space evenly.
     pub(crate) fn stack_layout(
         &self,
         names: &[PanelName],
@@ -63,11 +65,45 @@ impl Workspace {
     ) -> Option<DockLayout> {
         let first = names.first()?;
         let size_at = |ix: usize| sizes.and_then(|sizes| sizes.get(ix).copied());
-        let mut split = DockLayout::v_split().child(self.tabs_layout(&[*first], cx), size_at(0));
+        let split = match self.center_orientation {
+            CenterOrientation::Stacked => DockLayout::v_split(),
+            CenterOrientation::SideBySide => DockLayout::h_split(),
+        };
+        let mut split = split.child(self.tabs_layout(&[*first], cx), size_at(0));
         for (ix, name) in names[1..].iter().enumerate() {
             split = split.child(self.tabs_layout(&[*name], cx), size_at(ix + 1));
         }
         Some(split)
+    }
+
+    /// Flip the centre between stacked and side by side, then persist it.
+    ///
+    /// The dock already stores the split's axis, so this rebuilds the centre with
+    /// the new direction (even slots: a height proportion means nothing as a
+    /// width) and writes the same layout file every other layout change does.
+    /// A flipped orientation that is not saved would be lost on the next launch.
+    pub(crate) fn toggle_center_orientation(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.center_orientation = self.center_orientation.flipped();
+        log::debug!(
+            target: "restbook_app::ui",
+            "centre split: {:?}",
+            self.center_orientation
+        );
+        let center = super::persistence::panel_names(Some(&self.dock.read(cx).dump(cx).center));
+        if let Some(layout) = self.stack_layout(&center, None, cx) {
+            self.dock
+                .update(cx, |dock, cx| dock.set_center(layout, window, cx));
+        }
+        self.persist_tabs(cx);
+        let message = match self.center_orientation {
+            CenterOrientation::Stacked => "Stacked",
+            CenterOrientation::SideBySide => "Side by side",
+        };
+        self.flash(chrome::FlashKind::Success, message, cx);
     }
     /// Show a confirmation in the bottom-right for a few seconds.
     ///

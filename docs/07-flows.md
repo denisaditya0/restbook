@@ -17,7 +17,7 @@ not fit one of these, that is a design smell, not a missing bucket.
 |---|---|---|
 | **Left dock** | the sidebar: Collections | `workspace/mod.rs` `reveal_panel`, `install_layout` |
 | **Right dock** | the tools dock: History / Environment | `workspace/mod.rs` `reveal_panel`, `install_layout` |
-| **Center** | Request over Response, in a vertical split | `workspace/mod.rs` `install_layout` |
+| **Center** | Request and Response, stacked or side by side | `workspace/mod.rs` `install_layout`, `Workspace::toggle_center_orientation` |
 | **Chrome** | the titlebar (34px) and status bar (24px), app-drawn | `workspace/chrome.rs` |
 | **Overlay** | a window-level dialog, sheet, palette, or notification | `window.open_dialog` / `open_sheet_at`, `window.push_notification` |
 
@@ -34,7 +34,7 @@ Set once in `Workspace::install_layout` (`workspace/mod.rs`) on first run:
 | Region | Panes | Source |
 |---|---|---|
 | Left dock | `Collections` only, 260px wide | `install_layout` |
-| Center | `Request` over `Response` (a `v_split`) | `install_layout` |
+| Center | `Request` over `Response` (a `v_split`; the status bar's split control flips it to an `h_split`) | `install_layout` |
 
 History and Environment are **constructed but not docked** by default. They are
 revealed on demand, which is the deliberate simplification noted in
@@ -48,13 +48,15 @@ untouched tab opens on one. A tab whose collection node was deleted while the
 app was closed — or a draft whose row is gone — is dropped rather than reopened
 against nothing, and one message names how many were dropped.
 
-The center split is fixed to **Request over Response**: there is no command to
-make it horizontal or to move a pane into a dock. Panes can be focused and
-closed from the palette (`Focus <pane>` / `Close <pane>`) and each pane's own
-dock menu; Request and Response are also in the titlebar's **View** menu, which
-leaves out the three panes that already have a status-bar toggle. **Reset
-layout** restores this default. Rearranging the center is a deliberate non-goal
-for now.
+The center opens as **Request over Response**, but it is no longer fixed: a
+control in the status bar, just left of the right-hand dock toggle, and the
+palette's **Toggle side-by-side** command flip it to a horizontal split and
+back. The choice is persisted: the dock stores the split's axis in
+`layout.json`, so a restart opens the same way, and **Reset layout** puts it
+back to stacked. Panes can be focused and closed from the palette (`Focus
+<pane>` / `Close <pane>`) and each pane's own dock menu; Request and Response
+are also in the titlebar's **View** menu, which leaves out the three panes that
+already have a status-bar toggle.
 
 ## Global chrome (always visible)
 
@@ -68,6 +70,7 @@ for now.
 | Status bar left | storage chip (`local database` or the workspace path) | `chrome::status_bar` |
 | Status bar right | last sent URL, or the engine error message | `chrome::status_bar`, `Workspace::status` |
 | Status bar, far right | dock toggle: `PanelRight` → the History + Environment dock | `chrome::status_bar` (`right_toggle`) |
+| Status bar, right of centre | split toggle: `Columns2` flips the centre to side by side, `Rows3` stacks it again | `Workspace::render` (`center_toggle`) |
 
 The titlebar's trailing History button was **removed**: the right dock now has
 its own toggle in the bottom-right corner, under the panel it opens. The window
@@ -116,6 +119,7 @@ not a registry, so this list is exhaustive.
 | Close response | — (palette only) | remove the Response pane from the centre; `Reset layout` restores it | Center | `Workspace::close_panel` |
 | Toggle environment | — (palette only) | reveal the Environment pane | Right dock | `reveal_panel` |
 | Toggle collections | — (palette only) | reveal the Collections pane | Left dock | `reveal_panel` |
+| Toggle side-by-side | — (palette only) | flip the centre between stacked and side by side; persisted in `layout.json` | Center | `Workspace::toggle_center_orientation` |
 | Reset layout | — (palette only) | apply the first-run arrangement and persist it | Left dock + Center | `Workspace::reset_layout` |
 | Settings… | `secondary-,` | open the Settings dialog | Overlay (dialog, 880px) | `Workspace::open_settings` |
 | Keyboard shortcuts | `?` | open the shortcuts sheet, generated from the palette table and the live keymap | Overlay (dialog) | `Workspace::open_shortcuts` |

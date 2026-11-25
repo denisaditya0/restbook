@@ -36,6 +36,7 @@ pub(crate) enum Command {
     ClosePanel(PanelName),
     ToggleEnvironment,
     ToggleCollections,
+    ToggleSideBySide,
     ResetLayout,
     OpenSettings,
     ShowShortcuts,
@@ -88,6 +89,7 @@ fn commands() -> Vec<(Command, &'static str)> {
         (Command::ClosePanel(PanelName::Response), "Close response"),
         (Command::ToggleEnvironment, "Toggle environment"),
         (Command::ToggleCollections, "Toggle collections"),
+        (Command::ToggleSideBySide, "Toggle side-by-side"),
         (Command::ResetLayout, "Reset layout"),
         (Command::OpenSettings, "Settings…"),
         (Command::ShowShortcuts, "Keyboard shortcuts"),
@@ -128,6 +130,7 @@ fn command_hint(command: Command, window: &Window) -> Option<String> {
         | Command::ClosePanel(_)
         | Command::ToggleEnvironment
         | Command::ToggleCollections
+        | Command::ToggleSideBySide
         | Command::ResetLayout
         | Command::Snapshot => None,
     }
@@ -279,6 +282,7 @@ mod tests {
         all.extend([
             ToggleEnvironment,
             ToggleCollections,
+            ToggleSideBySide,
             ResetLayout,
             OpenSettings,
             ShowShortcuts,
