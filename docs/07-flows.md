@@ -98,6 +98,7 @@ the panes stay responsive below their breakpoints.
 | Titlebar trailing | window-menu dropdown (palette, settings, clipboard, View panes, reset layout, log copy), window controls | `Workspace::render` |
 | Status bar, far left | dock toggle: `PanelLeft` → the sidebar dock | `chrome::status_bar` (`left_toggle`) |
 | Status bar left | storage chip (`local database` or the workspace path) | `chrome::status_bar` |
+| Status bar left | history chip (`Encrypted` / `Not encrypted` / `Not saved`), icon + word | `chrome::history_mode_chip` |
 | Status bar right | last sent URL, or the engine error message | `chrome::status_bar`, `Workspace::status` |
 | Status bar, far right | dock toggle: `PanelRight` → the History + Environment dock | `chrome::status_bar` (`right_toggle`) |
 
@@ -114,6 +115,12 @@ and is the way back after a pane is closed, whichever route closed it.
 Note: the status code, duration, and size are **not** here — the response pane
 owns them (U43). The status bar answers "where did my data go" and "did anything
 fail", nothing else.
+
+Below `layout_policy::STATUS_COMPACT_WIDTH` (900 px, zoom-scaled) the storage and
+history chips drop their words and keep the icon, the word moving into the
+tooltip; only the URL ellipsises. This follows the guide's "collapse a secondary
+label before clipping" rule, and keeps the corner toggles from being shoved off
+the bar.
 
 ## Commands (palette + keybindings)
 

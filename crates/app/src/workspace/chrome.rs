@@ -260,6 +260,7 @@ pub(crate) fn status_bar(
     metrics: &Metrics,
     workspace: &WorkspaceChip,
     status: &Status,
+    compact: bool,
     left_toggle: AnyElement,
     right_toggle: AnyElement,
 ) -> AnyElement {
@@ -316,27 +317,33 @@ pub(crate) fn status_bar(
                 palette.subtle,
             ),
         };
-        h_flex()
+        let label = SharedString::from(label);
+        let tooltip = label.clone();
+        let mut chip = h_flex()
             .id("status-workspace")
             .flex_none()
             .min_w_0()
             .items_center()
             .gap(px(metrics.space_1p5))
-            .child(icons::quiet(icon, icons::SMALL, palette))
-            .child(
+            .child(icons::quiet(icon, icons::SMALL, palette));
+        // A narrow bar keeps the glyph and moves the word into the tooltip.
+        if !compact {
+            chip = chip.child(
                 div()
                     .max_w(px(360.))
                     .truncate()
                     .text_xs()
                     .text_color(color)
-                    .child(SharedString::from(label)),
-            )
+                    .child(label),
+            );
+        }
+        chip.tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
     };
 
     // Where the data lives, and how the history it holds is protected. Two
     // chips rather than one sentence: the location is a path and the protection
     // is a state, and a user looks for them in different situations.
-    let history_chip = history_mode_chip(workspace, palette, metrics);
+    let history_chip = history_mode_chip(workspace, palette, metrics, compact);
 
     div()
         .flex()
@@ -382,6 +389,7 @@ fn history_mode_chip(
     workspace: &WorkspaceChip,
     palette: &Palette,
     metrics: &Metrics,
+    compact: bool,
 ) -> AnyElement {
     let (state, icon, label, color, tooltip) = match workspace.history {
         HistoryMode::Encrypted => (
@@ -421,22 +429,25 @@ fn history_mode_chip(
         ),
     };
 
-    h_flex()
+    let mut chip = h_flex()
         .id("status-history")
         // Recorded so the render test can tell which state was painted.
         .debug_selector(move || format!("status-history-{state}"))
         .flex_none()
         .items_center()
         .gap(px(metrics.space_1p5))
-        .child(icons::sized(icon, icons::SMALL).text_color(color))
-        .child(
+        .child(icons::sized(icon, icons::SMALL).text_color(color));
+    // A narrow bar keeps the glyph and moves the word into the tooltip.
+    if !compact {
+        chip = chip.child(
             div()
                 .truncate()
                 .text_xs()
                 .text_color(color)
                 .child(SharedString::from(label)),
-        )
-        .tooltip(move |window, cx| Tooltip::new(tooltip).build(window, cx))
+        );
+    }
+    chip.tooltip(move |window, cx| Tooltip::new(tooltip).build(window, cx))
         .into_any_element()
 }
 
@@ -595,6 +606,7 @@ mod render_tests {
                         history: self.0,
                     },
                     &super::Status::default(),
+                    false,
                     gpui_kit::Empty.into_any_element(),
                     gpui_kit::Empty.into_any_element(),
                 ))

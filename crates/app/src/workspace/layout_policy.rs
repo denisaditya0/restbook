@@ -21,6 +21,13 @@ pub(crate) const LEFT_MIN: f32 = 400.;
 /// The tools dock's usable width: an environment row's key, value, and controls.
 pub(crate) const RIGHT_MIN: f32 = 400.;
 
+/// Below this window width the status bar's chips drop their labels and keep
+/// only the icon (with the label in the tooltip). The bar carries the URL on
+/// the right and the storage/history chips on the left; under this width the
+/// two compete, and the guide's rule is to collapse a secondary label before
+/// clipping anything.
+pub(crate) const STATUS_COMPACT_WIDTH: f32 = 900.;
+
 /// The centre's width for `orientation`: one pane stacked, two side by side.
 pub(crate) const fn centre_width(orientation: CenterOrientation) -> f32 {
     match orientation {

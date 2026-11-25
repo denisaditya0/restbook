@@ -1238,6 +1238,10 @@ impl Render for Workspace {
             .collect();
         let dock = self.dock.clone();
         let status = self.status(cx);
+        // A cramped status bar drops the chip labels to icons (the labels stay in
+        // their tooltips) so the URL keeps room without shoving the toggles off.
+        let compact_status = f32::from(window.viewport_size().width)
+            < layout_policy::STATUS_COMPACT_WIDTH * theme::zoom(cx);
         // The chip is window-wide chrome, not pane content, so the canvas is
         // what places it. The pick mutates the shared `Variables` entity, which
         // is the same one the Environment pane reads.
@@ -1551,6 +1555,7 @@ impl Render for Workspace {
                     history: self.history,
                 },
                 &status,
+                compact_status,
                 left_toggle,
                 right_toggle,
             ))
@@ -2198,6 +2203,7 @@ mod tests {
                             history: crate::workspace::storage::HistoryMode::Encrypted,
                         },
                         &chrome::Status::default(),
+                        false,
                         left_toggle,
                         right_toggle,
                     ))
