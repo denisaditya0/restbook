@@ -347,6 +347,27 @@ top of that item.
 Refs: `Workspace::adopt_active` (`workspace/tabs.rs`), `panels/collections/mod.rs`
 (`Selection`, `prune_selection`), `07-flows.md` "Collections: request row click".
 
+### 3.10 The request editor tables draw every row every frame — **P3**
+
+`panels/editor/kv_table.rs` (headers, query params) and
+`panels/editor/parts_table.rs` (form-data, multipart) build one widget — a
+checkbox, two inputs, and an action strip — per row in a plain `v_flex` loop,
+inside `editor-tab-body`'s `overflow_y_scroll`. Nothing virtualizes them, so a
+request with hundreds of params or multipart parts re-lays out every row on each
+keystroke that notifies the editor. It is the same shape the Collections tree had
+before 3.7, scoped to a single request, and only bites a request built by hand or
+one with a very large form body — an OpenAPI import produces handfuls, so it is
+not the 0.2.2 case.
+
+**Fix:** flatten each table to a row list and paint it with `uniform_list` as the
+tree does (`Rows`/`PartRows` already own the row entities, so the list captures
+them by `Rc`). The rows are fixed-height, so no variable-height model is needed.
+Its natural home is the `0.4.1` request panel redesign, which rewrites this
+editor's layout anyway; until then it is an unassigned P3.
+
+Refs: `panels/editor/kv_table.rs` (`render`), `panels/editor/parts_table.rs`
+(`render`), `panels/request.rs` (`render_editor`, `editor-tab-body`), 3.7.
+
 ## 4. Dialogs and destructive actions
 
 Prompts are app-only by construction: `crates/core`, `crates/transport`, and
