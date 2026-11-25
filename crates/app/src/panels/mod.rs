@@ -8,6 +8,7 @@
 pub(crate) mod collections;
 pub(crate) mod command_palette;
 mod editor;
+pub(crate) mod empty;
 pub(crate) mod environment;
 pub(crate) mod history;
 pub(crate) mod history_row;

@@ -16,11 +16,14 @@ use gpui_kit::*;
 
 use restbook_core::{HistoryFilter, HistoryHit, Method, Origin, Store};
 
+use crate::actions::{shortcut, SendRequest};
 use crate::document::Document;
 use crate::icons::{self, IconName};
 use crate::panels::history_row::{self, HistoryRow};
 use crate::theme::{Metrics, Palette};
 use crate::workspace::settings::Settings;
+
+use super::empty::{self, Action};
 
 pub(crate) enum Event {
     /// The user clicked a history row. The workspace loads the full entry, so
@@ -504,7 +507,7 @@ impl HistoryPanel {
             .into_any_element()
     }
 
-    fn render_hits(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_hits(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let palette = &self.palette;
 
         // A failed search is not an empty log, and saying "Nothing sent yet."
@@ -520,24 +523,28 @@ impl HistoryPanel {
         }
 
         if self.hits.is_empty() {
-            let message = if self.scope == Scope::Request && self.document.read(cx).url().is_empty()
-            {
-                "No request open."
-            } else if self.filters_active() {
-                "No sends match these filters."
-            } else {
-                match self.scope {
-                    Scope::All => "Nothing sent yet.",
-                    Scope::Request => "Nothing sent for this request.",
-                }
-            };
-            return div()
-                .px(px(self.metrics.space_md))
-                .py(px(self.metrics.space_sm))
-                .text_sm()
-                .text_color(palette.subtle)
-                .child(message)
-                .into_any_element();
+            let (title, body, actions) =
+                if self.scope == Scope::Request && self.document.read(cx).url().is_empty() {
+                    (
+                        "No request open",
+                        Some("Open or send a request to see its history."),
+                        Vec::new(),
+                    )
+                } else if self.filters_active() {
+                    (
+                        "No sends match these filters",
+                        Some("Adjust the filters above to see more."),
+                        Vec::new(),
+                    )
+                } else {
+                    let body = Some("Send a request and its response is saved here.");
+                    let actions = vec![Action::new("Send request", shortcut(&SendRequest, window))];
+                    match self.scope {
+                        Scope::All => ("Nothing sent yet", body, actions),
+                        Scope::Request => ("Nothing sent for this request", body, actions),
+                    }
+                };
+            return empty::empty_state(title, body, actions, None, palette, &self.metrics);
         }
 
         let rows: Vec<HistoryRow> = self.hits.iter().map(HistoryRow::from_hit).collect();
@@ -660,7 +667,7 @@ fn filter_by_query(hits: Vec<HistoryHit>, query: &str) -> Vec<HistoryHit> {
 }
 
 impl Render for HistoryPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = self.palette.clone();
 
         v_flex()
@@ -748,7 +755,7 @@ impl Render for HistoryPanel {
                     .flex_1()
                     .min_h_0()
                     .py(px(self.metrics.space_xs))
-                    .child(self.render_hits(cx)),
+                    .child(self.render_hits(window, cx)),
             )
     }
 }

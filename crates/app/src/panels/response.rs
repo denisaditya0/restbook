@@ -28,7 +28,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::actions::{shortcut, SendRequest};
+use crate::actions::{shortcut, FocusUrl, NewTab, SendRequest, ToggleSidebar};
 use crate::document::{Document, ResponseState};
 // The full Lucide catalog, not the component's default list: `ClipboardCopy` is
 // not in the default bundle and would paint nothing.
@@ -36,6 +36,8 @@ use crate::icons::{self, IconName};
 use crate::theme::{Metrics, Palette};
 use crate::util;
 use crate::workspace::settings::Settings;
+
+use super::empty::{self, Action};
 
 /// Past this many lines the numbered rows stop being worth it: a quarter-megabyte
 /// of blank lines is not a line count anyone reads, so the body becomes one
@@ -2218,28 +2220,29 @@ impl ResponsePanel {
     /// `Idle` means nothing has been sent (or the response was wiped), so
     /// there is no pending branch here: a live send renders through
     /// [`ResponsePanel::render_status`].
+    ///
+    /// The empty state names the next actions and their live shortcuts, the
+    /// same rows the shortcuts sheet draws, so the keys read per OS instead of
+    /// a hardcoded glyph.
     fn render_idle(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let palette = &self.palette;
+        let actions = vec![
+            Action::new("Send request", shortcut(&SendRequest, window)),
+            Action::new("New tab", shortcut(&NewTab, window)),
+            Action::new("Focus URL", shortcut(&FocusUrl, window)),
+            Action::new("Toggle sidebar", shortcut(&ToggleSidebar, window)),
+        ];
 
-        v_flex()
+        div()
             .size_full()
-            .items_center()
-            .justify_center()
-            .gap(px(self.metrics.space_xs))
             .debug_selector(|| "response-idle".to_owned())
-            .children(self.render_earlier_sends(cx))
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(palette.muted)
-                    .child("Send a request to see the response."),
-            )
-            .children(shortcut(&SendRequest, window).map(|key| {
-                div()
-                    .text_xs()
-                    .text_color(palette.muted)
-                    .child(format!("{key} sends from anywhere in the request pane."))
-            }))
+            .child(empty::empty_state(
+                "Nothing sent yet",
+                Some("Send a request to see the response."),
+                actions,
+                self.render_earlier_sends(cx),
+                &self.palette,
+                &self.metrics,
+            ))
             .into_any_element()
     }
 
@@ -3580,6 +3583,36 @@ mod render_tests {
             cx.debug_bounds("response-history-idle-control").is_some(),
             "the idle pane should offer the earlier sends"
         );
+
+        cx.quit();
+    }
+
+    /// A fresh pane is the app's first ten minutes: nothing sent, so the empty
+    /// state has to name the next actions rather than show one sentence. Each
+    /// row is painted with a live shortcut, so the tree carries one selector per
+    /// action and the labels are the ones the shortcuts sheet uses.
+    #[test]
+    fn the_idle_pane_names_the_next_actions() {
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+
+        let (_view, cx) = open(&mut cx, None);
+        draw(cx);
+
+        let selectors = [
+            "response-idle",
+            "empty-action-Send request",
+            "empty-action-New tab",
+            "empty-action-Focus URL",
+            "empty-action-Toggle sidebar",
+        ];
+        let idle = tree::bounds_tree(cx, "response-idle", &selectors);
+        for selector in selectors {
+            assert!(
+                idle.contains(selector),
+                "the idle empty state should record {selector}:\n{idle}"
+            );
+        }
 
         cx.quit();
     }

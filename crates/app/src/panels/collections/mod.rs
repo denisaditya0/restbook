@@ -33,10 +33,13 @@ use self::tree::{
 
 pub(crate) use self::tree::{import_into, Destination, DestinationRow, ImportOutcome};
 
+use crate::actions::{shortcut, ImportFile, PasteCurl};
 use crate::document::Document;
 use crate::icons::{self, IconName};
 use crate::notice::Notice;
 use crate::theme::{Metrics, Palette};
+
+use super::empty::{self, Action};
 
 // `Open` carries a whole `RequestDef`, which is much larger than `OpenDraft`'s
 // `i64`. The variant is constructed and matched in exactly two places, so the
@@ -1404,9 +1407,21 @@ impl CollectionsPanel {
             .into_any_element()
     }
 
-    fn render_list(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_list(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         if self.collections.is_empty() {
-            return self.message("No collections yet. Add one above.");
+            return empty::empty_state_inline(
+                "No collections yet",
+                Some(
+                    "Import an OpenAPI document, paste a cURL, or create a collection \
+                     with the + button.",
+                ),
+                vec![
+                    Action::new("Import…", shortcut(&ImportFile, window)),
+                    Action::new("Paste cURL", shortcut(&PasteCurl, window)),
+                ],
+                &self.palette,
+                &self.metrics,
+            );
         }
 
         let query = self.query.read(cx).value().to_string();
@@ -1885,7 +1900,7 @@ fn row_menu(
 }
 
 impl Render for CollectionsPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bg = self.palette.sidebar;
         v_flex()
             .size_full()
@@ -1894,7 +1909,7 @@ impl Render for CollectionsPanel {
             .child(self.render_header(cx))
             .children(self.composing.then(|| self.render_new_collection(cx)))
             .children((!self.drafts.is_empty()).then(|| self.render_unsaved(cx)))
-            .child(self.render_list(cx))
+            .child(self.render_list(window, cx))
     }
 }
 

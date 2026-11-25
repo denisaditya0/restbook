@@ -695,6 +695,27 @@ The hint is derived from the keymap, not typed:
 A hint with no binding is `None`, so a navigation-only palette command renders
 blank instead of inventing a key.
 
+### Show an empty state
+
+A blank pane names what would fill it and offers the next actions, rather than a
+lone sentence. Use `panels::empty`:
+
+1. `empty_state` centers a capped block (the Response and History panes);
+   `empty_state_inline` is the same block padded to the pane edge with no fixed
+   width, for a narrow pane (the 260px Collections sidebar).
+2. Give it a short title (`Nothing sent yet`), an optional one-line body, and a
+   `Vec<Action>`; each `Action` is a label plus the hint from
+   `actions::shortcut(.., window)`, so the keys read per OS.
+3. `empty_state` also takes an optional footer for a control the pane already
+   owns (the response pane's “Earlier sends”).
+4. Rows share one width so their shortcuts line up. Each row opts in to an
+   `empty-action-<label>` `debug_selector`, which is what a render test asserts
+   on; `debug_bounds` needs a `&'static str`, so query the tree with
+   `preview::tree::bounds_tree` and a literal selector list.
+
+The same panes' error states stay single lines: an error is a fact, not a task,
+and a filtered list's “No matches.” is a result, not a first run.
+
 ### Change the look
 
 - Colors come from `Palette` (`src/theme.rs`), built once per pane from the
