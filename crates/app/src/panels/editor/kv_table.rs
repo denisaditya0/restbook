@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use gpui_kit::component::button::*;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{h_flex, v_flex, IconName};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -402,7 +403,7 @@ fn render_completions(
                     .occlude()
                     // Eight rows of the table's own height, so the band tracks zoom.
                     .max_h(px(metrics.row_height * 8.))
-                    .overflow_y_scroll()
+                    .overflow_y_scrollbar()
                     .rounded_md()
                     .border_1()
                     .border_color(palette.border)

@@ -1129,21 +1129,25 @@ impl CollectionsPanel {
                         }),
                 );
             }
-            menu.item(PopupMenuItem::separator()).item(
-                PopupMenuItem::new("New collection…")
-                    .icon(IconName::Plus)
-                    .on_click({
-                        let panel = panel.clone();
-                        move |_, window, cx| {
-                            panel.update(cx, |this, cx| {
-                                this.composing = true;
-                                let handle = this.new_collection.read(cx).focus_handle(cx);
-                                handle.focus(window, cx);
-                                cx.notify();
-                            });
-                        }
-                    }),
-            )
+            menu.item(PopupMenuItem::separator())
+                .item(
+                    PopupMenuItem::new("New collection…")
+                        .icon(IconName::Plus)
+                        .on_click({
+                            let panel = panel.clone();
+                            move |_, window, cx| {
+                                panel.update(cx, |this, cx| {
+                                    this.composing = true;
+                                    let handle = this.new_collection.read(cx).focus_handle(cx);
+                                    handle.focus(window, cx);
+                                    cx.notify();
+                                });
+                            }
+                        }),
+                )
+                // One row per collection: unbounded, so it can outgrow the
+                // window and clip the last choices without a scrollbar.
+                .scrollable(true)
         };
 
         Button::new("collections-switcher")

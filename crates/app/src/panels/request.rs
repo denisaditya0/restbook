@@ -12,6 +12,7 @@ use gpui_kit::base::{ElementExt as _, InteractiveElementExt as _};
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputEvent};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu, PopupMenu, PopupMenuItem};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::tab::{TabBar, TabVariant};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{h_flex, v_flex, Disableable as _};
@@ -924,6 +925,9 @@ impl RequestPanel {
                     .items_center()
                     .pl(px(self.metrics.space_xs))
                     .pr(px(self.metrics.space_xs))
+                    // Stays on the hidden variant: `track_scroll` feeds the shared
+                    // handle `scroll_to_item` drives, and `overflow_x_scrollbar`
+                    // wraps the element in a scroll area that owns its own handle.
                     .overflow_x_scroll()
                     // The handle lives on the scrollport and its direct children
                     // are the tabs, so `scroll_to_item(index)` lines up with the
@@ -1245,7 +1249,7 @@ impl RequestPanel {
                         .id("url-completions")
                         .occlude()
                         .max_h(px(240.))
-                        .overflow_y_scroll()
+                        .overflow_y_scrollbar()
                         .rounded_md()
                         .border_1()
                         .border_color(palette.border)
@@ -1349,7 +1353,7 @@ impl RequestPanel {
                     .id("editor-tab-body")
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
+                    .overflow_y_scrollbar()
                     .px(px(self.metrics.space_md))
                     .py(px(self.metrics.space_sm))
                     .bg(palette.background)
