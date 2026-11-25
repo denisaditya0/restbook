@@ -39,11 +39,14 @@ use gpui_kit::*;
 
 /// The smallest the window may be dragged to.
 ///
-/// `DockArea` floors every pane slot at 100 px but exposes no per-split minimum,
-/// so without this a window could shrink until panes render narrower than the
-/// dock thinks they are. The panes are responsive below their breakpoints; the
-/// window stops here rather than at nothing.
-const MIN_WINDOW_WIDTH: f32 = 640.;
+/// The width is computed from the layout (`workspace::MIN_WINDOW_WIDTH`): one
+/// usable centre pane per pane of the split, and the wider side-by-side split
+/// because the floor is set once and the orientation can flip. The side docks
+/// are not in the floor — they collapse when the window cannot hold them — so
+/// the window can narrow to a bare pair of panes rather than ever clipping a
+/// dock. `DockArea` floors each split slot at 100 px and exposes no resizable
+/// minimum, so panes stay responsive below their own breakpoints and the
+/// window stops at the centre's floor, not at nothing.
 const MIN_WINDOW_HEIGHT: f32 = 480.;
 
 /// The window root. The two launch paths produce different view types, and a
@@ -123,7 +126,7 @@ fn main() {
                     origin: point(px(80.), px(80.)),
                     size: size(px(1280.), px(820.)),
                 })),
-                window_min_size: Some(size(px(MIN_WINDOW_WIDTH), px(MIN_WINDOW_HEIGHT))),
+                window_min_size: Some(size(px(workspace::MIN_WINDOW_WIDTH), px(MIN_WINDOW_HEIGHT))),
                 titlebar: Some(titlebar),
                 // The one identity the *platform* needs rather than the app
                 // painting it. On Linux this is the `app_id` a dock, taskbar and

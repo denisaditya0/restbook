@@ -75,13 +75,26 @@ A menu whose rows grow with the user's data scrolls inside the popup instead of
 clipping at the window edge: the collection switcher (one row per collection) and
 the environment switcher (one row per environment). A fixed menu never scrolls.
 
+The window's own floor is computed, not typed: `workspace::layout_policy`
+gives every region its usable width — a request or response pane 340 px
+(`CENTRE_MIN`), the Collections dock and the tools dock 400 px each — and
+derives the window floor from the centre alone. The side docks collapse before
+a pane is squeezed, so the floor is one centre pane stacked (340 px) or two side
+by side (680 px); `MIN_WINDOW_WIDTH` takes the wider 680 because it is fixed at
+launch and the split can flip. A dock that is shown adds its 400 px back:
+`340 + 400 + 400 = 1140` stacked, `680 + 400 + 400 = 1480` side by side. A
+resize collapses the tools dock first, then the sidebar (`sync_dock_fit`), and
+an auto collapse is not written to `layout.json` — the file keeps the user's
+intent, and the fit is re-derived on the next launch. The kit's 100 px split
+floor is unchanged: the handle can still narrow a pane to 100 px by hand, and
+the panes stay responsive below their breakpoints.
+
 ## Global chrome (always visible)
 
 | Element | Shows | Source |
 |---|---|---|
 | Titlebar chip | workspace name, initial in a rounded square | `chrome::titlebar` |
 | Titlebar environment chip | active environment; opens the environment menu | `chrome::environment_chip` |
-| Titlebar breadcrumb | tab label › URL (URL is its own tooltip, truncated at 240px) | `Workspace::breadcrumb` |
 | Titlebar trailing | window-menu dropdown (palette, settings, clipboard, View panes, reset layout, log copy), window controls | `Workspace::render` |
 | Status bar, far left | dock toggle: `PanelLeft` → the sidebar dock | `chrome::status_bar` (`left_toggle`) |
 | Status bar left | storage chip (`local database` or the workspace path) | `chrome::status_bar` |

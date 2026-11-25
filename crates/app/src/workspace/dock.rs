@@ -18,8 +18,18 @@ use crate::notice::Notice;
 use crate::theme;
 
 use super::delete::Deleted;
+use super::layout_policy;
 use super::persistence::{HISTORY_WIDTH, TOOL_WIDTH};
 use super::{chrome, CenterOrientation, PanelName, Workspace, WorkspaceNotice};
+
+/// The usable width of the display the window sits on, for capping a grow.
+fn display_width(window: &Window, cx: &App) -> Option<f32> {
+    let centre = window.bounds().center();
+    cx.displays()
+        .into_iter()
+        .find(|display| display.bounds().contains(&centre))
+        .map(|display| f32::from(display.visible_bounds().size.width))
+}
 
 impl Workspace {
     /// A tab group of the named panes, in order.
@@ -95,6 +105,9 @@ impl Workspace {
         }
         self.persist_tabs(cx);
         self.push_center_orientation(cx);
+        // The flip changes how much centre room the docks leave, so the fit is
+        // re-derived before the message names the new orientation.
+        self.sync_dock_fit(window, cx);
         let message = match self.center_orientation {
             CenterOrientation::Stacked => "Stacked",
             CenterOrientation::SideBySide => "Side by side",
@@ -463,6 +476,7 @@ impl Workspace {
 
         match name {
             PanelName::Collections => {
+                self.dock_intent.left = true;
                 let layout = self.tabs_layout(&[PanelName::Collections], cx);
                 self.dock.update(cx, |dock, cx| {
                     dock.set_dock(DockPlacement::Left, layout, window, cx);
@@ -478,6 +492,7 @@ impl Workspace {
                 });
             }
             PanelName::History | PanelName::Environment => {
+                self.dock_intent.right = true;
                 let names = [PanelName::History, PanelName::Environment];
                 let active = names.iter().position(|each| *each == name).unwrap_or(0);
                 let layout = names
@@ -515,6 +530,16 @@ impl Workspace {
             // The centre panes are always mounted; there is nothing to reveal.
             PanelName::Request | PanelName::Response => {}
         }
+
+        // A dock the user asked for should be visible even from a narrow window:
+        // grow the window to the region minimums rather than open a dock the fit
+        // would immediately collapse. The centre panes need none of this.
+        if matches!(
+            name,
+            PanelName::Collections | PanelName::History | PanelName::Environment
+        ) {
+            self.ensure_docks_fit(window, cx);
+        }
     }
 
     /// The titlebar's sidebar button. A closed sidebar keeps nothing on screen,
@@ -524,11 +549,13 @@ impl Workspace {
         let open = self.dock_showing(DockPlacement::Left, cx);
         log::debug!(target: "restbook_app::ui", "titlebar: sidebar toggle, open={open}");
         if open {
+            self.dock_intent.left = false;
             self.dock.update(cx, |dock, cx| {
                 dock.toggle_dock(DockPlacement::Left, window, cx)
             });
             return;
         }
+        self.dock_intent.left = true;
         self.reveal_panel(PanelName::Collections, window, cx);
         // Say it worked somewhere the user can see it. A dock that opens
         // off-screen (or under a stale layout) otherwise looks exactly like a
@@ -543,11 +570,13 @@ impl Workspace {
         let open = self.dock_showing(DockPlacement::Right, cx);
         log::debug!(target: "restbook_app::ui", "titlebar: tools toggle, open={open}");
         if open {
+            self.dock_intent.right = false;
             self.dock.update(cx, |dock, cx| {
                 dock.toggle_dock(DockPlacement::Right, window, cx)
             });
             return;
         }
+        self.dock_intent.right = true;
         self.reveal_panel(PanelName::History, window, cx);
         let now_open = self.dock.read(cx).is_dock_open(DockPlacement::Right);
         log::debug!(target: "restbook_app::ui", "titlebar: tools revealed, open={now_open}");
@@ -564,6 +593,64 @@ impl Workspace {
             chrome::FlashKind::Error
         };
         self.flash(kind, message, cx);
+    }
+
+    /// Show exactly the docks the window has room for.
+    ///
+    /// The user's intent is fixed; the window width decides how much of it can
+    /// be honoured. An auto collapse or restore is suppressed from `layout.json`
+    /// because the saved open flags are the intent, not this frame's fit.
+    pub(crate) fn sync_dock_fit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let zoom = theme::zoom(cx);
+        let width = f32::from(window.viewport_size().width);
+        let want =
+            layout_policy::visible_docks(width, self.center_orientation, zoom, self.dock_intent);
+        let dock = self.dock.clone();
+        let (is_left, is_right) = {
+            let dock = dock.read(cx);
+            (
+                dock.is_dock_open(DockPlacement::Left),
+                dock.is_dock_open(DockPlacement::Right),
+            )
+        };
+        if (is_left, is_right) == (want.left, want.right) {
+            return;
+        }
+        self.suppress_layout_save = true;
+        dock.update(cx, |dock, cx| {
+            // `toggle_dock` reports "changed", so only toggle a dock that is
+            // present and in the wrong state.
+            if dock.has_dock(DockPlacement::Left)
+                && dock.is_dock_open(DockPlacement::Left) != want.left
+            {
+                dock.toggle_dock(DockPlacement::Left, window, cx);
+            }
+            if dock.has_dock(DockPlacement::Right)
+                && dock.is_dock_open(DockPlacement::Right) != want.right
+            {
+                dock.toggle_dock(DockPlacement::Right, window, cx);
+            }
+        });
+        self.suppress_layout_save = false;
+        cx.notify();
+    }
+
+    /// Grow the window so the docks the user asked for fit, then re-apply the
+    /// fit. An explicit toggle at a narrow width must not be a dead button, so
+    /// the window gives way to the region minimums rather than the reverse.
+    fn ensure_docks_fit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let zoom = theme::zoom(cx);
+        let needed = layout_policy::needed_width(self.center_orientation, self.dock_intent, zoom);
+        let current = f32::from(window.viewport_size().width);
+        if current + 0.5 < needed {
+            // Cap to the display's usable width: a request larger than the
+            // monitor would otherwise open a window off every edge.
+            let cap = display_width(window, cx).unwrap_or(f32::INFINITY);
+            let width = needed.min(cap);
+            let height = window.viewport_size().height;
+            window.resize(size(px(width), height));
+        }
+        self.sync_dock_fit(window, cx);
     }
 
     /// Whether a dock is on screen *and* holds something. A dock emptied by

@@ -129,8 +129,8 @@ Not done, in rough order of visual payoff:
 
 - Request tabs inside the titlebar, as the reference does. That is a change to
   the U13 decision (tabs live in the request pane), so it needs a deliberate
-  call; the breadcrumb the titlebar shows today is the cheaper half of the same
-  idea.
+  call; the titlebar keeps only the workspace chip, the environment chip, and
+  the window menu, not a breadcrumb of the open request.
 
 ## Theming
 

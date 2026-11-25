@@ -8,13 +8,14 @@
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-use gpui_kit::component::dock::{DockAreaState, DockPlacement, PanelState};
+use gpui_kit::component::dock::{DockAreaState, DockPlacement, DockState, PanelState};
 use gpui_kit::*;
 
 use restbook_core::Draft;
 
 use crate::theme;
 
+use super::layout_policy;
 use super::{CenterOrientation, PanelName, Workspace};
 
 /// Bump when the default arrangement changes in a way an older saved layout
@@ -138,7 +139,14 @@ impl Workspace {
             if !left.is_empty() || !center.is_empty() || !right.is_empty() {
                 let left_size = state.left_dock.as_ref().map(|dock| dock.size());
                 let right_size = state.right_dock.as_ref().map(|dock| dock.size());
+                let left_open = state.left_dock.as_ref().is_none_or(|dock| dock.open());
                 let right_open = state.right_dock.as_ref().is_none_or(|dock| dock.open());
+                // The saved open flags are the user's intent, not the transient
+                // fit an earlier narrow window happened to show.
+                self.dock_intent = layout_policy::Docks {
+                    left: left_open,
+                    right: right_open,
+                };
                 // The centre's direction is the split's axis in the saved tree;
                 // rebuild it the same way so a side-by-side choice survives a
                 // restart. Its slot sizes are the request/response proportion the
@@ -173,6 +181,7 @@ impl Workspace {
         // Reset layout also restores the default direction, so a user who wants
         // Request over Response again does not have to toggle after a reset.
         self.center_orientation = CenterOrientation::Stacked;
+        self.dock_intent = layout_policy::Docks::FIRST_RUN;
         self.apply_layout(
             &[PanelName::Collections],
             &[PanelName::Request, PanelName::Response],
@@ -197,10 +206,35 @@ impl Workspace {
         self.default_layout(window, cx);
         self::save(
             &self.layout_path,
-            &self.dock.read(cx).dump(cx),
+            &self.layout_state(cx),
             &self.tabs_snapshot(),
         );
         self.flash(super::chrome::FlashKind::Success, "Layout reset", cx);
+    }
+
+    /// The dock state as it should be persisted: a live dump whose dock open
+    /// flags are replaced by what the user asked for, not by what the current
+    /// window width happens to show. An auto-collapse on resize must not read
+    /// back as a closed dock on the next launch.
+    pub(crate) fn layout_state(&self, cx: &App) -> DockAreaState {
+        let mut state = self.dock.read(cx).dump(cx);
+        if let Some(dock) = &state.left_dock {
+            state.left_dock = Some(DockState::new(
+                dock.panel().clone(),
+                dock.placement(),
+                dock.size(),
+                self.dock_intent.left,
+            ));
+        }
+        if let Some(dock) = &state.right_dock {
+            state.right_dock = Some(DockState::new(
+                dock.panel().clone(),
+                dock.placement(),
+                dock.size(),
+                self.dock_intent.right,
+            ));
+        }
+        state
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -258,6 +292,10 @@ impl Workspace {
         // so it follows every path that rebuilds the centre — the saved layout,
         // the first-run default, and a reset.
         self.push_center_orientation(cx);
+        // The open docks are part of the arrangement too: a saved layout that
+        // wants a dock this window cannot hold starts with it collapsed, and a
+        // reset restores the first-run pair.
+        self.sync_dock_fit(window, cx);
     }
 
     /// layout debounce. A burst of typing costs one write; only the active tab is
@@ -495,7 +533,7 @@ impl Workspace {
     pub(crate) fn persist_tabs(&mut self, cx: &App) {
         save(
             &self.layout_path,
-            &self.dock.read(cx).dump(cx),
+            &self.layout_state(cx),
             &self.tabs_snapshot(),
         );
     }
@@ -512,6 +550,14 @@ pub(crate) const HISTORY_WIDTH: f32 = 260.;
 /// key, a value, and three controls, so the pane cannot use the sidebar's
 /// width without clipping the controls that create an environment.
 pub(crate) const TOOL_WIDTH: f32 = 400.;
+
+/// The window's width floor: the centre alone, taking the wider split because
+/// the minimum is set once at launch and the orientation can flip. The docks
+/// are not in this sum; they collapse (see [`layout_policy`]) before a pane is
+/// squeezed, so a narrow window loses a dock rather than clipping a request.
+pub(crate) const MIN_WINDOW_WIDTH: f32 =
+    layout_policy::window_min_width(CenterOrientation::SideBySide);
+
 /// The pane names in a saved tree, drops unknown ones, in layout order.
 pub(super) fn panel_names(state: Option<&PanelState>) -> Vec<PanelName> {
     let mut names = Vec::new();

@@ -20,66 +20,18 @@ use crate::theme::{Metrics, Palette};
 
 use super::storage::{EphemeralReason, HistoryMode, PlaintextReason};
 
-/// One thing the titlebar can show, and its tooltip.
-pub(crate) struct TitlePart {
-    pub label: SharedString,
-    pub tooltip: Option<SharedString>,
-}
-
-impl TitlePart {
-    pub(crate) fn new(label: impl Into<SharedString>) -> Self {
-        Self {
-            label: label.into(),
-            tooltip: None,
-        }
-    }
-
-    pub(crate) fn with_tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
-        self.tooltip = Some(tooltip.into());
-        self
-    }
-}
-
-/// The window titlebar: the workspace chip, one breadcrumb part per level,
-/// `trailing`, then the [`TitleBar`]'s own window controls.
+/// The window titlebar: the workspace chip, `trailing`, then the [`TitleBar`]'s
+/// own window controls.
 ///
-/// The dock toggles live in the status bar instead. See [`status_bar`].
+/// The open request's label and URL live in the request tab strip and the
+/// status bar, so the bar carries no breadcrumb of its own. The dock toggles
+/// live in the status bar instead. See [`status_bar`].
 pub(crate) fn titlebar(
     palette: &Palette,
     metrics: &Metrics,
     workspace: &str,
-    parts: Vec<TitlePart>,
     trailing: AnyElement,
 ) -> AnyElement {
-    let mut crumbs: Vec<AnyElement> = Vec::new();
-    for (index, part) in parts.into_iter().enumerate() {
-        if index > 0 {
-            crumbs.push(
-                div()
-                    .flex_none()
-                    .text_xs()
-                    .text_color(palette.subtle)
-                    .child("/")
-                    .into_any_element(),
-            );
-        }
-        // Keyed on the segment text, which is unique within one trail: an
-        // index would re-key every crumb after a removal or a reorder.
-        let label = div()
-            .id(part.label.clone())
-            .max_w(px(240.))
-            .truncate()
-            .text_sm()
-            .text_color(palette.muted)
-            .child(part.label);
-        crumbs.push(match part.tooltip {
-            Some(tooltip) => label
-                .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
-                .into_any_element(),
-            None => label.into_any_element(),
-        });
-    }
-
     TitleBar::new()
         .h_full()
         // The library paints a gradient of its own theme's title bar and
@@ -118,21 +70,9 @@ pub(crate) fn titlebar(
                         .child(SharedString::from(workspace.to_owned())),
                 ),
         )
-        .child(
-            div()
-                .flex_none()
-                .text_xs()
-                .text_color(palette.subtle)
-                .child("›"),
-        )
-        .child(
-            h_flex()
-                .flex_1()
-                .min_w_0()
-                .items_center()
-                .gap(px(metrics.space_xs))
-                .children(crumbs),
-        )
+        // Slack goes to the middle so the environment chip and menu stay at
+        // the right edge, beside the window controls.
+        .child(div().flex_1())
         .child(press_through(trailing))
         .into_any_element()
 }
