@@ -86,8 +86,22 @@ impl Report {
 
 /// Parse `text` as the format `file` names. The expensive half of an import,
 /// and the half that can fail without having written anything.
+///
+/// A failure names the reader that was tried, and whether the file name or the
+/// contents chose it. Without that, a wrong guess reports only what the wrong
+/// reader missed: a spec read as a HAR said "no log.entries" and nothing about
+/// why it was read as a HAR.
 fn parse(file: &str, text: &str) -> Result<BulkImport, String> {
-    let format = ImportFormat::from_file_name(file).unwrap_or_else(|| ImportFormat::detect(text));
+    let (format, source) = match ImportFormat::from_file_name(file) {
+        Some(format) => (format, "from the file name"),
+        None => (ImportFormat::detect(text), "guessed from its contents"),
+    };
+    log::debug!(
+        target: "restbook_app::import",
+        "{file}: {} bytes, read as {} {source}",
+        text.len(),
+        format.label()
+    );
     import::parse(
         format,
         text,
@@ -96,7 +110,12 @@ fn parse(file: &str, text: &str) -> Result<BulkImport, String> {
             har_limit: None,
         },
     )
-    .map_err(|error| format!("Could not import {file}: {error}"))
+    .map_err(|error| {
+        format!(
+            "Could not import {file} as {} ({source}): {error}",
+            format.label()
+        )
+    })
 }
 
 /// Save what `parsed` holds, either as new collections or into `target`.
@@ -657,6 +676,27 @@ mod tests {
         assert!(error.contains("broken.har"), "{error}");
         assert!(error.contains("HAR"), "{error}");
         assert!(store.collections().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_guessed_reader_is_named_and_called_a_guess() {
+        // `.json` is ambiguous, so the contents picked HAR and the message has
+        // to say so: "no log.entries" alone does not explain why a spec was
+        // read as a HAR.
+        let error = parse("openapi.json", r#"{"log": {"pages": []}}"#).unwrap_err();
+        assert!(
+            error.contains("as a HAR log (guessed from its contents)"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_named_reader_is_not_called_a_guess() {
+        let error = parse("session.har", r#"{"log": {}}"#).unwrap_err();
+        assert!(
+            error.contains("as a HAR log (from the file name)"),
+            "{error}"
+        );
     }
 
     #[test]
