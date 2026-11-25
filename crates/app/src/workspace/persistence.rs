@@ -16,7 +16,7 @@ use restbook_core::Draft;
 
 use crate::theme;
 
-use super::{PanelName, Workspace};
+use super::{CenterOrientation, PanelName, Workspace};
 
 /// Bump when the default arrangement changes in a way an older saved layout
 /// should not override. A file written under an earlier version is discarded;
@@ -151,10 +151,12 @@ impl Workspace {
                 let left_size = state.left_dock.as_ref().map(|dock| dock.size());
                 let right_size = state.right_dock.as_ref().map(|dock| dock.size());
                 let right_open = state.right_dock.as_ref().is_none_or(|dock| dock.open());
-                // The centre is a vertical stack, so its two slots are the
-                // request/response proportion the user dragged. `dump` writes
-                // it; without passing it back the split would start 50/50 on
-                // every launch.
+                // The centre's direction is the split's axis in the saved tree;
+                // rebuild it the same way so a side-by-side choice survives a
+                // restart. Its slot sizes are the request/response proportion the
+                // user dragged. `dump` writes both; without passing them back the
+                // split would start 50/50 (and vertical) on every launch.
+                self.center_orientation = CenterOrientation::from_axis(state.center.info.axis());
                 let center_sizes = state.center.info.sizes().map(Vec::as_slice);
                 self.apply_layout(
                     &left,
@@ -180,6 +182,9 @@ impl Workspace {
 
     /// The arrangement a first run installs, and what Reset Layout restores.
     pub(crate) fn default_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Reset layout also restores the default direction, so a user who wants
+        // Request over Response again does not have to toggle after a reset.
+        self.center_orientation = CenterOrientation::Stacked;
         self.apply_layout(
             &[PanelName::Collections],
             &[PanelName::Request, PanelName::Response],
@@ -521,7 +526,7 @@ pub(crate) const HISTORY_WIDTH: f32 = 260.;
 /// width without clipping the controls that create an environment.
 pub(crate) const TOOL_WIDTH: f32 = 400.;
 /// The pane names in a saved tree, drops unknown ones, in layout order.
-fn panel_names(state: Option<&PanelState>) -> Vec<PanelName> {
+pub(super) fn panel_names(state: Option<&PanelState>) -> Vec<PanelName> {
     let mut names = Vec::new();
     if let Some(state) = state {
         collect_names(state, &mut names);

@@ -318,18 +318,6 @@ Paste cURL), which also gives dock panels a natural home for panel actions.
 
 Refs: `gpui_component::dock::Panel::dropdown_menu`, the five pane `Panel` impls.
 
-### 3.5 Center layout is fixed to Request-over-Response — **P3**
-
-`apply_layout` builds `[Request, Response]` as a `v_split` and there is no user
-command to rearrange the center. Dock dragging may move panels, but there is no
-keyboard path and no discoverable affordance.
-
-**Fix:** decide whether the center is user-arrangeable; if yes, expose a reset
-and a "move panel" command. If no, say so in the UI guide so it stops being
-reported as a bug.
-
-Refs: `Workspace::stack_layout`, `02-ui-plan.md` U2a.
-
 ### 3.6 Switching tabs does not reveal the request in Collections — **P2**
 
 A row click moves the Collections selection and opens the tab, but the reverse
