@@ -81,7 +81,7 @@ pub fn parse(text: &str, fallback_name: &str) -> crate::Result<BulkImport> {
                 .map(str::to_owned)
                 .unwrap_or_else(|| format!("{method} {path}"));
 
-            match request_of(&host, path, item, operation, method) {
+            match request_of(&host, path, &document, item, operation, method) {
                 Ok(request) => folder.items.push(CollectionItem::Request(SavedRequest {
                     id: new_id(),
                     name,
@@ -127,6 +127,7 @@ fn servers_of(document: &Value) -> Option<String> {
 fn request_of(
     host: &str,
     path: &str,
+    document: &Value,
     item: &Map<String, Value>,
     operation: &Value,
     method: Method,
@@ -134,7 +135,7 @@ fn request_of(
     let mut url = path.to_owned();
 
     let mut params: Vec<Kv> = Vec::new();
-    for parameter in parameters(item, operation) {
+    for parameter in parameters(document, item, operation) {
         let Some(name) = parameter.get("name").and_then(Value::as_str) else {
             continue;
         };
@@ -177,13 +178,21 @@ fn request_of(
 
 /// Path-level parameters apply to every operation under them, so both levels
 /// are read; an operation-level parameter wins by `(name, in)`.
-fn parameters(item: &Map<String, Value>, operation: &Value) -> Vec<Value> {
+///
+/// A parameter is commonly a `$ref` into `components.parameters`, so each entry
+/// is resolved before it is read: Cloudflare's document declares every path
+/// parameter that way, and an unresolved entry made 462 operations look
+/// unfillable.
+fn parameters(root: &Value, item: &Map<String, Value>, operation: &Value) -> Vec<Value> {
     let mut merged: Vec<Value> = Vec::new();
     for source in [item.get("parameters"), operation.get("parameters")] {
         let Some(list) = source.and_then(Value::as_array) else {
             continue;
         };
         for parameter in list {
+            let Some(parameter) = resolve(root, parameter) else {
+                continue;
+            };
             let key = (
                 parameter.get("name").and_then(Value::as_str),
                 parameter.get("in").and_then(Value::as_str),
@@ -201,6 +210,17 @@ fn parameters(item: &Map<String, Value>, operation: &Value) -> Vec<Value> {
         }
     }
     merged
+}
+
+/// Follow a local `$ref` (`#/components/...`) to the value it names.
+///
+/// An external or unresolvable reference yields `None` rather than a guess: a
+/// parameter read from the wrong place would put the wrong value in a URL.
+fn resolve<'a>(root: &'a Value, value: &'a Value) -> Option<&'a Value> {
+    let Some(reference) = value.get("$ref").and_then(Value::as_str) else {
+        return Some(value);
+    };
+    root.pointer(reference.strip_prefix('#')?)
 }
 
 /// A value a required parameter can start with: its example, its default, or a
@@ -434,6 +454,41 @@ mod tests {
     fn a_document_without_servers_cannot_build_urls() {
         let error = parse(r#"{"openapi": "3.0.0", "paths": {}}"#, "x").unwrap_err();
         assert!(error.to_string().contains("no server URL"));
+    }
+
+    #[test]
+    fn a_parameter_that_is_a_ref_is_read_from_components() {
+        // Cloudflare's document declares every path parameter this way; without
+        // dereferencing, each operation is reported as unfillable instead.
+        let import = parse(
+            r##"{"openapi":"3.0.0","servers":[{"url":"https://x.test"}],
+                "paths":{"/zones/{zone_id}/dns_records":{
+                    "get":{"parameters":[{"$ref":"#/components/parameters/zone_id"}]}}},
+                "components":{"parameters":{"zone_id":{
+                    "name":"zone_id","in":"path","required":true,
+                    "schema":{"type":"string"}}}}}"##,
+            "x",
+        )
+        .unwrap();
+        assert!(import.skipped.is_empty(), "{:?}", import.skipped);
+        let records = folder(&import.collections[0], "/zones/{zone_id}/dns_records");
+        assert_eq!(
+            request(records, "GET /zones/{zone_id}/dns_records").url,
+            "https://x.test/zones/{{zone_id}}/dns_records"
+        );
+    }
+
+    #[test]
+    fn an_unresolvable_ref_is_skipped_rather_than_guessed() {
+        let import = parse(
+            r#"{"openapi":"3.0.0","servers":[{"url":"https://x.test"}],
+                "paths":{"/a":{"get":{"parameters":[{"$ref":"other.json#/p"}]}}}}"#,
+            "x",
+        )
+        .unwrap();
+        // The unresolvable parameter is dropped, and the operation still lands
+        // because nothing in its path was left unfilled.
+        assert_eq!(import.request_count(), 1);
     }
 
     #[test]

@@ -277,12 +277,27 @@ impl ImportFormat {
         None
     }
 
+    /// The format as a person reads it in a sentence ("a HAR log"), not as a
+    /// variant name.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Curl => "a cURL command",
+            Self::Postman => "a Postman collection",
+            Self::Har => "a HAR log",
+            Self::OpenApi => "an OpenAPI document",
+            Self::Bruno => "a Bruno request",
+            Self::Bundle => "a restbook bundle",
+        }
+    }
+
     /// The format whose envelope this text matches, by shape rather than file
     /// name; `curl` is the fallback.
     ///
-    /// JSON formats are told apart by the *pair* of keys that makes each valid.
-    /// Postman is `info` + `item`, not `info` + `schema`: `schema` is optional,
-    /// and a lone `info` used to fall through to the curl parser.
+    /// JSON formats are told apart by their *top-level* keys, not by keys
+    /// anywhere in the text: a 29 MB OpenAPI document mentions `log` and
+    /// `entries` in its own schemas and was read as a HAR. Postman is `info` +
+    /// `item`, not `info` + `schema`: `schema` is optional, and a lone `info`
+    /// used to fall through to the curl parser.
     pub fn detect(text: &str) -> Self {
         let trimmed = text.trim_start();
         if !trimmed.starts_with('{') {
@@ -298,6 +313,11 @@ impl ImportFormat {
             }
             return Self::Curl;
         }
+        if let Some(format) = Self::detect_json(text) {
+            return format;
+        }
+        // Truncated or otherwise unparsable JSON still gets the substring
+        // guess, so a half-written HAR is reported as a HAR and not as curl.
         if text.contains("\"log\"") && text.contains("\"entries\"") {
             return Self::Har;
         }
@@ -307,12 +327,34 @@ impl ImportFormat {
         if text.contains("\"openapi\"") || text.contains("\"swagger\"") {
             return Self::OpenApi;
         }
-        // Checked after the other JSON envelopes: a bundle carries both keys
-        // this app writes and nothing another format claims.
         if text.contains("\"collections\"") && text.contains("\"version\"") {
             return Self::Bundle;
         }
         Self::Curl
+    }
+
+    /// The format a parsable JSON object declares at its root; `curl` when no
+    /// envelope of ours claims it. `None` means the text is not a JSON object
+    /// at all, and the caller's substring guess still applies.
+    fn detect_json(text: &str) -> Option<Self> {
+        let value: serde_json::Value = serde_json::from_str(text).ok()?;
+        let object = value.as_object()?;
+        let has = |key: &str| object.contains_key(key);
+        // `log` alone is a HAR, even without `entries`, so a malformed log
+        // still reaches the HAR parser and says what is wrong with it.
+        if has("log") {
+            return Some(Self::Har);
+        }
+        if has("info") && has("item") {
+            return Some(Self::Postman);
+        }
+        if has("openapi") || has("swagger") {
+            return Some(Self::OpenApi);
+        }
+        if has("collections") && has("version") {
+            return Some(Self::Bundle);
+        }
+        Some(Self::Curl)
     }
 }
 
@@ -664,6 +706,33 @@ mod tests {
         assert_eq!(
             ImportFormat::detect("openapi: 3.0.0\ninfo:\n  title: Acme\npaths: {}\n"),
             ImportFormat::OpenApi
+        );
+    }
+
+    #[test]
+    fn a_nested_log_and_entries_does_not_make_a_spec_a_har() {
+        // Cloudflare's 29 MB OpenAPI document mentions both words in its own
+        // schemas. The old scan read it as a HAR and refused it with "no
+        // log.entries".
+        let spec = r#"{
+            "openapi": "3.0.3",
+            "info": { "title": "Large" },
+            "paths": {
+                "/logs": {
+                    "get": { "responses": { "200": { "schema": { "log": { "entries": [] } } } } }
+                }
+            }
+        }"#;
+        assert_eq!(ImportFormat::detect(spec), ImportFormat::OpenApi);
+    }
+
+    #[test]
+    fn a_log_without_entries_is_still_read_as_a_har() {
+        // The HAR parser says which key is missing; curl would turn the JSON
+        // into one request named after its first byte.
+        assert_eq!(
+            ImportFormat::detect(r#"{"log": {"pages": []}}"#),
+            ImportFormat::Har
         );
     }
 
