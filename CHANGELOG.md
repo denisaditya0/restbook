@@ -24,6 +24,19 @@ Contributors and pull requests are added to the release page by `release.yml`;
 do not write them here.
 -->
 
+## 0.2.1
+
+- **Your tabs come back after a restart.** The app reopens the tabs you had open,
+  with the same one active, and says so when a tab had to be dropped because its
+  request no longer exists.
+- **Import into a collection you already have.** Import offers a destination the
+  way Save does: a new collection, or any collection or folder in your tree.
+  Arriving requests are appended with fresh ids, and one whose name is already
+  taken is reported instead of replacing the request that was there.
+- **Large OpenAPI documents import completely.** Parameters declared by reference
+  inside the document are resolved instead of silently dropped, and a failed
+  import names the format it tried and why the file did not match.
+
 ## 0.2.0
 
 - **Choose where a request is saved.** Saving opens a destination picker that
