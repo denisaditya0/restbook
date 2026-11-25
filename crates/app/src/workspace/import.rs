@@ -9,21 +9,25 @@
 //! already exists. The default is still one new collection per parsed one.
 
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use gpui_kit::component::button::*;
 use gpui_kit::component::dialog::DialogFooter;
-use gpui_kit::component::menu::{DropdownMenu, PopupMenu, PopupMenuItem};
-use gpui_kit::component::{h_flex, v_flex, WindowExt as _};
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Sizable as _, WindowExt as _};
 use gpui_kit::*;
 use restbook_core::import::{self, BulkImport, ImportFormat, Options, Skip};
 use restbook_core::{Collection, CollectionItem, Store};
 
-use crate::icons::IconName;
 use crate::notice::Notice;
 use crate::panels::collections::{import_into, Destination, ImportOutcome};
 use crate::theme::{Metrics, Palette};
 
-use super::save_dialog::{with_destinations, DestinationPick};
+use super::destination_picker::{
+    destination_picker, open_destination_select, selected_choice, DestinationChoice,
+};
 use super::Workspace;
 
 /// A parsed file waiting for the dialog's answer. Kept on the workspace because
@@ -33,6 +37,10 @@ pub(super) struct PendingImport {
     file: String,
     parsed: BulkImport,
 }
+
+/// The toast an import shows while it works. The type is the key, so the step
+/// from reading to saving replaces one notification instead of stacking two.
+struct ImportNotice;
 
 /// What an import put into the store, in the words the result dialog shows.
 #[derive(Debug)]
@@ -261,14 +269,33 @@ fn count_requests(items: &[CollectionItem]) -> usize {
         .sum()
 }
 
+/// The busy toast was closed before the file was read or parsed. Drop the work
+/// and say so: a pick that returns to an unchanged window reads as a bug.
+fn cancelled(
+    workspace: &mut Workspace,
+    file: &str,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    workspace.end_import_busy(window, cx);
+    workspace.notice(
+        &Notice::Done(format!("Cancelled importing {file:?}.").into()),
+        cx,
+    );
+}
+
 impl Workspace {
     /// Ask for a file, parse it off the UI thread, then let the user choose
     /// where it lands. Called from render as well as from the action, so a
     /// dialog always has the window it needs.
     pub(crate) fn import_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // A previous attempt's choice must not survive into this one.
+        // One import at a time: the empty state, the pane's button, and the menu
+        // all route here, and two runs would fight over one busy toast.
+        if self.import_busy {
+            return;
+        }
+        // A previous attempt's parse must not survive into this one.
         self.import_pending = None;
-        self.import_target = None;
         let picked = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -287,6 +314,19 @@ impl Workspace {
                 .and_then(|name| name.to_str())
                 .unwrap_or("import")
                 .to_owned();
+            // A 29 MB document is a second of reading and parsing with nothing on
+            // screen, which reads as a hang. The toast goes up before the read so
+            // every step below is covered, and closing it cancels: the flag is
+            // checked between the two background steps, which is as far as a
+            // blocking parse can be interrupted.
+            let cancel = Arc::new(AtomicBool::new(false));
+            let watching = cancel.clone();
+            let shown = workspace.update_in(cx, |this, window, cx| {
+                this.show_import_busy(&file, "Reading and parsing", Some(watching), window, cx);
+            });
+            if shown.is_err() {
+                return;
+            }
             let read = cx
                 .background_spawn({
                     let path = path.clone();
@@ -298,21 +338,37 @@ impl Workspace {
                 Err(error) => {
                     let message = format!("Could not read {file}: {error}");
                     workspace
-                        .update_in(cx, |this, _window, cx| {
+                        .update_in(cx, |this, window, cx| {
+                            this.end_import_busy(window, cx);
                             this.notice(&Notice::Failed(message.into()), cx);
                         })
                         .ok();
                     return;
                 }
             };
+            if cancel.load(Ordering::Relaxed) {
+                workspace
+                    .update_in(cx, |this, window, cx| cancelled(this, &file, window, cx))
+                    .ok();
+                return;
+            }
             let parsed = cx
                 .background_spawn({
                     let file = file.clone();
                     async move { parse(&file, &text) }
                 })
                 .await;
+            // A cancellation that arrived during the parse drops the result
+            // rather than opening the destination dialog for it.
+            if cancel.load(Ordering::Relaxed) {
+                workspace
+                    .update_in(cx, |this, window, cx| cancelled(this, &file, window, cx))
+                    .ok();
+                return;
+            }
             workspace
                 .update_in(cx, |this, window, cx| {
+                    this.end_import_busy(window, cx);
                     let parsed = match parsed {
                         Ok(parsed) => parsed,
                         Err(message) => {
@@ -326,13 +382,61 @@ impl Workspace {
                         this.land_import(file, parsed, None, window, cx);
                         return;
                     }
-                    this.import_target = None;
                     this.import_pending = Some(PendingImport { file, parsed });
                     this.open_import_dialog(window, cx);
                 })
                 .ok();
         })
         .detach();
+    }
+
+    /// Show what an import is doing, for as long as it is doing it.
+    ///
+    /// The step is a line under the file name; closing the toast sets `cancel`
+    /// where that is offered. A store write cannot be interrupted, so the saving
+    /// phase passes `None` and the toast is only a report there.
+    fn show_import_busy(
+        &mut self,
+        file: &str,
+        step: impl Into<SharedString> + 'static,
+        cancel: Option<Arc<AtomicBool>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.import_busy = true;
+        let step = step.into();
+        let mut notification = Notification::new()
+            .id::<ImportNotice>()
+            .autohide(false)
+            .title("Importing")
+            .message(file.to_owned())
+            .content(move |_, _, cx| {
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(Spinner::new().xsmall())
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(step.clone()),
+                    )
+                    .into_any_element()
+            });
+        if let Some(cancel) = cancel {
+            notification = notification.on_close(move |_, _| cancel.store(true, Ordering::Relaxed));
+        }
+        window.push_notification(notification, cx);
+    }
+
+    /// Clear [`Workspace::import_busy`] and the toast. Every exit path calls it,
+    /// so a finished import cannot leave a spinner on screen.
+    fn end_import_busy(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.import_busy {
+            return;
+        }
+        self.import_busy = false;
+        window.remove_notification::<ImportNotice>(cx);
     }
 
     /// Where a parsed file lands: new collections by default, or the place the
@@ -346,6 +450,15 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let requests = parsed.request_count();
+        let plural = if requests == 1 { "" } else { "s" };
+        self.show_import_busy(
+            &file,
+            format!("Saving {requests} request{plural}"),
+            None,
+            window,
+            cx,
+        );
         let store = self.store.clone();
         cx.spawn_in(window, async move |workspace, cx| {
             let landed = cx
@@ -372,8 +485,17 @@ impl Workspace {
         let title = format!("Import {:?}", pending.file);
         let requests = pending.parsed.request_count();
         let collections = pending.parsed.collections.len();
-        // The default is today's behavior, so every open starts there.
-        self.import_target = None;
+
+        // The default is today's behavior — import as new collections — so the
+        // picker opens on that row.
+        let rows = self.panes.collections.read(cx).destinations();
+        let select = open_destination_select(
+            &rows,
+            Some("New collection(s)"),
+            DestinationChoice::New,
+            window,
+            cx,
+        );
 
         let workspace = cx.entity();
         let palette = Palette::new(cx);
@@ -383,14 +505,16 @@ impl Workspace {
         // not when the dialog was built.
         type Confirm = Rc<dyn Fn(&mut Window, &mut App) -> bool>;
         let confirm_workspace = workspace.clone();
+        let confirm_select = select.clone();
         let confirm: Confirm = Rc::new(move |window, cx| {
+            let target =
+                selected_choice(&confirm_select, cx).and_then(|choice| choice.existing().cloned());
             let workspace = confirm_workspace.clone();
             window.defer(cx, move |window, cx| {
                 workspace.update(cx, |workspace, cx| {
                     let Some(pending) = workspace.import_pending.take() else {
                         return;
                     };
-                    let target = workspace.import_target.clone();
                     workspace.land_import(pending.file, pending.parsed, target, window, cx);
                 });
             });
@@ -399,64 +523,11 @@ impl Workspace {
         let for_button = confirm.clone();
         let for_ok = confirm.clone();
 
-        window.open_dialog(cx, move |dialog, _window, cx| {
-            let rows = workspace.read(cx).panes.collections.read(cx).destinations();
-            let current = workspace.read(cx).import_target.clone();
-            let current_label = match &current {
-                None => "New collection(s)".to_owned(),
-                Some(target) => rows
-                    .iter()
-                    .find(|row| &row.target == target)
-                    .map(|row| row.label.clone())
-                    .unwrap_or_else(|| "Choose a collection".to_owned()),
-            };
-
-            let menu_workspace = workspace.clone();
-            let menu_rows = rows.clone();
-            let menu_current = current.clone();
-            let menu_pick: DestinationPick = Rc::new(|workspace, target| {
-                workspace.import_target = Some(target.clone());
-            });
-            let menu = move |menu: PopupMenu, _: &mut Window, _: &mut Context<PopupMenu>| {
-                let new_workspace = menu_workspace.clone();
-                let menu = menu.item(
-                    PopupMenuItem::new("New collection(s)")
-                        .icon(IconName::Plus)
-                        .checked(menu_current.is_none())
-                        .on_click(move |_, _, cx| {
-                            new_workspace.update(cx, |workspace, cx| {
-                                workspace.import_target = None;
-                                cx.notify();
-                            });
-                        }),
-                );
-                with_destinations(
-                    menu,
-                    &menu_rows,
-                    menu_current.as_ref(),
-                    &menu_workspace,
-                    &menu_pick,
-                )
-                // Every folder in every collection: taller than a minimum window.
-                .scrollable(true)
-            };
-
-            let into = h_flex()
-                .gap(px(metrics.space_sm))
-                .items_center()
-                .text_sm()
-                .child(div().text_color(palette.muted).child("Into"))
-                .child(
-                    Button::new("import-destination")
-                        .label(current_label)
-                        .ghost()
-                        .compact()
-                        .flex_1()
-                        .min_w_0()
-                        .dropdown_caret(true)
-                        .tooltip("Where the requests are imported")
-                        .dropdown_menu(menu),
-                );
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let into = v_flex()
+                .gap(px(metrics.space_xs))
+                .child(div().text_xs().text_color(palette.muted).child("Into"))
+                .child(destination_picker(&select, "Import destination"));
 
             let source = v_flex().gap(px(metrics.space_xs)).child(
                 div().text_sm().text_color(palette.muted).child(format!(
@@ -473,7 +544,6 @@ impl Workspace {
                 .on_click(move |_, window, cx| {
                     cancel_workspace.update(cx, |workspace, _cx| {
                         workspace.import_pending = None;
-                        workspace.import_target = None;
                     });
                     window.close_dialog(cx);
                 });
@@ -513,6 +583,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.end_import_busy(window, cx);
         let report = match landed {
             Ok(report) => report,
             Err(message) => {
@@ -595,6 +666,11 @@ impl Workspace {
     }
 }
 
+/// How many rows of one section the report dialog draws before it stops and
+/// counts the rest. A clean import has none; a file the reader could not fully
+/// understand can have thousands, and one text line each will not do.
+const REPORT_ROW_LIMIT: usize = 50;
+
 fn section(heading: &str, rows: &[String], palette: &Palette, metrics: Metrics) -> AnyElement {
     let mut list = v_flex().gap(px(metrics.space_xs)).child(
         div()
@@ -602,8 +678,16 @@ fn section(heading: &str, rows: &[String], palette: &Palette, metrics: Metrics) 
             .text_color(palette.muted)
             .child(heading.to_owned()),
     );
-    for row in rows {
+    for row in rows.iter().take(REPORT_ROW_LIMIT) {
         list = list.child(div().text_sm().child(row.clone()));
+    }
+    if rows.len() > REPORT_ROW_LIMIT {
+        list = list.child(
+            div()
+                .text_sm()
+                .text_color(palette.muted)
+                .child(format!("and {} more", rows.len() - REPORT_ROW_LIMIT)),
+        );
     }
     list.into_any_element()
 }

@@ -7,11 +7,11 @@ this click land", and this file owns "what still feels unfinished".
 Every item names the code that makes it true, so an item that gets fixed can be
 checked off without re-deriving it. Items are ordered by user pain, not by size.
 
-**Status:** three items are open: **5.4** (collection verbs live in the window
-menu), **6.3** (the `restbook-ui` crate split) and **6.6** (two type scales that
-disagree). Open work, including those, is tracked in
-[`01-milestones.md`](01-milestones.md). The per-item text below is the record of
-what was wrong and what fixed it.
+**Status:** the items still open are **3.6** (a tab does not reveal its row),
+**5.4** (collection verbs live in the window menu), **6.3** (the `restbook-ui`
+crate split) and **6.6** (two type scales that disagree). Open work, including
+those, is tracked in [`01-milestones.md`](01-milestones.md). The per-item text
+below is the record of what was wrong and what fixed it.
 
 Priority:
 
@@ -47,6 +47,9 @@ Priority:
 | 3.3 Panel focus/close in the palette | `Command::FocusPanel` / `Command::ClosePanel` |
 | 3.4 Panel dropdown menus | each pane's `Panel::dropdown_menu` |
 | 3.5 Center layout decision recorded | `07-flows.md` "Default window layout" |
+| 3.7 The Collections tree draws every row every frame | `CollectionsPanel::flatten`, `uniform_list("collections-rows")` |
+| 3.8 A large import shows nothing while it works | `Workspace::show_import_busy`, `ImportFormat::detect` (B30) |
+| 3.9 The destination picker built a menu row per collection and folder | `workspace/destination_picker.rs` (virtualized `Select`) |
 | 4.1 Undo for a delete | `Workspace::undo_delete`, `FlashAction` |
 | 4.2 Delete dialogs name the item | `Workspace::open_delete_dialog` |
 | 4.3 Batch close confirmation copy | `close_tabs_copy`, `PendingDelete::Tabs` |
@@ -338,25 +341,11 @@ no way to be told — only pane → workspace events exist, never the other way.
 its collection and folder path (`owner_collection`, `find_in_items_all`), sets
 `selection`, expands every ancestor in `collapsed`, and notifies; call it from
 `adopt_active` when `tab.origin()` is `Saved { node }`. Scrolling the row into
-view needs the scroll offset the virtual list in 3.7 would bring, so it lands
-with that item, not before.
+view needs the scroll offset the virtual list brought in 3.7, so it lands on
+top of that item.
 
 Refs: `Workspace::adopt_active` (`workspace/tabs.rs`), `panels/collections/mod.rs`
 (`Selection`, `prune_selection`), `07-flows.md` "Collections: request row click".
-
-### 3.7 The Collections tree draws every row every frame — **P2**
-
-The tree is a plain `overflow_y_scroll` column, not a virtual list, so
-`render_list` builds every collection, folder, and request on each frame. The
-3,000-request test guards filter time, not paint cost, and a workspace with many
-collections pays the whole tree on every repaint.
-
-**Fix:** adopt `List`/`VirtualList` (deferred today in `09-gpui-kit-audit.md` §9)
-so only the visible rows paint. This is also what makes the "scroll the selected
-row into view" half of 3.6 possible.
-
-Refs: `panels/collections/mod.rs` (`render_list`, `list`),
-`09-gpui-kit-audit.md` §9.
 
 ## 4. Dialogs and destructive actions
 

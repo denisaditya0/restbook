@@ -9,6 +9,7 @@
 mod tree;
 
 use std::collections::HashSet;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -20,12 +21,14 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{h_flex, v_flex, WindowExt as _};
 use gpui_kit::*;
 
-use restbook_core::{Collection, CollectionItem, Draft, Folder, RequestDef, SavedRequest, Store};
+use restbook_core::{
+    Collection, CollectionItem, Draft, Folder, Method, RequestDef, SavedRequest, Store,
+};
 
 use self::tree::{
     display_name, filter_paths, find_in_items_all, find_saved_mut, has_move_target, initial,
     insert_into, item_name, move_item, node_name, owner_collection, remove_item, rename_item,
-    resolve_selection, sort_refs,
+    resolve_selection,
 };
 
 pub(crate) use self::tree::{import_into, Destination, DestinationRow, ImportOutcome};
@@ -156,6 +159,68 @@ struct RowVerbs {
     can_down: bool,
     can_move: bool,
     can_rename: bool,
+}
+
+/// One visible row of the tree, flattened so the virtual list can build a row
+/// without walking `collections`.
+///
+/// The pane used to rebuild every row on every frame, so an import that landed
+/// ~6,000 nodes made each repaint cost seconds. The tree is now flattened once
+/// per query/revision/sort change into these rows, and `uniform_list` builds
+/// only the slice in view.
+#[derive(Clone)]
+struct FlatRow {
+    kind: RowKind,
+    /// The node's own id (`Collection::id`, `Folder::id`, `SavedRequest::id`).
+    id: SharedString,
+    /// The collection this row lives in, for a selection and a save.
+    collection: SharedString,
+    /// What the row shows: a collection or folder name, or a request's label.
+    name: SharedString,
+    /// 0 for a collection, one more for each folder below it.
+    depth: usize,
+    collapsed: bool,
+    /// Folder ids from the collection root down.
+    ///
+    /// A folder's row includes its own id (the selection path ends at it); a
+    /// request's carries only its ancestors; a collection's is empty.
+    path: Vec<SharedString>,
+    verbs: RowVerbs,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RowKind {
+    Collection,
+    Folder,
+    Request(Method),
+}
+
+impl FlatRow {
+    /// Whether this row is the tree's current selection.
+    fn is_selected(&self, selection: &Selection) -> bool {
+        match self.kind {
+            RowKind::Collection => {
+                selection.collection.as_deref() == Some(self.collection.as_ref())
+                    && selection.folders.is_empty()
+                    && selection.request.is_none()
+            }
+            RowKind::Folder => {
+                selection.collection.as_deref() == Some(self.collection.as_ref())
+                    && selection.folder() == Some(self.id.as_ref())
+                    && selection.request.is_none()
+            }
+            RowKind::Request(_) => selection.request.as_deref() == Some(self.id.as_ref()),
+        }
+    }
+
+    /// The row verb target: a collection is its own kind; a folder or request
+    /// is an item.
+    fn target(&self) -> RowTarget {
+        match self.kind {
+            RowKind::Collection => RowTarget::Collection(self.id.to_string()),
+            RowKind::Folder | RowKind::Request(_) => RowTarget::Item(self.id.to_string()),
+        }
+    }
 }
 
 /// The verbs a row offers, appended to `menu`.
@@ -291,13 +356,12 @@ pub(crate) struct CollectionsPanel {
     /// Whether the "new collection" field is showing. The header's plus button
     /// reveals it, so an always-visible empty input does not eat a row.
     composing: bool,
-    /// The rows the current filter shows, keyed by the query, the data revision
-    /// and the sort order, so a repaint with none of them changed does not
-    /// re-run the filter. Each entry is a path of indices into `collections`,
-    /// so the render walks the borrowed tree rather than a cloned copy. The
-    /// empty-query case is not cached here; that tree is borrowed in place.
-    filter_cache: Option<(String, u64, SortOrder, Vec<Vec<usize>>)>,
-    /// Bumped on every mutation of `collections`; keys `filter_cache`.
+    /// The flattened tree for the current query, data revision and sort order,
+    /// so a repaint with none of them changed builds only the rows in view. The
+    /// `Rc` is shared with the virtual list's closure without copying.
+    flat_cache: Option<(String, u64, SortOrder, Rc<Vec<FlatRow>>)>,
+    /// Bumped on every mutation of `collections`, and on a collapse toggle
+    /// (which changes the flattened row set); keys `flat_cache`.
     revision: u64,
     focus_handle: FocusHandle,
 }
@@ -455,7 +519,7 @@ impl CollectionsPanel {
             collapsed: HashSet::new(),
             renaming: None,
             composing: false,
-            filter_cache: None,
+            flat_cache: None,
             revision: 0,
             focus_handle: cx.focus_handle(),
         }
@@ -842,6 +906,155 @@ impl CollectionsPanel {
         }
     }
 
+    /// Expand or collapse a collection or folder. A toggle changes which rows
+    /// exist, so the flattened cache is invalidated.
+    fn toggle_collapse(&mut self, id: &str, cx: &mut Context<Self>) {
+        if !self.collapsed.remove(id) {
+            self.collapsed.insert(id.to_owned());
+        }
+        self.revision += 1;
+        cx.notify();
+    }
+
+    /// Flatten the visible tree into rows, honouring the filter, the sort, and
+    /// which nodes are collapsed.
+    fn flatten(&self, query: &str) -> Vec<FlatRow> {
+        let paths = if query.trim().is_empty() {
+            self.expanded_paths()
+        } else {
+            filter_paths(&self.collections, query, self.sort)
+        };
+        paths
+            .iter()
+            .filter_map(|path| self.row_from_path(path))
+            .collect()
+    }
+
+    /// Every row of the unfiltered tree, in display order, skipping the
+    /// children of a collapsed node.
+    fn expanded_paths(&self) -> Vec<Vec<usize>> {
+        let mut roots: Vec<usize> = (0..self.collections.len()).collect();
+        if self.sort != SortOrder::Manual {
+            roots.sort_by(|&a, &b| {
+                self.sort
+                    .compare(&self.collections[a].name, &self.collections[b].name)
+            });
+        }
+        let mut paths = Vec::new();
+        for index in roots {
+            paths.push(vec![index]);
+            let collection = &self.collections[index];
+            if self.collapsed.contains(&collection.id) {
+                continue;
+            }
+            let mut prefix = vec![index];
+            self.push_expanded_items(&collection.items, &mut prefix, &mut paths);
+        }
+        paths
+    }
+
+    fn push_expanded_items(
+        &self,
+        items: &[CollectionItem],
+        prefix: &mut Vec<usize>,
+        paths: &mut Vec<Vec<usize>>,
+    ) {
+        let mut indices: Vec<usize> = (0..items.len()).collect();
+        if self.sort != SortOrder::Manual {
+            indices.sort_by(|&a, &b| {
+                self.sort
+                    .compare(item_name(&items[a]), item_name(&items[b]))
+            });
+        }
+        for index in indices {
+            prefix.push(index);
+            paths.push(prefix.clone());
+            if let CollectionItem::Folder(folder) = &items[index] {
+                if !self.collapsed.contains(&folder.id) {
+                    self.push_expanded_items(&folder.items, prefix, paths);
+                }
+            }
+            prefix.pop();
+        }
+    }
+
+    /// Turn one index path into a row, without holding a borrow past this call.
+    fn row_from_path(&self, path: &[usize]) -> Option<FlatRow> {
+        let (&collection_index, rest) = path.split_first()?;
+        let collection = self.collections.get(collection_index)?;
+        let collection_id: SharedString = collection.id.clone().into();
+
+        if rest.is_empty() {
+            return Some(FlatRow {
+                kind: RowKind::Collection,
+                id: collection.id.clone().into(),
+                collection: collection_id,
+                name: collection.name.clone().into(),
+                depth: 0,
+                collapsed: self.collapsed.contains(&collection.id),
+                path: Vec::new(),
+                verbs: RowVerbs {
+                    can_up: false,
+                    can_down: false,
+                    can_move: false,
+                    can_rename: true,
+                },
+            });
+        }
+
+        let mut items: &[CollectionItem] = &collection.items;
+        let mut ancestors: Vec<SharedString> = Vec::new();
+        for &step in &rest[..rest.len() - 1] {
+            match items.get(step)? {
+                CollectionItem::Folder(folder) => {
+                    ancestors.push(folder.id.clone().into());
+                    items = &folder.items;
+                }
+                CollectionItem::Request(_) => return None,
+            }
+        }
+
+        let last = *rest.last()?;
+        let parent_len = items.len();
+        let depth = rest.len();
+        let verbs = |can_move| RowVerbs {
+            can_up: last > 0,
+            can_down: last + 1 < parent_len,
+            can_move,
+            can_rename: true,
+        };
+
+        match items.get(last)? {
+            CollectionItem::Folder(folder) => {
+                let mut row_path = ancestors;
+                row_path.push(folder.id.clone().into());
+                Some(FlatRow {
+                    kind: RowKind::Folder,
+                    id: folder.id.clone().into(),
+                    collection: collection_id,
+                    name: folder.name.clone().into(),
+                    depth,
+                    collapsed: self.collapsed.contains(&folder.id),
+                    path: row_path,
+                    verbs: verbs(false),
+                })
+            }
+            CollectionItem::Request(request) => {
+                let method = request.request.method;
+                Some(FlatRow {
+                    kind: RowKind::Request(method),
+                    id: request.id.clone().into(),
+                    collection: collection_id,
+                    name: display_name(&request.name, method).into(),
+                    depth,
+                    collapsed: false,
+                    path: ancestors,
+                    verbs: verbs(true),
+                })
+            }
+        }
+    }
+
     /// The pane's own chrome: the collection switcher, the active environment
     /// chip, and the add menu on the first row; the filter and the sort control
     /// on the second. The dock draws no title bar above this pane, so the header
@@ -1192,61 +1405,62 @@ impl CollectionsPanel {
     }
 
     fn render_list(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let query = self.query.read(cx).value().to_string();
-
         if self.collections.is_empty() {
             return self.message("No collections yet. Add one above.");
         }
 
-        // The empty filter borrows the tree in place: sorting reorders
-        // references, so a repaint never deep-copies the collections.
-        if query.trim().is_empty() {
-            let mut ordered: Vec<&Collection> = self.collections.iter().collect();
-            sort_refs(&mut ordered, self.sort);
-            let mut rows = Vec::with_capacity(ordered.len());
-            for collection in ordered {
-                rows.push(self.render_collection(collection, &query, cx));
-            }
-            return self.list(rows);
-        }
+        let query = self.query.read(cx).value().to_string();
 
-        // A non-empty filter is computed once per query/data/sort change, then
-        // reused. It yields index paths, so drawing borrows the tree in place
-        // instead of copying every match.
+        // Flatten once per query/data/sort change, then let the virtual list
+        // build only the rows in view. This is what keeps an imported document
+        // with thousands of nodes from costing a full walk on every repaint.
         let fresh = matches!(
-            &self.filter_cache,
+            &self.flat_cache,
             Some((cached_query, cached_revision, cached_sort, _))
                 if cached_query == &query
                     && *cached_revision == self.revision
                     && *cached_sort == self.sort
         );
         if !fresh {
-            let paths = filter_paths(&self.collections, &query, self.sort);
-            self.filter_cache = Some((query.clone(), self.revision, self.sort, paths));
+            let rows = Rc::new(self.flatten(&query));
+            self.flat_cache = Some((query, self.revision, self.sort, rows));
         }
-        let paths: &[Vec<usize>] = &self.filter_cache.as_ref().expect("cache set above").3;
-        if paths.is_empty() {
+        let rows = self.flat_cache.as_ref().expect("cache set above").3.clone();
+
+        if rows.is_empty() {
             return self.message("No matches.");
         }
 
-        let mut rows = Vec::with_capacity(paths.len());
-        for path in paths {
-            rows.push(self.render_path(path, &query, cx));
-        }
+        let selection = self.selection.clone();
+        let renaming = self.renaming.clone();
+        let palette = self.palette.clone();
+        let metrics = self.metrics;
+        let rename_input = self.rename_input.clone();
+        let panel = cx.entity();
 
-        self.list(rows)
-    }
-
-    /// The scrolling body around already-built rows. Shared by the borrowed and
-    /// filtered paths so both draw the same container.
-    fn list(&self, rows: Vec<AnyElement>) -> AnyElement {
         v_flex()
             .id("collections-list")
             .flex_1()
             .min_h_0()
-            .overflow_y_scroll()
             .py(px(self.metrics.space_xs))
-            .children(rows)
+            .child(
+                uniform_list("collections-rows", rows.len(), move |range, _, _| {
+                    range
+                        .map(|index| {
+                            row_element(
+                                &rows[index],
+                                &selection,
+                                renaming.as_deref(),
+                                &palette,
+                                &metrics,
+                                &panel,
+                                &rename_input,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .size_full(),
+            )
             .into_any_element()
     }
 
@@ -1259,586 +1473,414 @@ impl CollectionsPanel {
             .child(text.to_owned())
             .into_any_element()
     }
+}
 
-    /// Draw one row of the filtered tree by its index path. The unfiltered tree
-    /// recurses through [`Self::render_collection`]; this flattens the filtered
-    /// result so every visible row is built from the borrowed collections.
-    fn render_path(&self, path: &[usize], query: &str, cx: &mut Context<Self>) -> AnyElement {
-        let Some((&collection_index, rest)) = path.split_first() else {
-            return div().into_any_element();
-        };
-        let Some(collection) = self.collections.get(collection_index) else {
-            return div().into_any_element();
-        };
-        if rest.is_empty() {
-            return self.collection_row(collection, query, cx);
-        }
-
-        // Walk to the target item, carrying the ancestor folder ids for a
-        // selection and the depth for indentation.
-        let mut items: &[CollectionItem] = &collection.items;
-        let mut ancestors: Vec<String> = Vec::new();
-        let mut depth = 1;
-        let mut target = None;
-        for (step, &index) in rest.iter().enumerate() {
-            let Some(item) = items.get(index) else {
-                return div().into_any_element();
-            };
-            let last = step + 1 == rest.len();
-            if last {
-                target = Some(item);
-                break;
-            }
-            match item {
-                CollectionItem::Folder(folder) => {
-                    ancestors.push(folder.id.clone());
-                    items = &folder.items;
-                }
-                CollectionItem::Request(_) => return div().into_any_element(),
-            }
-            depth += 1;
-        }
-
-        match target {
-            Some(CollectionItem::Folder(folder)) => {
-                self.folder_row(&collection.id, folder, &ancestors, depth, cx)
-            }
-            Some(CollectionItem::Request(request)) => {
-                self.render_request(&collection.id, request, &ancestors, depth, cx)
-            }
-            None => div().into_any_element(),
-        }
+/// Build one tree row from its flattened form.
+///
+/// These row builders are free of the pane's `&self` so the virtual list's
+/// closure can call them with only the small data it captured; every action
+/// goes back through the panel's `Entity`.
+fn row_element(
+    row: &FlatRow,
+    selection: &Selection,
+    renaming: Option<&str>,
+    palette: &Palette,
+    metrics: &Metrics,
+    panel: &Entity<CollectionsPanel>,
+    rename_input: &Entity<InputState>,
+) -> AnyElement {
+    let selected = row.is_selected(selection);
+    let renaming = renaming == Some(row.id.as_ref());
+    match row.kind {
+        RowKind::Collection => collection_row(
+            row,
+            selected,
+            renaming,
+            palette,
+            metrics,
+            panel,
+            rename_input,
+        ),
+        RowKind::Folder => folder_row(
+            row,
+            selected,
+            renaming,
+            palette,
+            metrics,
+            panel,
+            rename_input,
+        ),
+        RowKind::Request(_) => request_row(
+            row,
+            selected,
+            renaming,
+            palette,
+            metrics,
+            panel,
+            rename_input,
+        ),
     }
+}
 
-    fn render_collection(
-        &self,
-        collection: &Collection,
-        query: &str,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let collapsed = query.is_empty() && self.collapsed.contains(&collection.id);
-        let mut column = v_flex()
-            .w_full()
-            .child(self.collection_row(collection, query, cx));
+/// The shared inline rename editor: an input and a confirm button, identical
+/// whether the row is a collection, a folder, or a request.
+fn rename_area(
+    prefix: &str,
+    id: &str,
+    metrics: &Metrics,
+    panel: &Entity<CollectionsPanel>,
+    rename_input: &Entity<InputState>,
+) -> AnyElement {
+    h_flex()
+        .id(format!("{prefix}-rename-{id}"))
+        .flex_1()
+        .min_w_0()
+        .gap(px(metrics.space_xs))
+        .items_center()
+        .child(
+            Input::new(rename_input)
+                .id(format!("{prefix}-rename-input"))
+                .flex_1(),
+        )
+        .child(
+            Button::new(format!("{prefix}-rename-confirm"))
+                .icon(IconName::Check)
+                .ghost()
+                .compact()
+                .on_click({
+                    let panel = panel.clone();
+                    move |_, window, app| {
+                        panel.update(app, |this, cx| this.commit_rename(window, cx));
+                    }
+                }),
+        )
+        .into_any_element()
+}
 
-        if !collapsed {
-            // The empty filter borrows the tree in stored order, so order
-            // references here rather than copying the children to sort them.
-            if query.trim().is_empty() && self.sort != SortOrder::Manual {
-                let mut items: Vec<&CollectionItem> = collection.items.iter().collect();
-                items.sort_by(|left, right| self.sort.compare(item_name(left), item_name(right)));
-                for item in items {
-                    column =
-                        column.child(self.render_item(&collection.id, item, &[], 1, query, cx));
-                }
-            } else {
-                for item in &collection.items {
-                    column =
-                        column.child(self.render_item(&collection.id, item, &[], 1, query, cx));
-                }
+fn collection_row(
+    row: &FlatRow,
+    selected: bool,
+    renaming: bool,
+    palette: &Palette,
+    metrics: &Metrics,
+    panel: &Entity<CollectionsPanel>,
+    rename_input: &Entity<InputState>,
+) -> AnyElement {
+    let toggle = Button::new(format!("collection-toggle-{}", row.id))
+        .icon(if row.collapsed {
+            IconName::ChevronRight
+        } else {
+            IconName::ChevronDown
+        })
+        .ghost()
+        .compact()
+        .on_click({
+            let panel = panel.clone();
+            let id = row.id.to_string();
+            move |_, _, app| {
+                panel.update(app, |this, cx| this.toggle_collapse(&id, cx));
             }
-        }
-
-        column.into_any_element()
-    }
-
-    /// The collection's own row, without its children.
-    fn collection_row(
-        &self,
-        collection: &Collection,
-        query: &str,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let collapsed = query.is_empty() && self.collapsed.contains(&collection.id);
-        let selected = self.selection.collection.as_deref() == Some(collection.id.as_str())
-            && self.selection.folders.is_empty()
-            && self.selection.request.is_none();
-        let renaming = self.renaming.as_deref() == Some(collection.id.as_str());
-
-        let toggle_id = collection.id.clone();
-        let toggle = Button::new(format!("collection-toggle-{}", collection.id))
-            .icon(if collapsed {
-                IconName::ChevronRight
-            } else {
-                IconName::ChevronDown
-            })
-            .ghost()
-            .compact()
-            .on_click(cx.listener(move |this, _, _, cx| {
-                if !this.collapsed.remove(&toggle_id) {
-                    this.collapsed.insert(toggle_id.clone());
-                }
-                cx.notify();
-            }));
-
-        let select_id = collection.id.clone();
-        let select = cx.listener(move |this, _, _, cx| {
-            this.selection = Selection::collection(&select_id);
-            cx.notify();
         });
 
-        let name_area = if renaming {
-            h_flex()
-                .id(format!("collection-rename-{}", collection.id))
-                .flex_1()
-                .min_w_0()
-                .gap(px(self.metrics.space_xs))
-                .items_center()
-                .child(
-                    Input::new(&self.rename_input)
-                        .id("collection-rename-input")
-                        .flex_1(),
-                )
-                .child(
-                    Button::new("collection-rename-confirm")
-                        .icon(IconName::Check)
-                        .ghost()
-                        .compact()
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.commit_rename(window, cx)),
-                        ),
-                )
-        } else {
-            h_flex()
-                .id(format!("collection-name-{}", collection.id))
-                .flex_1()
-                .min_w_0()
-                .gap(px(self.metrics.space_1p5))
-                .items_center()
-                .cursor_pointer()
-                .on_click(select)
-                // The monogram: one letter in a tinted square. It is the same
-                // shape as the workspace chip in the titlebar, which is what
-                // ties a collection to the window it is open in.
-                .child(
-                    div()
-                        .flex_none()
-                        .size(px(self.metrics.icon_sm))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded_sm()
-                        .bg(self.palette.list_hover)
-                        .text_color(self.palette.muted)
-                        .text_size(px(self.metrics.font_badge))
-                        .font_weight(FontWeight::BOLD)
-                        .child(initial(&collection.name)),
-                )
-                .child(
-                    div()
-                        .truncate()
-                        .text_sm()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(self.palette.foreground)
-                        .child(collection.name.clone()),
-                )
-        };
-
-        // Collection rows sit at the tree's left edge and are the only rows
-        // that carry weight, so the eye can find a collection's start while
-        // scrolling a long tree.
-        let mut row = h_flex()
-            .id(format!("collection-{}", collection.id))
-            .w_full()
-            .h(px(self.metrics.row_height))
-            .px(px(self.metrics.space_sm))
-            .gap(px(self.metrics.space_xs))
-            .items_center()
-            .rounded_sm()
-            .hover(|style| style.bg(self.palette.list_hover));
-        if selected {
-            row = row.bg(self.palette.list_active);
-        }
-
-        let target = RowTarget::Collection(collection.id.clone());
-        let tools = self.render_row_tools(&target, true, cx);
-        let row = row.child(toggle).child(name_area).child(tools);
-        // A right-click anywhere on the row opens the same menu, at the
-        // pointer: `context_menu` records the press position and anchors the
-        // popup there, so no second, invisible trigger is needed. The inline
-        // rename input keeps its own right-click (select, paste) while open.
-        if renaming {
-            row.into_any_element()
-        } else {
-            let menu = self.row_menu(&target, true, cx);
-            row.context_menu(menu).into_any_element()
-        }
-    }
-
-    fn render_item(
-        &self,
-        collection_id: &str,
-        item: &CollectionItem,
-        path: &[String],
-        depth: usize,
-        query: &str,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        match item {
-            CollectionItem::Folder(folder) => {
-                self.render_folder(collection_id, folder, path, depth, query, cx)
-            }
-            CollectionItem::Request(request) => {
-                self.render_request(collection_id, request, path, depth, cx)
-            }
-        }
-    }
-
-    fn render_folder(
-        &self,
-        collection_id: &str,
-        folder: &Folder,
-        path: &[String],
-        depth: usize,
-        query: &str,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let collapsed = query.is_empty() && self.collapsed.contains(&folder.id);
-        let mut own_path = path.to_vec();
-        own_path.push(folder.id.clone());
-        let mut column =
-            v_flex()
-                .w_full()
-                .child(self.folder_row(collection_id, folder, path, depth, cx));
-
-        if !collapsed {
-            // Same as the collection level: only the borrowed tree needs its
-            // children ordered here.
-            if query.trim().is_empty() && self.sort != SortOrder::Manual {
-                let mut children: Vec<&CollectionItem> = folder.items.iter().collect();
-                children
-                    .sort_by(|left, right| self.sort.compare(item_name(left), item_name(right)));
-                for child in children {
-                    column = column.child(self.render_item(
-                        collection_id,
-                        child,
-                        &own_path,
-                        depth + 1,
-                        query,
-                        cx,
-                    ));
-                }
-            } else {
-                for child in &folder.items {
-                    column = column.child(self.render_item(
-                        collection_id,
-                        child,
-                        &own_path,
-                        depth + 1,
-                        query,
-                        cx,
-                    ));
-                }
-            }
-        }
-
-        column.into_any_element()
-    }
-
-    /// The folder's own row, without its children.
-    fn folder_row(
-        &self,
-        collection_id: &str,
-        folder: &Folder,
-        path: &[String],
-        depth: usize,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let collapsed = self.collapsed.contains(&folder.id);
-        let selected = self.selection.collection.as_deref() == Some(collection_id)
-            && self.selection.folder() == Some(folder.id.as_str())
-            && self.selection.request.is_none();
-        let renaming = self.renaming.as_deref() == Some(folder.id.as_str());
-
-        let mut own_path = path.to_vec();
-        own_path.push(folder.id.clone());
-
-        let toggle_id = folder.id.clone();
-        let toggle = Button::new(format!("folder-toggle-{}", folder.id))
-            .icon(if collapsed {
-                IconName::ChevronRight
-            } else {
-                IconName::ChevronDown
-            })
-            .ghost()
-            .compact()
-            .on_click(cx.listener(move |this, _, _, cx| {
-                if !this.collapsed.remove(&toggle_id) {
-                    this.collapsed.insert(toggle_id.clone());
-                }
-                cx.notify();
-            }));
-
-        let select_collection = collection_id.to_owned();
-        let select_path = own_path.clone();
-        let select = cx.listener(move |this, _, _, cx| {
-            this.selection = Selection {
-                collection: Some(select_collection.clone()),
-                folders: select_path.clone(),
-                request: None,
-            };
-            cx.notify();
-        });
-
-        let name_area = if renaming {
-            h_flex()
-                .id(format!("folder-rename-{}", folder.id))
-                .flex_1()
-                .min_w_0()
-                .gap(px(self.metrics.space_xs))
-                .items_center()
-                .child(
-                    Input::new(&self.rename_input)
-                        .id("folder-rename-input")
-                        .flex_1(),
-                )
-                .child(
-                    Button::new("folder-rename-confirm")
-                        .icon(IconName::Check)
-                        .ghost()
-                        .compact()
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.commit_rename(window, cx)),
-                        ),
-                )
-        } else {
-            h_flex()
-                .id(format!("folder-name-{}", folder.id))
-                .flex_1()
-                .min_w_0()
-                .gap(px(self.metrics.space_xs))
-                .cursor_pointer()
-                .on_click(select)
-                .child(icons::quiet(
-                    if collapsed {
-                        IconName::Folder
-                    } else {
-                        IconName::FolderOpen
-                    },
-                    icons::SMALL,
-                    &self.palette,
-                ))
-                .child(
-                    div()
-                        .truncate()
-                        .text_sm()
-                        .text_color(self.palette.foreground)
-                        .child(folder.name.clone()),
-                )
-        };
-
-        let mut row = h_flex()
-            .id(format!("folder-{}", folder.id))
-            .w_full()
-            .h(px(self.metrics.row_height))
-            .px(px(self.metrics.space_sm))
-            .gap(px(self.metrics.space_xs))
-            .items_center()
-            .rounded_sm()
-            .pl(px(
-                self.metrics.gutter * 0.5 + depth as f32 * self.metrics.indent
-            ))
-            .hover(|style| style.bg(self.palette.list_hover));
-        if selected {
-            row = row.bg(self.palette.list_active);
-        }
-
-        let target = RowTarget::Item(folder.id.clone());
-        let tools = self.render_row_tools(&target, true, cx);
-        let row = row.child(toggle).child(name_area).child(tools);
-        if renaming {
-            row.into_any_element()
-        } else {
-            let menu = self.row_menu(&target, true, cx);
-            row.context_menu(menu).into_any_element()
-        }
-    }
-
-    fn render_request(
-        &self,
-        collection_id: &str,
-        request: &SavedRequest,
-        path: &[String],
-        depth: usize,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let selected = self.selection.request.as_deref() == Some(request.id.as_str());
-        let method = request.request.method;
-        let label = display_name(&request.name, method).to_owned();
-        let renaming = self.renaming.as_deref() == Some(request.id.as_str());
-
-        let select_collection = collection_id.to_owned();
-        let select_path = path.to_vec();
-        let select_id = request.id.clone();
-        let opened = request.request.clone();
-        let opened_node = request.id.clone();
-        let open = cx.listener(move |this, _, _, cx| {
-            this.selection = Selection {
-                collection: Some(select_collection.clone()),
-                folders: select_path.clone(),
-                request: Some(select_id.clone()),
-            };
-            cx.emit(Event::Open {
-                node: opened_node.clone(),
-                request: opened.clone(),
-            });
-            cx.notify();
-        });
-
-        // The verb wears its method color and keeps its own width, the way
-        // every client in this family draws a tree row: `DEL  Delete comment`.
-        // A fixed-width badge was reserving a gutter for a four-letter word and
-        // pushed the names of short verbs out of alignment with each other.
-        let method_badge = div()
-            .flex_none()
-            .text_size(px(self.metrics.font_badge))
-            .font_weight(FontWeight::BOLD)
-            .text_color(self.palette.method(method))
-            .child(method.as_str());
-
-        let name_area = if renaming {
-            // Same inline editor as a collection or folder: a request's stored
-            // name is only a label, so renaming it never touches the request.
-            h_flex()
-                .id(format!("request-rename-{}", request.id))
-                .flex_1()
-                .min_w_0()
-                .gap(px(self.metrics.space_xs))
-                .items_center()
-                .child(
-                    Input::new(&self.rename_input)
-                        .id("request-rename-input")
-                        .flex_1(),
-                )
-                .child(
-                    Button::new("request-rename-confirm")
-                        .icon(IconName::Check)
-                        .ghost()
-                        .compact()
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.commit_rename(window, cx)),
-                        ),
-                )
-        } else {
-            h_flex()
-                .id(format!("request-name-{}", request.id))
-                .flex_1()
-                .min_w_0()
-                .gap(px(self.metrics.space_sm))
-                .items_center()
-                .cursor_pointer()
-                .on_click(open)
-                .child(method_badge)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_sm()
-                        .text_color(if selected {
-                            self.palette.foreground
-                        } else {
-                            self.palette.muted
-                        })
-                        .child(label),
-                )
-        };
-
-        let mut row = h_flex()
-            .id(format!("request-{}", request.id))
-            .w_full()
-            .h(px(self.metrics.row_height))
-            .px(px(self.metrics.space_sm))
-            // The 6 px step, not `sm`: the tree's other rows use `xs`, and a
-            // request row a full step wider broke the vertical rhythm of a
-            // column of names. This is the one row with a badge before its
-            // name, so it gets a half-step more than the rest.
-            .gap(px(self.metrics.space_1p5))
-            .items_center()
-            .rounded_sm()
-            .pl(px(
-                self.metrics.gutter * 0.5 + depth as f32 * self.metrics.indent
-            ))
-            .hover(|style| style.bg(self.palette.list_hover));
-        if selected {
-            row = row.bg(self.palette.list_active);
-        }
-
-        let target = RowTarget::Item(request.id.clone());
-        let tools = self.render_row_tools(&target, true, cx);
-        let row = row.child(name_area).child(tools);
-        if renaming {
-            row.into_any_element()
-        } else {
-            let menu = self.row_menu(&target, true, cx);
-            row.context_menu(menu).into_any_element()
-        }
-    }
-
-    /// The verbs a row offers, shared by the ellipsis dropdown and a right-click
-    /// anywhere on the row.
-    ///
-    /// Move up/down are disabled where [`move_item`] would refuse them: at the
-    /// ends of a sibling list, and on a collection, which sits at the top level
-    /// and is not reordered by this pane. A disabled verb reads as "not now"
-    /// rather than as a click that silently does nothing.
-    ///
-    /// Menu callbacks arrive with an `App`, not this panel's `Context`, so each
-    /// one reaches the panel through the entity handle captured here.
-    fn row_menu(
-        &self,
-        target: &RowTarget,
-        allow_rename: bool,
-        cx: &mut Context<Self>,
-    ) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static {
-        let id = target.id().to_owned();
-        let can_up = has_move_target(&self.collections, &id, true);
-        let can_down = has_move_target(&self.collections, &id, false);
-        let allow_move = self.is_request(&id);
-        let panel = cx.entity();
-        let target = target.clone();
-        let verbs = RowVerbs {
-            can_up,
-            can_down,
-            can_move: allow_move,
-            can_rename: allow_rename,
-        };
-
-        move |menu: PopupMenu, _: &mut Window, _: &mut Context<PopupMenu>| {
-            row_items(menu, id.clone(), target.clone(), verbs, panel.clone())
-        }
-    }
-
-    /// The row's overflow menu: one ghost ellipsis that opens the same verbs a
-    /// right-click does.
-    ///
-    /// The verbs are menu items instead of a button cluster, so a row spends
-    /// one 20px affordance rather than 88px and a long name is not clipped.
-    fn render_row_tools(
-        &self,
-        target: &RowTarget,
-        allow_rename: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let menu_id = target.id().to_owned();
-        let menu = self.row_menu(target, allow_rename, cx);
-
-        // `justify_end` pins the button right so every row's name truncates at
-        // the same column, and the fixed width keeps that column still whether
-        // the row is a collection, a folder, or a request.
+    let name_area = if renaming {
+        rename_area("collection", &row.id, metrics, panel, rename_input)
+    } else {
         h_flex()
-            .flex_none()
-            .justify_end()
-            .w(px(self.metrics.tool_lane))
+            .id(format!("collection-name-{}", row.id))
+            .flex_1()
+            .min_w_0()
+            .gap(px(metrics.space_1p5))
+            .items_center()
+            .cursor_pointer()
+            .on_click({
+                let panel = panel.clone();
+                let id = row.id.to_string();
+                move |_, _, app| {
+                    panel.update(app, |this, cx| {
+                        this.selection = Selection::collection(&id);
+                        cx.notify();
+                    });
+                }
+            })
+            // The monogram: one letter in a tinted square, the same shape as
+            // the workspace chip in the titlebar.
             .child(
-                Button::new(format!("row-menu-{menu_id}"))
-                    .icon(IconName::Ellipsis)
-                    .ghost()
-                    .compact()
-                    .tooltip("More actions")
-                    .dropdown_menu(menu),
+                div()
+                    .flex_none()
+                    .size(px(metrics.icon_sm))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_sm()
+                    .bg(palette.list_hover)
+                    .text_color(palette.muted)
+                    .text_size(px(metrics.font_badge))
+                    .font_weight(FontWeight::BOLD)
+                    .child(initial(row.name.as_ref())),
+            )
+            .child(
+                div()
+                    .truncate()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(palette.foreground)
+                    .child(row.name.clone()),
             )
             .into_any_element()
+    };
+
+    let mut element = h_flex()
+        .id(format!("collection-{}", row.id))
+        .w_full()
+        .h(px(metrics.row_height))
+        .px(px(metrics.space_sm))
+        .gap(px(metrics.space_xs))
+        .items_center()
+        .rounded_sm()
+        .hover(|style| style.bg(palette.list_hover));
+    if selected {
+        element = element.bg(palette.list_active);
+    }
+
+    let target = row.target();
+    let tools = row_tools(&target, row.verbs, metrics, panel);
+    let element = element.child(toggle).child(name_area).child(tools);
+    if renaming {
+        element.into_any_element()
+    } else {
+        let menu = row_menu(panel, target, row.verbs);
+        element.context_menu(menu).into_any_element()
+    }
+}
+
+fn folder_row(
+    row: &FlatRow,
+    selected: bool,
+    renaming: bool,
+    palette: &Palette,
+    metrics: &Metrics,
+    panel: &Entity<CollectionsPanel>,
+    rename_input: &Entity<InputState>,
+) -> AnyElement {
+    let toggle = Button::new(format!("folder-toggle-{}", row.id))
+        .icon(if row.collapsed {
+            IconName::ChevronRight
+        } else {
+            IconName::ChevronDown
+        })
+        .ghost()
+        .compact()
+        .on_click({
+            let panel = panel.clone();
+            let id = row.id.to_string();
+            move |_, _, app| {
+                panel.update(app, |this, cx| this.toggle_collapse(&id, cx));
+            }
+        });
+
+    let name_area = if renaming {
+        rename_area("folder", &row.id, metrics, panel, rename_input)
+    } else {
+        h_flex()
+            .id(format!("folder-name-{}", row.id))
+            .flex_1()
+            .min_w_0()
+            .gap(px(metrics.space_xs))
+            .cursor_pointer()
+            .on_click({
+                let panel = panel.clone();
+                let collection = row.collection.to_string();
+                let path: Vec<String> = row.path.iter().map(|id| id.to_string()).collect();
+                move |_, _, app| {
+                    panel.update(app, |this, cx| {
+                        this.selection = Selection {
+                            collection: Some(collection.clone()),
+                            folders: path.clone(),
+                            request: None,
+                        };
+                        cx.notify();
+                    });
+                }
+            })
+            .child(icons::quiet(
+                if row.collapsed {
+                    IconName::Folder
+                } else {
+                    IconName::FolderOpen
+                },
+                icons::SMALL,
+                palette,
+            ))
+            .child(
+                div()
+                    .truncate()
+                    .text_sm()
+                    .text_color(palette.foreground)
+                    .child(row.name.clone()),
+            )
+            .into_any_element()
+    };
+
+    let mut element = h_flex()
+        .id(format!("folder-{}", row.id))
+        .w_full()
+        .h(px(metrics.row_height))
+        .px(px(metrics.space_sm))
+        .gap(px(metrics.space_xs))
+        .items_center()
+        .rounded_sm()
+        .pl(px(metrics.gutter * 0.5 + row.depth as f32 * metrics.indent))
+        .hover(|style| style.bg(palette.list_hover));
+    if selected {
+        element = element.bg(palette.list_active);
+    }
+
+    let target = row.target();
+    let tools = row_tools(&target, row.verbs, metrics, panel);
+    let element = element.child(toggle).child(name_area).child(tools);
+    if renaming {
+        element.into_any_element()
+    } else {
+        let menu = row_menu(panel, target, row.verbs);
+        element.context_menu(menu).into_any_element()
+    }
+}
+
+fn request_row(
+    row: &FlatRow,
+    selected: bool,
+    renaming: bool,
+    palette: &Palette,
+    metrics: &Metrics,
+    panel: &Entity<CollectionsPanel>,
+    rename_input: &Entity<InputState>,
+) -> AnyElement {
+    let RowKind::Request(method) = row.kind else {
+        return div().into_any_element();
+    };
+    let method_badge = div()
+        .flex_none()
+        .text_size(px(metrics.font_badge))
+        .font_weight(FontWeight::BOLD)
+        .text_color(palette.method(method))
+        .child(method.as_str());
+
+    let name_area = if renaming {
+        rename_area("request", &row.id, metrics, panel, rename_input)
+    } else {
+        h_flex()
+            .id(format!("request-name-{}", row.id))
+            .flex_1()
+            .min_w_0()
+            .gap(px(metrics.space_sm))
+            .items_center()
+            .cursor_pointer()
+            .on_click({
+                let panel = panel.clone();
+                let collection = row.collection.to_string();
+                let path: Vec<String> = row.path.iter().map(|id| id.to_string()).collect();
+                let id = row.id.to_string();
+                move |_, _, app| {
+                    panel.update(app, |this, cx| {
+                        this.selection = Selection {
+                            collection: Some(collection.clone()),
+                            folders: path.clone(),
+                            request: Some(id.clone()),
+                        };
+                        // Read the request at click time rather than caching a
+                        // copy per row; the flattened row carries only what a
+                        // row draws.
+                        if let Some(request) = this.saved_request(&id) {
+                            cx.emit(Event::Open {
+                                node: id.clone(),
+                                request,
+                            });
+                        }
+                        cx.notify();
+                    });
+                }
+            })
+            .child(method_badge)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_sm()
+                    .text_color(if selected {
+                        palette.foreground
+                    } else {
+                        palette.muted
+                    })
+                    .child(row.name.clone()),
+            )
+            .into_any_element()
+    };
+
+    let mut element = h_flex()
+        .id(format!("request-{}", row.id))
+        .w_full()
+        .h(px(metrics.row_height))
+        .px(px(metrics.space_sm))
+        // The 6 px step, not `sm`: a request row has a badge before its name,
+        // so it gets a half-step more than the rest of the tree.
+        .gap(px(metrics.space_1p5))
+        .items_center()
+        .rounded_sm()
+        .pl(px(metrics.gutter * 0.5 + row.depth as f32 * metrics.indent))
+        .hover(|style| style.bg(palette.list_hover));
+    if selected {
+        element = element.bg(palette.list_active);
+    }
+
+    let target = row.target();
+    let tools = row_tools(&target, row.verbs, metrics, panel);
+    let element = element.child(name_area).child(tools);
+    if renaming {
+        element.into_any_element()
+    } else {
+        let menu = row_menu(panel, target, row.verbs);
+        element.context_menu(menu).into_any_element()
+    }
+}
+
+/// The row's overflow menu: one ghost ellipsis that opens the same verbs a
+/// right-click does. `justify_end` pins it so every name truncates at the same
+/// column, and the fixed lane keeps that column still across row kinds.
+fn row_tools(
+    target: &RowTarget,
+    verbs: RowVerbs,
+    metrics: &Metrics,
+    panel: &Entity<CollectionsPanel>,
+) -> AnyElement {
+    let menu = row_menu(panel, target.clone(), verbs);
+    h_flex()
+        .flex_none()
+        .justify_end()
+        .w(px(metrics.tool_lane))
+        .child(
+            Button::new(format!("row-menu-{}", target.id()))
+                .icon(IconName::Ellipsis)
+                .ghost()
+                .compact()
+                .tooltip("More actions")
+                .dropdown_menu(menu),
+        )
+        .into_any_element()
+}
+
+/// The verbs a row offers, shared by the ellipsis dropdown and a right-click
+/// anywhere on the row. The panel handle is what the menu callbacks use instead
+/// of a `Context`, since they arrive with an `App`.
+fn row_menu(
+    panel: &Entity<CollectionsPanel>,
+    target: RowTarget,
+    verbs: RowVerbs,
+) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static {
+    let id = target.id().to_owned();
+    let panel = panel.clone();
+    move |menu: PopupMenu, _: &mut Window, _: &mut Context<PopupMenu>| {
+        row_items(menu, id.clone(), target.clone(), verbs, panel.clone())
     }
 }
 
@@ -2068,5 +2110,44 @@ mod tests {
         ));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The virtual list draws from `flatten`, so a collapse has to change the
+    /// flattened row set: an expanded tree yields every node, a collapsed
+    /// collection only its own row. This is what keeps a large import from
+    /// painting thousands of rows.
+    #[gpui_kit::test]
+    fn collapsing_a_collection_removes_its_rows_from_the_flattened_tree(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        crate::test_support::init_ui(cx);
+
+        let store = Arc::new(MemoryStore::new());
+        let request = |id: &str| {
+            CollectionItem::Request(restbook_core::SavedRequest {
+                id: id.to_owned(),
+                name: id.to_owned(),
+                request: restbook_core::RequestDef::new(restbook_core::Method::Get, "https://a"),
+            })
+        };
+        store
+            .save_collection(&Collection {
+                id: "col-a".to_owned(),
+                name: "A".to_owned(),
+                items: vec![CollectionItem::Folder(Folder {
+                    id: "fold-a".to_owned(),
+                    name: "Inner".to_owned(),
+                    items: vec![request("r1"), request("r2")],
+                })],
+            })
+            .unwrap();
+
+        let (panel, cx) = open(cx, store);
+
+        let expanded = cx.update(|_, cx| panel.read(cx).flatten("").len());
+        assert_eq!(expanded, 4, "collection, folder, and two requests");
+
+        panel.update(cx, |panel, cx| panel.toggle_collapse("col-a", cx));
+        let collapsed = cx.update(|_, cx| panel.read(cx).flatten("").len());
+        assert_eq!(collapsed, 1, "only the collection row survives");
     }
 }

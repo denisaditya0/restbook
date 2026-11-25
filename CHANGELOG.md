@@ -24,6 +24,19 @@ Contributors and pull requests are added to the release page by `release.yml`;
 do not write them here.
 -->
 
+## 0.2.2
+
+- **A big import no longer makes the app crawl.** Importing a large OpenAPI
+  document used to leave the window sluggish long after the report appeared;
+  the Collections tree now draws only the rows you can see, so a collection with
+  thousands of requests scrolls like any other.
+- **An import shows what it is doing.** Picking a file now shows the file name
+  and the step it is on until the result appears, instead of an unchanged
+  window. Closing that notice cancels the import until it reaches the store.
+- **Reading a large file costs about half the memory.** Guessing a file's format
+  no longer builds a throwaway copy of the whole document, which is what pushed
+  a 29 MB import to a few hundred megabytes of heap before it even parsed.
+
 ## 0.2.1
 
 - **Your tabs come back after a restart.** The app reopens the tabs you had open,

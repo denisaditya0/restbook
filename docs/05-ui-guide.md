@@ -383,6 +383,7 @@ src/workspace/
   persistence.rs         dock layout to/from layout.json in the data dir (names + width)
   save_dialog.rs         the first-save dialog: a name and a destination picker
   move_dialog.rs         the move dialog: the same picker, for a saved request
+  destination_picker.rs  the shared, searchable, virtualized destination Select
   settings.rs            app preferences (pretty-print, history limit) to/from
                          settings.json, as an observable entity
   settings_view.rs       the Settings dialog: preferences plus read-only storage facts
@@ -839,13 +840,14 @@ saves into:
 2. **Consume the flag in `Render` and `window.defer` the open.**
    `window.defer(cx, |window, cx| …)` runs after this frame's element tree is
    laid out, which is exactly when `window.open_dialog` wants to be called.
-3. **Keep the inputs and the choice on the owning entity.** The dialog content
-   closure is rebuilt on every notify; an `InputState` constructed inside it is
-   a new entity each frame, and the caret jumps to the start on the first
-   keystroke. `Workspace::save_name` is one `Entity<InputState>`, prefilled
-   before the dialog opens, and `Workspace::save_target` is the destination the
-   picker writes — the same rule the export picker follows with
-   `export_state`.
+3. **Keep the inputs and the choice alive.** The dialog content closure is
+   rebuilt on every notify; an `InputState` constructed inside it is a new entity
+   each frame, and the caret jumps to the start on the first keystroke.
+   `Workspace::save_name` is one `Entity<InputState>`, prefilled before the
+   dialog opens; the destination choice lives in the picker's own
+   `Entity<SelectState>` (`workspace/destination_picker.rs`), created once per
+   open and captured by the closure — the same rule the export picker follows
+   with `export_state`.
 4. **Compose the footer yourself.** A plain `Dialog` draws no buttons; wrap
    the actions in a `DialogFooter`, and use `.on_ok` so Enter confirms as well
    as the Save button.
@@ -859,19 +861,27 @@ nothing had been clicked. `CollectionsPanel::destinations()` returns every
 collection and folder as `Destination` rows; the first one is the prefill when
 nothing is selected (`tree::default_destination`).
 
-*New collection…* is the last item of that picker, not a separate flow: it turns
+The picker is a `select::Select` over a `SearchableVec`, not a menu: a large
+import can leave thousands of folders, and a menu builds one view per row on
+every open. The select paints only the rows on screen and filters as the user
+types, so its cost does not grow with the workspace. `open_destination_select`
+builds the entity, `destination_picker` renders it, and `selected_choice` reads
+the committed row at confirm time.
+
+*New collection…* is the first row of that picker, not a separate flow: it turns
 the same dialog into a name dialog and the confirm creates the collection and
 saves the request into its root (`Workspace::commit_save` takes the collection
 name and creates it first). It is also what a first run gets, because a
 workspace with no collection has nowhere else to send the save.
 
-The move dialog is the same picker without the name: one `Destination` is one
-request's home, so `save_dialog::with_destinations` builds the menu for both and
-the two lists cannot drift apart. A move writes the target collection first and
-the source second (`CollectionsPanel::move_request`, over `tree::move_to`), so a
-failure between them leaves the request in two places rather than in none, and
-nothing reloads between the two writes — a reload would hand the second write
-the store's copy of the first, putting the request back where it started.
+The move dialog is the same picker without the name or the *New* row: one
+`Destination` is one request's home, so `workspace/destination_picker.rs` builds
+it for the save, move, and import dialogs and the lists cannot drift apart. A
+move writes the target collection first and the source second
+(`CollectionsPanel::move_request`, over `tree::move_to`), so a failure between
+them leaves the request in two places rather than in none, and nothing reloads
+between the two writes — a reload would hand the second write the store's copy
+of the first, putting the request back where it started.
 
 The window menu is the other half of the placement rule. It keeps commands about
 the *window* — the palette, settings, the panes it shows, reset, diagnostics — and
@@ -974,10 +984,11 @@ the data (lines in a body, rows in a table, nodes in a tree) is the suspect.
   `uniform_list(id, item_count, |range, _, _| ...)`, which renders only the visible
   range. Rows must be a fixed height — `UniformList` measures one item and places
   the rest (`gpui-pre-*/src/elements/uniform_list.rs`); a variable-height tree has
-  to be flattened into a row list first, which is why the collections panel still
-  builds all its rows and is the next candidate. To move data into the closure,
-  note it is `'static`: clone `Rc<Vec<SharedString>>` (a refcount bump) rather than
-  the strings.
+  to be flattened into a row list first, which is what `CollectionsPanel::flatten`
+  does: one `FlatRow` per visible collection, folder, or request, already carrying
+  its depth and the ancestors the row menu needs. To move data into the closure,
+  note it is `'static`: clone `Rc<Vec<FlatRow>>` (a refcount bump) rather than the
+  rows.
 - **Cache derived values.** Keep the last result in the pane, keyed on something
   that changes when the input does. `ResponsePanel::display` keys the decoded body
   on `(body.as_ptr(), body.len(), pretty)` — sound because the record is replaced

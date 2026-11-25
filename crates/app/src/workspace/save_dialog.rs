@@ -5,11 +5,12 @@
 //! save should not fail because nothing was clicked last, and the highlight is
 //! navigation again.
 //!
-//! The choice lives on the workspace (`save_name`, `save_target`,
-//! `save_new_collection`) because the dialog's content closure is rebuilt on every
-//! notify, so state created inside it would be lost between builds.
+//! The typed name lives on the workspace (`save_name`, `save_new_collection_name`)
+//! because the dialog's content closure is rebuilt on every notify, so an input
+//! created inside it would lose the caret. The destination choice lives in the
+//! picker's own entity, which this dialog creates once and captures.
 //!
-//! *New collection…* is part of the picker rather than a separate flow: a first
+//! *New collection…* is a row of the picker rather than a separate flow: a first
 //! run has no collection to save into, and making one elsewhere would cost the
 //! typed request name and the dialog.
 
@@ -19,54 +20,15 @@ use std::rc::Rc;
 use gpui_kit::component::button::*;
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::input::Input;
-use gpui_kit::component::menu::{DropdownMenu, PopupMenu, PopupMenuItem};
-use gpui_kit::component::{h_flex, v_flex, Disableable as _, WindowExt as _};
+use gpui_kit::component::{v_flex, WindowExt as _};
 use gpui_kit::*;
 
-use crate::icons::IconName;
-use crate::panels::collections::{Destination, DestinationRow};
 use crate::theme::{Metrics, Palette};
 
+use super::destination_picker::{
+    destination_picker, open_destination_select, selected_choice, DestinationChoice,
+};
 use super::Workspace;
-
-/// What a picked destination does. Each dialog owns its own state, so the menu
-/// itself only says *which* place was chosen.
-pub(super) type DestinationPick = Rc<dyn Fn(&mut Workspace, &Destination)>;
-
-/// Append every collection and folder to `menu`, checking `current`.
-///
-/// Shared by the save and move dialogs: a request's home is one `Destination`,
-/// and the two lists must not disagree about which places exist or how they are
-/// spelled.
-pub(super) fn with_destinations(
-    mut menu: PopupMenu,
-    rows: &[DestinationRow],
-    current: Option<&Destination>,
-    workspace: &Entity<Workspace>,
-    pick: &DestinationPick,
-) -> PopupMenu {
-    if rows.is_empty() {
-        return menu.item(PopupMenuItem::new("No collections yet.").disabled(true));
-    }
-    for row in rows {
-        let checked = current == Some(&row.target);
-        let target = row.target.clone();
-        let workspace = workspace.clone();
-        let pick = pick.clone();
-        menu = menu.item(
-            PopupMenuItem::new(row.label.clone())
-                .icon(IconName::Folder)
-                .checked(checked)
-                .on_click(move |_, _, cx| {
-                    workspace.update(cx, |workspace, cx| {
-                        pick(workspace, &target);
-                        cx.notify();
-                    });
-                }),
-        );
-    }
-    menu
-}
 
 impl Workspace {
     /// Ask for a name and a destination, then save. Called from render once
@@ -80,11 +42,18 @@ impl Workspace {
             .update(cx, |state, cx| state.set_value(default_name, window, cx));
         self.save_new_collection_name
             .update(cx, |state, cx| state.set_value("", window, cx));
+
         // The selection is only the starting point: the picker can change it, and
         // an unselected sidebar still opens on the first collection. With no
         // collection at all, the dialog opens ready to make one.
-        self.save_target = self.panes.collections.read(cx).default_destination();
-        self.save_new_collection = self.save_target.is_none();
+        let rows = self.panes.collections.read(cx).destinations();
+        let initial = self
+            .panes
+            .collections
+            .read(cx)
+            .default_destination()
+            .map_or(DestinationChoice::New, DestinationChoice::Existing);
+        let select = open_destination_select(&rows, Some("New collection…"), initial, window, cx);
 
         let workspace = cx.entity();
         let name_input = self.save_name.clone();
@@ -100,6 +69,7 @@ impl Workspace {
         // the picker at the moment of the click, not when the dialog was built.
         type Confirm = Rc<dyn Fn(&mut Window, &mut App) -> bool>;
         let confirm_workspace = workspace.clone();
+        let confirm_select = select.clone();
         let confirm: Confirm = Rc::new(move |_, cx| {
             let name = name_input.read(cx).value().trim().to_owned();
             if name.is_empty() {
@@ -107,14 +77,16 @@ impl Workspace {
                 // dialog open rather than saving something the user has to fix.
                 return false;
             }
-            let creating = confirm_workspace.read(cx).save_new_collection;
+            let Some(choice) = selected_choice(&confirm_select, cx) else {
+                return false;
+            };
             let collection_name = new_name_input.read(cx).value().trim().to_owned();
-            if creating && collection_name.is_empty() {
+            if choice.is_new() && collection_name.is_empty() {
                 return false;
             }
             confirm_workspace.update(cx, |workspace, cx| {
-                let target = workspace.save_target.clone();
-                let create = workspace.save_new_collection.then_some(collection_name);
+                let target = choice.existing().cloned();
+                let create = choice.is_new().then_some(collection_name);
                 workspace.commit_save(None, Some(&name), target, create.as_deref(), cx)
             })
         });
@@ -131,71 +103,19 @@ impl Workspace {
                 });
             }
 
-            let rows = workspace.read(cx).panes.collections.read(cx).destinations();
-            let current = workspace.read(cx).save_target.clone();
-            let creating = workspace.read(cx).save_new_collection;
-            let current_label = if creating {
-                "New collection".to_owned()
-            } else {
-                current
-                    .as_ref()
-                    .and_then(|target| rows.iter().find(|row| &row.target == target))
-                    .map(|row| row.label.clone())
-                    .unwrap_or_else(|| "Choose a collection".to_owned())
-            };
+            // Reading the picker observes its entity, so picking a row re-renders
+            // this dialog and the collection field appears or disappears with it.
+            let creating = selected_choice(&select, cx).is_some_and(|choice| choice.is_new());
 
-            let menu_workspace = workspace.clone();
-            let menu_rows = rows.clone();
-            let menu_current = if creating { None } else { current.clone() };
-            let menu_creating = creating;
-            let menu_pick: DestinationPick = Rc::new(|workspace, target| {
-                workspace.save_target = Some(target.clone());
-                workspace.save_new_collection = false;
-            });
-            let menu = move |menu: PopupMenu, _: &mut Window, _: &mut Context<PopupMenu>| {
-                let menu = with_destinations(
-                    menu,
-                    &menu_rows,
-                    menu_current.as_ref(),
-                    &menu_workspace,
-                    &menu_pick,
-                );
-                // Only the save dialog can create a collection; a move needs a
-                // place that already exists.
-                let workspace = menu_workspace.clone();
-                menu.item(PopupMenuItem::separator())
-                    .item(
-                        PopupMenuItem::new("New collection…")
-                            .icon(IconName::Plus)
-                            .checked(menu_creating)
-                            .on_click(move |_, _, cx| {
-                                workspace.update(cx, |workspace, cx| {
-                                    workspace.save_new_collection = true;
-                                    cx.notify();
-                                });
-                            }),
-                    )
-                    // The list is every folder in every collection, so it can be
-                    // taller than a minimum-height window.
-                    .scrollable(true)
-            };
-
-            let into = h_flex()
-                .gap(px(metrics.space_sm))
-                .items_center()
-                .text_sm()
-                .child(div().text_color(palette.muted).child("Into"))
+            let into = v_flex()
+                .gap(px(metrics.space_xs))
                 .child(
-                    Button::new("save-request-destination")
-                        .label(current_label)
-                        .ghost()
-                        .compact()
-                        .flex_1()
-                        .min_w_0()
-                        .dropdown_caret(true)
-                        .tooltip("Where the request is saved")
-                        .dropdown_menu(menu),
-                );
+                    div()
+                        .text_xs()
+                        .text_color(palette.muted)
+                        .child("Destination"),
+                )
+                .child(destination_picker(&select, "Destination"));
 
             let name_row = v_flex()
                 .gap(px(metrics.space_xs))
@@ -223,7 +143,6 @@ impl Workspace {
             let save = Button::new("save-request-confirm")
                 .label("Save")
                 .primary()
-                .disabled(!creating && current.is_none())
                 .on_click({
                     let confirm = for_button.clone();
                     move |_, window, cx| {

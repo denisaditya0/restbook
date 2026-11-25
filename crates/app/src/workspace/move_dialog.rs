@@ -12,13 +12,15 @@ use std::rc::Rc;
 
 use gpui_kit::component::button::*;
 use gpui_kit::component::dialog::DialogFooter;
-use gpui_kit::component::menu::{DropdownMenu, PopupMenu};
-use gpui_kit::component::{h_flex, v_flex, Disableable as _, WindowExt as _};
+use gpui_kit::component::{v_flex, Disableable as _, WindowExt as _};
 use gpui_kit::*;
 
+use crate::panels::collections::Destination;
 use crate::theme::{Metrics, Palette};
 
-use super::save_dialog::{with_destinations, DestinationPick};
+use super::destination_picker::{
+    destination_picker, open_destination_select, selected_choice, DestinationChoice,
+};
 use super::Workspace;
 
 impl Workspace {
@@ -32,8 +34,15 @@ impl Workspace {
     ) {
         // Where it is now doubles as the starting point and as the one entry that
         // would be a no-op, so it is read once here rather than guessed.
-        self.move_target = self.panes.collections.read(cx).destination_of(&node);
+        let original = self.panes.collections.read(cx).destination_of(&node);
         self.move_node = Some(node);
+        let rows = self.panes.collections.read(cx).destinations();
+        // A move needs a place that already exists, so the picker has no "create"
+        // row; with no saved home the selection stays empty and Move stays off.
+        let initial = original
+            .clone()
+            .map_or(DestinationChoice::New, DestinationChoice::Existing);
+        let select = open_destination_select(&rows, None, initial, window, cx);
 
         let workspace = cx.entity();
         let palette = Palette::new(cx);
@@ -41,69 +50,27 @@ impl Workspace {
 
         type Confirm = Rc<dyn Fn(&mut Window, &mut App) -> bool>;
         let confirm_workspace = workspace.clone();
+        let confirm_select = select.clone();
         let confirm: Confirm = Rc::new(move |_, cx| {
-            confirm_workspace.update(cx, |workspace, cx| workspace.commit_move(cx))
+            let target =
+                selected_choice(&confirm_select, cx).and_then(|choice| choice.existing().cloned());
+            confirm_workspace.update(cx, |workspace, cx| workspace.commit_move(target, cx))
         });
         let for_button = confirm.clone();
         let for_ok = confirm.clone();
 
         window.open_dialog(cx, move |dialog, _window, cx| {
-            let rows = workspace.read(cx).panes.collections.read(cx).destinations();
-            let node = workspace.read(cx).move_node.clone();
-            let current = workspace.read(cx).move_target.clone();
-            // The move button stays disabled until the choice would actually
-            // change something, rather than reporting a no-op as a move.
-            let unchanged = match (&node, &current) {
-                (Some(node), Some(current)) => {
-                    workspace
-                        .read(cx)
-                        .panes
-                        .collections
-                        .read(cx)
-                        .destination_of(node)
-                        == Some(current.clone())
-                }
-                _ => true,
-            };
-            let current_label = current
+            // Reading the picker observes its entity, so a pick re-renders this
+            // dialog and Move enables the moment the choice would change the place.
+            let unchanged = selected_choice(&select, cx)
                 .as_ref()
-                .and_then(|target| rows.iter().find(|row| &row.target == target))
-                .map(|row| row.label.clone())
-                .unwrap_or_else(|| "Choose a collection".to_owned());
+                .and_then(|choice| choice.existing())
+                == original.as_ref();
 
-            let menu_workspace = workspace.clone();
-            let menu_rows = rows.clone();
-            let menu_current = current.clone();
-            let menu_pick: DestinationPick = Rc::new(|workspace, target| {
-                workspace.move_target = Some(target.clone());
-            });
-            let menu = move |menu: PopupMenu, _: &mut Window, _: &mut Context<PopupMenu>| {
-                with_destinations(
-                    menu,
-                    &menu_rows,
-                    menu_current.as_ref(),
-                    &menu_workspace,
-                    &menu_pick,
-                )
-                .scrollable(true)
-            };
-
-            let into = h_flex()
-                .gap(px(metrics.space_sm))
-                .items_center()
-                .text_sm()
-                .child(div().text_color(palette.muted).child("To"))
-                .child(
-                    Button::new("move-request-destination")
-                        .label(current_label)
-                        .ghost()
-                        .compact()
-                        .flex_1()
-                        .min_w_0()
-                        .dropdown_caret(true)
-                        .tooltip("Where the request moves to")
-                        .dropdown_menu(menu),
-                );
+            let into = v_flex()
+                .gap(px(metrics.space_xs))
+                .child(div().text_xs().text_color(palette.muted).child("To"))
+                .child(destination_picker(&select, "Move to"));
 
             let cancel = Button::new("move-request-cancel")
                 .label("Cancel")
@@ -142,8 +109,12 @@ impl Workspace {
     /// Move the request the dialog is holding to the chosen destination.
     /// `false` keeps the dialog open: either the choice is a no-op or the write
     /// failed, and the pane has already said which.
-    pub(super) fn commit_move(&mut self, cx: &mut Context<Self>) -> bool {
-        let (Some(node), Some(target)) = (self.move_node.clone(), self.move_target.clone()) else {
+    pub(super) fn commit_move(
+        &mut self,
+        target: Option<Destination>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let (Some(node), Some(target)) = (self.move_node.clone(), target) else {
             return false;
         };
         self.panes.collections.update(cx, |panel, cx| {

@@ -7,6 +7,7 @@
 
 mod chrome;
 mod delete;
+mod destination_picker;
 mod dock;
 mod export;
 mod import;
@@ -51,7 +52,7 @@ use crate::document::Document;
 use crate::icons::IconName;
 use crate::logging;
 use crate::notice::Notice;
-use crate::panels::collections::{Destination, Event as CollectionsEvent};
+use crate::panels::collections::Event as CollectionsEvent;
 use crate::panels::command_palette::{self, Command};
 use crate::panels::environment::Event as EnvironmentEvent;
 use crate::panels::history::Event as HistoryEvent;
@@ -132,21 +133,14 @@ pub(crate) struct Workspace {
     /// dialog's content closure, because that closure is rebuilt on every notify
     /// and an input created inside it would lose the caret mid-typing.
     save_name: Entity<InputState>,
-    /// The save dialog's destination choice. It lives beside `save_name` for the
-    /// same reason: the dialog is rebuilt on every notify, so a pick made in one
-    /// build has to survive into the next.
-    save_target: Option<Destination>,
-    /// Whether the save dialog is creating a collection rather than saving into
-    /// an existing one, and the name field for it.
-    save_new_collection: bool,
+    /// The name field of the save dialog's *New collection…* row. The destination
+    /// choice itself lives in the picker entity, which the dialog captures.
     save_new_collection_name: Entity<InputState>,
     /// A saved request asked to move, waiting for render to raise the destination
     /// picker: the request came from a menu with no window.
     pending_move: Option<String>,
-    /// The move dialog's request and destination choice, kept on the workspace
-    /// for the same reason as `save_target`.
+    /// The move dialog's request. The destination choice lives in the picker.
     move_node: Option<String>,
-    move_target: Option<Destination>,
     /// A draft asked to be saved, but the dialog needs a window and the event the
     /// request arrived on had none. The next render opens the dialog.
     pending_save: bool,
@@ -158,9 +152,9 @@ pub(crate) struct Workspace {
     /// background executor, and parked here because the dialog's content
     /// closure is rebuilt on every notify.
     import_pending: Option<PendingImport>,
-    /// The import dialog's destination, `None` for the default of new
-    /// collections. Kept beside `import_pending` for the same reason.
-    import_target: Option<Destination>,
+    /// Whether an import is reading, parsing, or landing. It owns the busy
+    /// toast (U65) and is what stops a second pick while one is in flight.
+    import_busy: bool,
     /// The Collections pane asked to export. Same deferral as `pending_import`.
     pending_export: bool,
     /// The export picker's choices. Rebuilt each time the dialog opens so
@@ -392,16 +386,13 @@ impl Workspace {
             pending_notice: None,
             focus_handle: cx.focus_handle(),
             save_name,
-            save_target: None,
-            save_new_collection: false,
             save_new_collection_name,
             pending_move: None,
             move_node: None,
-            move_target: None,
             pending_save: false,
             pending_import: false,
             import_pending: None,
-            import_target: None,
+            import_busy: false,
             pending_export: false,
             export_state: ExportState::default(),
             pending_history: false,
