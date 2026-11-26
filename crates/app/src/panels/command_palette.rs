@@ -91,10 +91,23 @@ pub(crate) struct Row {
     pub(crate) icon: Option<IconName>,
     /// Whether the palette lists the row. A menu-only command is off.
     pub(crate) palette: bool,
+    /// The keystrokes [`Row::action`] is bound to. This is the only place a
+    /// command's key is written down; `actions::bindings` reads it. Empty for a
+    /// plain command.
+    pub(crate) keys: &'static [&'static str],
+    /// The key context the bindings run in. `None` is window-wide.
+    pub(crate) context: Option<&'static str>,
 }
 
 impl Row {
-    const fn bound(command: Command, label: &'static str, action: &'static dyn Action) -> Self {
+    /// A row a key reaches. `keys` is required, so a bound command cannot end up
+    /// unreachable by forgetting it.
+    const fn bound(
+        command: Command,
+        label: &'static str,
+        action: &'static dyn Action,
+        keys: &'static [&'static str],
+    ) -> Self {
         Self {
             command,
             label,
@@ -102,6 +115,8 @@ impl Row {
             menu: None,
             icon: None,
             palette: true,
+            keys,
+            context: None,
         }
     }
 
@@ -113,7 +128,16 @@ impl Row {
             menu: None,
             icon: None,
             palette: true,
+            keys: &[],
+            context: None,
         }
+    }
+
+    /// Scope the row's bindings to a key context. A printable key or a key an
+    /// input already owns needs this, or it fires everywhere.
+    const fn in_context(mut self, context: &'static str) -> Self {
+        self.context = Some(context);
+        self
     }
 
     /// List the row in the titlebar menu under `slot`.
@@ -140,29 +164,73 @@ impl Row {
 
 /// Every command, one row each. The palette lists the rows that are not
 /// menu-only; the shortcuts sheet lists the bound ones; the titlebar menu lists
-/// the rows with a slot, in slot order.
-fn rows() -> Vec<Row> {
+/// the rows with a slot, in slot order; `actions::bindings` turns each row's
+/// `keys` into a keybinding.
+pub(crate) fn rows() -> Vec<Row> {
     vec![
-        Row::bound(Command::Send, "Send request", &SendRequest),
-        Row::bound(Command::NewTab, "New tab", &NewTab),
-        Row::bound(Command::CloseTab, "Close tab", &CloseTab),
-        Row::bound(Command::NextTab, "Next tab", &NextTab),
-        Row::bound(Command::PreviousTab, "Previous tab", &PreviousTab),
+        Row::bound(
+            Command::Send,
+            "Send request",
+            &SendRequest,
+            &["secondary-enter"],
+        ),
+        Row::bound(Command::NewTab, "New tab", &NewTab, &["secondary-t"]),
+        Row::bound(Command::CloseTab, "Close tab", &CloseTab, &["secondary-w"]),
+        // The tab rotation pair. `ctrl-tab` is the browser convention, and the
+        // page-key aliases cover layouts and habits that reach for them.
+        Row::bound(
+            Command::NextTab,
+            "Next tab",
+            &NextTab,
+            &["ctrl-tab", "ctrl-pagedown"],
+        ),
+        Row::bound(
+            Command::PreviousTab,
+            "Previous tab",
+            &PreviousTab,
+            &["ctrl-shift-tab", "ctrl-pageup"],
+        ),
         Row::bound(
             Command::ReopenClosedTab,
             "Reopen closed tab",
             &ReopenClosedTab,
+            &["secondary-shift-t"],
         ),
-        Row::bound(Command::FocusUrl, "Focus URL", &FocusUrl),
-        Row::bound(Command::FindInResponse, "Find in response", &FindInResponse),
-        Row::bound(Command::PasteCurl, "Paste cURL", &PasteCurl)
-            .in_menu(MenuSlot::App)
-            .with_icon(IconName::ClipboardPaste),
-        Row::bound(Command::ImportFile, "Import…", &ImportFile),
-        Row::bound(Command::ExportFile, "Export…", &ExportFile),
-        Row::bound(Command::CopyCurl, "Copy as cURL", &CopyCurl)
-            .in_menu(MenuSlot::App)
-            .with_icon(IconName::Copy),
+        Row::bound(Command::FocusUrl, "Focus URL", &FocusUrl, &["secondary-l"]),
+        Row::bound(
+            Command::FindInResponse,
+            "Find in response",
+            &FindInResponse,
+            &["secondary-f"],
+        ),
+        Row::bound(
+            Command::PasteCurl,
+            "Paste cURL",
+            &PasteCurl,
+            &["secondary-shift-v"],
+        )
+        .in_menu(MenuSlot::App)
+        .with_icon(IconName::ClipboardPaste),
+        Row::bound(
+            Command::ImportFile,
+            "Import…",
+            &ImportFile,
+            &["secondary-shift-i"],
+        ),
+        Row::bound(
+            Command::ExportFile,
+            "Export…",
+            &ExportFile,
+            &["secondary-shift-e"],
+        ),
+        Row::bound(
+            Command::CopyCurl,
+            "Copy as cURL",
+            &CopyCurl,
+            &["secondary-shift-c"],
+        )
+        .in_menu(MenuSlot::App)
+        .with_icon(IconName::Copy),
         Row::plain(Command::Snapshot, "Snapshot…")
             .in_menu(MenuSlot::App)
             .with_icon(IconName::Image),
@@ -201,19 +269,43 @@ fn rows() -> Vec<Row> {
         Row::plain(Command::ResetLayout, "Reset layout")
             .in_menu(MenuSlot::Layout)
             .with_icon(IconName::RefreshCcw),
-        Row::bound(Command::OpenSettings, "Settings…", &OpenSettings)
-            .in_menu(MenuSlot::App)
-            .with_icon(IconName::Settings),
-        Row::bound(Command::ShowShortcuts, "Keyboard shortcuts", &ShowShortcuts)
-            .in_menu(MenuSlot::App)
-            .with_icon(IconName::Keyboard),
-        Row::bound(Command::ZoomIn, "Zoom in", &ZoomIn),
-        Row::bound(Command::ZoomOut, "Zoom out", &ZoomOut),
-        Row::bound(Command::ResetZoom, "Reset zoom", &ResetZoom),
+        Row::bound(
+            Command::OpenSettings,
+            "Settings…",
+            &OpenSettings,
+            &["secondary-,"],
+        )
+        .in_menu(MenuSlot::App)
+        .with_icon(IconName::Settings),
+        // `?` is printable, so it only opens the sheet when focus is not inside
+        // an input; otherwise typing a question mark in a body would be stolen.
+        Row::bound(
+            Command::ShowShortcuts,
+            "Keyboard shortcuts",
+            &ShowShortcuts,
+            &["?"],
+        )
+        .in_context("!Input")
+        .in_menu(MenuSlot::App)
+        .with_icon(IconName::Keyboard),
+        Row::bound(
+            Command::ZoomIn,
+            "Zoom in",
+            &ZoomIn,
+            &["secondary-=", "secondary-+"],
+        ),
+        Row::bound(Command::ZoomOut, "Zoom out", &ZoomOut, &["secondary--"]),
+        Row::bound(
+            Command::ResetZoom,
+            "Reset zoom",
+            &ResetZoom,
+            &["secondary-0"],
+        ),
         Row::bound(
             Command::ToggleCommandPalette,
             "Command palette…",
             &ToggleCommandPalette,
+            &["secondary-shift-p"],
         )
         .menu_only(MenuSlot::Palette)
         .with_icon(IconName::Search),

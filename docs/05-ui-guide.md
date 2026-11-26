@@ -370,9 +370,9 @@ inside it, use the wrapper, because `sqlcipher` is a default feature and
 
 ```
 src/main.rs              window options, gpui_kit::init, open window
-src/actions.rs           the command names a keybinding dispatches, the keybinding
-                         table (bindings()), and shortcut() (a hint read from the
-                         live keymap)
+src/actions.rs           the command names a keybinding dispatches, bindings() (the
+                         keybinding table, derived from the palette's rows), and
+                         shortcut() (a hint read from the live keymap)
 src/variables.rs         environments, globals, active selection, reference walking
 src/completion.rs        `{{…}}` suggestions: the body's provider, and the Autocomplete state the URL bar and value fields share
 src/workspace/
@@ -395,7 +395,8 @@ src/panels/
     mod.rs               the pane: rows, events, save, rename, delete, drafts
     tree.rs              the tree: filter, sort, insert, remove, move, lookups
   environment.rs         environment/globals editor + variable inspector
-  command_palette.rs     the fixed command table and the dialog opener
+  command_palette.rs     the fixed command table (each row's keys included) and the
+                         dialog opener
   request.rs             method dropdown, URL bar, Send/Cancel, editor tabs
   response.rs            status summary + Body / Headers / Cookies tabs
   editor/
@@ -610,17 +611,22 @@ request as a whole and is read-only.
 
 1. Declare it in `src/actions.rs`:
    `actions!(restbook, [SendRequest]);`
-2. Add a row to `bindings()` in the same file:
-   `KeyBinding::new("secondary-enter", SendRequest, None)`.
-   `secondary` is cmd on macOS and ctrl elsewhere. The third argument is a
-   **context predicate**, which scopes the binding to a key context
-   (`Some("Command")` for palette navigation); a context-scoped key does nothing
-   outside it, which is how `ctrl-n` can be next-item without stealing the key
-   from an input. `main` installs the table with one
-   `cx.bind_keys(actions::bindings())` call, so this is the only place a
-   keystroke is written down.
-3. Handle it on the element that tracks focus:
-   `.on_action(cx.listener(|this, _: &SendRequest, _, cx| ...))`.
+2. Give the command a row in `panels/command_palette.rs` and the row its keys:
+   `Row::bound(Command::Send, "Send request", &SendRequest, &["secondary-enter"])`.
+   The `&[…]` slice is required and is where the keystroke is written down —
+   `actions::bindings()` reads it, so the palette, the menu, and the keymap
+   cannot disagree. List an alias as a second entry (`&["ctrl-tab",
+   "ctrl-pagedown"]`). `secondary` is cmd on macOS and ctrl elsewhere. A key that
+   must not fire inside an input, or that an input already owns, gets
+   `.in_context("!Input")` (a **context predicate**, not a key-context string); a
+   context-scoped key does nothing outside it, which is how `ctrl-n` can be
+   next-item without stealing the key from an input. `main` installs the whole
+   table with one `cx.bind_keys(actions::bindings())` call.
+   - An action that is not a palette command — a panel button like `SaveRequest`,
+     a kit action like `ShowCompletions` — has no `Command` row, so it is bound
+     directly in `bindings()` with `bound(cx, "secondary-s", SaveRequest, None)`
+     (or `load` for an action held as a trait object).
+3. Handle it on the element that tracks focus: `.on_action(cx.listener(|this, _: &SendRequest, _, cx| ...))`.
 4. Guard the effect (`document.can_send()`) rather than trusting that the action
    only fires in the right state. To show the shortcut somewhere, use
    `actions::shortcut` — see [Add a shortcut hint](#add-a-shortcut-hint).
@@ -1177,8 +1183,9 @@ default arrangement changes; the user gets the new default and a fresh file.
   The grammar spells a key/value pair `mode == editor`; the element declares it
   as `Input mode=editor`, and copying that string into `KeyBinding::new` panics
   at startup with `unexpected character ''m''` (the parser stopped after
-  `Input`). `KeyBinding::new` parses eagerly and unwraps, so the table lives in
-  `actions::bindings()` where a unit test builds it.
+  `Input`). `KeyBinding::load` parses eagerly and unwraps, so every row's key
+  is built through `actions::bindings()` in a unit test instead of at first
+  launch.
 - A Windows close produces a few `ERROR` lines without a target in
   `gpui-pre` itself (`window not found`, `Invalid window handle`):
   `WindowsWindow::drop` destroys an HWND the OS already destroyed for an

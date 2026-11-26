@@ -1,15 +1,20 @@
 //! The app's command vocabulary.
 //!
 //! A keybinding is only a name plus a keystroke, so the names live apart from
-//! the widgets that handle them. [`bindings`] holds the table `main` installs;
-//! a pane listens for the action it owns. An action's identity is its type, so
-//! a new command is a name here plus a listener, never a closure in a panel.
+//! the widgets that handle them. The keystroke for a command is not written
+//! here, though: it rides on the command's row in
+//! [`crate::panels::command_palette`], and [`bindings`] turns those rows into
+//! the table `main` installs. A pane listens for the action it owns. An action's
+//! identity is its type, so a new command is a name here plus a listener, never
+//! a closure in a panel.
 
 use gpui_kit::base::actions::{SelectDown, SelectUp};
 use gpui_kit::base::input::ShowCompletions;
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::AsKeystroke as _;
 use gpui_kit::*;
+
+use crate::panels::command_palette;
 
 actions!(
     restbook,
@@ -67,58 +72,47 @@ actions!(
 
 /// Build one binding through the App, so `secondary-` resolves against the
 /// host OS and the context predicate parses eagerly.
-fn bound(cx: &App, keystrokes: &str, action: impl Action, context: Option<&str>) -> KeyBinding {
+fn load(cx: &App, keystrokes: &str, action: Box<dyn Action>, context: Option<&str>) -> KeyBinding {
     let context = context.map(|source| {
         KeyBindingContextPredicate::parse(source)
             .unwrap_or_else(|error| panic!("invalid binding context {source}: {error}"))
             .into()
     });
-    KeyBinding::load(keystrokes, Box::new(action), context, false, None, cx)
+    KeyBinding::load(keystrokes, action, context, false, None, cx)
         .unwrap_or_else(|error| panic!("invalid binding {keystrokes}: {error}"))
 }
 
+/// The same, for an action this module names.
+fn bound(cx: &App, keystrokes: &str, action: impl Action, context: Option<&str>) -> KeyBinding {
+    load(cx, keystrokes, Box::new(action), context)
+}
+
 /// The whole keybinding table: which keystroke runs which action, in which key
-/// context; `main` installs it with one `cx.bind_keys` call. Each row is loaded
-/// with the App, so `secondary` is cmd/ctrl for this host; a bad keystroke or
-/// context panics here, and the tests below catch typos at `cargo test` time.
+/// context; `main` installs it with one `cx.bind_keys` call.
+///
+/// The restbook commands come from their rows in [`command_palette::rows`], so a
+/// command's key is written once — beside the command — and the palette, the
+/// menu, and this table cannot disagree. Each binding is loaded with the App, so
+/// `secondary` is cmd/ctrl for this host; a bad keystroke or context panics here,
+/// and the tests below catch typos at `cargo test` time.
 pub(crate) fn bindings(cx: &App) -> Vec<KeyBinding> {
-    vec![
-        bound(cx, "secondary-enter", SendRequest, None),
+    let mut bindings: Vec<KeyBinding> = command_palette::rows()
+        .into_iter()
+        .filter_map(|row| Some((row.action?, row.keys, row.context)))
+        .flat_map(|(action, keys, context)| {
+            keys.iter()
+                .map(move |keys| load(cx, keys, action.boxed_clone(), context))
+        })
+        .collect();
+
+    // Actions the table does not own: a panel-level trigger, a library action
+    // whose handler ships with the widget, and the two dock toggles, which the
+    // palette reaches as plain commands. None of these is a `Command` row, so
+    // each is written here.
+    bindings.extend([
+        // Save is the request pane's own button; it has no palette row, so the
+        // key is declared beside the action it runs.
         bound(cx, "secondary-s", SaveRequest, None),
-        bound(cx, "secondary-t", NewTab, None),
-        bound(cx, "secondary-w", CloseTab, None),
-        // The tab rotation pair. `ctrl-tab` is the browser convention, and the
-        // page-key aliases cover layouts and habits that reach for them.
-        bound(cx, "ctrl-tab", NextTab, None),
-        bound(cx, "ctrl-shift-tab", PreviousTab, None),
-        bound(cx, "ctrl-pagedown", NextTab, None),
-        bound(cx, "ctrl-pageup", PreviousTab, None),
-        bound(cx, "secondary-shift-t", ReopenClosedTab, None),
-        bound(cx, "secondary-l", FocusUrl, None),
-        bound(cx, "secondary-f", FindInResponse, None),
-        bound(cx, "secondary-shift-p", ToggleCommandPalette, None),
-        // `?` is a printable key, so it only opens the sheet when focus is not
-        // inside an input; otherwise typing a question mark in a body would be
-        // stolen. The palette row is the route that always works.
-        bound(cx, "?", ShowShortcuts, Some("!Input")),
-        bound(cx, "secondary-shift-v", PasteCurl, None),
-        bound(cx, "secondary-shift-i", ImportFile, None),
-        bound(cx, "secondary-shift-e", ExportFile, None),
-        bound(cx, "secondary-shift-c", CopyCurl, None),
-        // The conventional preferences shortcut. Settings is app-level, so the
-        // key is window-wide rather than scoped to a pane.
-        bound(cx, "secondary-,", OpenSettings, None),
-        bound(cx, "secondary-=", ZoomIn, None),
-        bound(cx, "secondary-+", ZoomIn, None),
-        bound(cx, "secondary--", ZoomOut, None),
-        bound(cx, "secondary-0", ResetZoom, None),
-        // The two dock toggles. Spelled *unshifted* on purpose: `\` and `/` are
-        // shifted-glyph keys on the US layout, and GPUI folds the produced
-        // character (`|`, `?`) back to the physical key and clears `shift`, so
-        // `secondary-/` matches the Ctrl+Shift press while `secondary-shift-/`
-        // matches no stroke any layout emits.
-        bound(cx, "secondary-\\", ToggleSidebar, None),
-        bound(cx, "secondary-/", ToggleTools, None),
         // Emacs-style next/previous inside the command palette. The palette
         // already binds Up/Down; these aliases let a keyboard-only user stay
         // on the home row. Scoped to the palette's own key context, so Ctrl+N
@@ -134,7 +128,15 @@ pub(crate) fn bindings(cx: &App) -> Vec<KeyBinding> {
             ShowCompletions,
             Some("Input && mode == editor"),
         ),
-    ]
+        // The two dock toggles. Spelled *unshifted* on purpose: `\` and `/` are
+        // shifted-glyph keys on the US layout, and GPUI folds the produced
+        // character (`|`, `?`) back to the physical key and clears `shift`, so
+        // `secondary-/` matches the Ctrl+Shift press while `secondary-shift-/`
+        // matches no stroke any layout emits.
+        bound(cx, "secondary-\\", ToggleSidebar, None),
+        bound(cx, "secondary-/", ToggleTools, None),
+    ]);
+    bindings
 }
 
 /// The platform-formatted shortcut for `action`, read from the live keymap so a
@@ -174,6 +176,42 @@ mod tests {
         let bindings = app_bindings();
         assert!(!bindings.is_empty());
         assert!(bindings.iter().all(|b| !b.keystrokes().is_empty()));
+    }
+
+    /// A command's key lives on its row, and this is what makes the table the
+    /// single source: every row that names an action has to be reachable from a
+    /// keystroke, so a row cannot be added with a listener but no key.
+    #[test]
+    fn every_action_row_is_bound() {
+        let bindings = app_bindings();
+        for row in crate::panels::command_palette::rows() {
+            let Some(action) = row.action else { continue };
+            assert!(
+                bindings.iter().any(|b| b.action().name() == action.name()),
+                "no keystroke is bound to {} ({})",
+                row.label,
+                action.name(),
+            );
+        }
+    }
+
+    /// Two rows may not claim the same keystroke in the same context; the later
+    /// binding would silently shadow the earlier one. Comparing the raw strings
+    /// keeps this independent of how a keystroke parses.
+    #[test]
+    fn no_two_rows_claim_the_same_keystroke() {
+        use std::collections::HashSet;
+
+        let mut seen = HashSet::new();
+        for row in crate::panels::command_palette::rows() {
+            for keys in row.keys {
+                assert!(
+                    seen.insert((keys, row.context)),
+                    "{keys} is claimed twice in context {:?}",
+                    row.context,
+                );
+            }
+        }
     }
 
     /// The zoom and dock actions are the ones a reader is most likely to
