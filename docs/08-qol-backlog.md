@@ -569,7 +569,6 @@ This is here so the absences above do not turn into a refactor.
 |---|---|
 | Generic `Item` trait + `ItemHandle` | We have one tabbable type (a request). An enum plus `TabId` is cheaper and type-checked. Revisit at 3+ item types. |
 | `ItemRegistry` / `SerializableItem` | `PanelName` plus "persist names only" already restores layouts. A registry would rebuild live entities, which is the thing `workspace/persistence.rs` exists to avoid. |
-| One `Document` per item | This is **not** deliberate over the long term; U11's single-document snapshot is the known limit (a response landing after a switch belongs to the old tab). Promote to per-tab state when tab-level scroll/pending response starts being requested. |
 | Full pane toolbars | `Panel::dropdown_menu` (3.4) covers the app-level actions without a new toolbar per pane. |
 
-Refs: `02-ui-plan.md` "Where GPUI is not like Zed" and U11 ordering note.
+Refs: `02-ui-plan.md` "Where GPUI is not like Zed".

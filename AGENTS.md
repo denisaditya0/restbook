@@ -46,7 +46,8 @@ repo is two people meaning different things by one of them.
   that renders content and knows nothing about where it is shown.
 - **POV** — where an interaction lands: left dock, right dock, center, chrome, or
   overlay. The five that exist in `docs/07-flows.md`.
-- **`Document`** — the one request/response value the panes observe.
+- **`Document`** — a tab's request/response value. There is one per open tab; the
+  panes observe the active tab's document.
 - **`RequestDef`** — what the user is editing (unresolved, may contain `{{vars}}`).
 - **`PreparedRequest`** — the pure output of `prepare()`: URL folded, auth added,
   body encoded. Nothing has been sent.

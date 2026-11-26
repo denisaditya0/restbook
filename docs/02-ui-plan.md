@@ -77,8 +77,11 @@ but the skin falls back to drawing `panel_name` as the title.
 
 Three channels, in order of preference:
 
-1. **`Document`** — shared observed state. A pane reads it; the canvas writes it.
-   Request being edited, response being shown. Most things are this.
+1. **`Document`** — observed state, one entity per tab. Request being edited,
+   response being shown, per-tab view. A pane reads the active one; the canvas
+   hands it over with `set_document`, which swaps the entity and re-installs the
+   pane's subscription. The canvas writes the document; panes never own it.
+   Most things are this.
 2. **Events** — a pane emits an intent it cannot serve (`RequestEvent::Send`,
    `HistoryEvent::Picked`). The workspace subscribes and performs the effect.
    Panes stay ignorant of each other.

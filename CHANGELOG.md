@@ -24,6 +24,29 @@ Contributors and pull requests are added to the release page by `release.yml`;
 do not write them here.
 -->
 
+## 0.2.5
+
+- **A response stays with the tab that sent it.** Send a request, switch to
+  another tab while it is on the wire, and the result now lands in the tab that
+  asked for it instead of the one you are looking at.
+- **A fetched OAuth token stays with the tab that asked.** Start a token fetch,
+  switch tabs before it finishes, and the token now lands in the tab that
+  requested it instead of the one on screen.
+- **Each tab remembers where you were.** Switching back to a tab restores its
+  response view, its body scroll, and the editor tab it was left on, instead of
+  resetting to the body at the top.
+- **The tab strip shows which tab is sending.** While a request is on the wire
+  its tab shows a spinner, and every other tab's Send is disabled with a reason
+  instead of doing nothing.
+- **Picking a request from history names it.** The cookie jar and the history
+  scope follow the restored request rather than the one the tab sent before, and
+  a cookie you started editing is dropped when you switch tabs.
+- **A request that skips certificate checks says so.** Turning off TLS
+  verification marks the URL row and the tab, so a request that can be
+  intercepted is visible without opening its Settings tab.
+- **Imports are bounded.** A file over 32 MB is refused before it is read, and a
+  malformed file changes nothing in the store.
+
 ## 0.2.4
 
 - **The window menu has a View section.** The titlebar's View menu lists every

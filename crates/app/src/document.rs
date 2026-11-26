@@ -3,7 +3,9 @@
 //! The editor owns the widgets and mirrors method and URL here so the Send
 //! button reads one shared place; a history pick goes the other way. At send
 //! time the workspace re-folds the editor into a full request, then writes the
-//! response, the error, and the in-flight flag back here. No second copies.
+//! response, the error, and the in-flight flag back here. There is one of these
+//! per open tab, so a response always lands in the tab that asked for it and
+//! every tab keeps its own outcome while the panes observe the active one.
 
 use std::time::{Duration, Instant};
 
@@ -248,18 +250,6 @@ impl Document {
                 .unwrap_or(0),
         });
         self.canceled = canceled;
-        self.pending = None;
-        self.progress = None;
-        self.started_at = None;
-    }
-
-    /// Drop an in-flight send's live state without recording a summary.
-    ///
-    /// Used when the document is showing a tab that only inherited another
-    /// tab's "Sending" marker: there is nothing to freeze, and the frozen
-    /// stats and outcome already in the document belong to this tab and must
-    /// survive.
-    pub(crate) fn forget_send(&mut self) {
         self.pending = None;
         self.progress = None;
         self.started_at = None;

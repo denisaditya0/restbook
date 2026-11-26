@@ -9,7 +9,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui_kit::SharedString;
 use gpui_kit::*;
-use restbook_core::{Draft, Method, Origin, RequestDef, ResponseRecord};
+use restbook_core::{Draft, Method, Origin, RequestDef};
+
+use crate::document::Document;
 
 use crate::notice::Notice;
 use crate::panels::collections::Destination;
@@ -44,18 +46,15 @@ pub(crate) enum TabAction {
     MoveRight(TabId),
 }
 
-/// A tab's saved request and response. Switching tabs snapshots the document
-/// into the tab being left and adopts the next one, so the panes never have to
-/// observe more than one document.
+/// A tab's saved request and binding. The response and the in-flight send live
+/// in the tab's own [`Document`], so switching tabs never moves an outcome
+/// between them: the tab carries only what the strip and the draft writer read.
 #[derive(Clone)]
 pub(crate) struct Tab {
     /// Stable for the life of the tab. A send outlives the index it started
     /// from, so the in-flight send is recorded against this, not a position.
     pub(crate) id: TabId,
     pub(crate) request: RequestDef,
-    pub(crate) response: Option<ResponseRecord>,
-    pub(crate) error: Option<restbook_core::Failure>,
-    pub(crate) last_url: Option<String>,
     /// The request as it was when it was saved to a collection, if it ever
     /// was. Compared against the live request to mark the tab unsaved: a
     /// `RequestDef` is not comparable, so it is kept as its serialized form.
@@ -76,9 +75,6 @@ impl Tab {
         Self {
             id: new_tab_id(),
             request: RequestDef::new(Method::Get, ""),
-            response: None,
-            error: None,
-            last_url: None,
             saved: None,
             node: None,
             draft: None,
@@ -94,9 +90,6 @@ impl Tab {
         Self {
             id: new_tab_id(),
             request: self.request.clone(),
-            response: self.response.clone(),
-            error: self.error.clone(),
-            last_url: self.last_url.clone(),
             saved: self.saved.clone(),
             node: None,
             draft: None,
@@ -117,9 +110,6 @@ impl Tab {
         Self {
             id: new_tab_id(),
             request: draft.request,
-            response: None,
-            error: None,
-            last_url: None,
             saved: None,
             node: None,
             draft: Some(draft.id),
@@ -151,7 +141,7 @@ impl Tab {
     /// The strip's view of this tab. This is the one place a tab's fields are
     /// projected, so adding a field to `Tab` is one edit here rather than a
     /// second hand-maintained mirror in the panel.
-    pub(crate) fn entry(&self) -> TabEntry {
+    pub(crate) fn entry(&self, pending: bool) -> TabEntry {
         TabEntry {
             id: self.id,
             method: self.request.method,
@@ -161,6 +151,8 @@ impl Tab {
             saved: self.saved.clone(),
             node: self.node.clone(),
             draft: self.draft,
+            insecure: self.request.insecure,
+            pending,
         }
     }
 }
@@ -190,6 +182,12 @@ pub(crate) struct TabEntry {
     /// node, so this is the only stable identity it can key on while it is
     /// moving to and from a collection.
     pub(crate) draft: Option<i64>,
+    /// Whether the request skips certificate verification. Surfaced on the strip
+    /// so an insecure tab is recognisable without opening its Settings tab.
+    pub(crate) insecure: bool,
+    /// Whether this tab owns the one in-flight send. The strip draws a spinner in
+    /// place of its unsaved dot, so the send is visible on the tab that started it.
+    pub(crate) pending: bool,
 }
 
 /// The whole open-tab set and which one is on screen. One owner for the list
@@ -222,10 +220,6 @@ impl TabState {
 
     pub(crate) fn iter(&self) -> std::slice::Iter<'_, Tab> {
         self.tabs.iter()
-    }
-
-    pub(crate) fn iter_mut(&mut self) -> std::slice::IterMut<'_, Tab> {
-        self.tabs.iter_mut()
     }
 
     pub(crate) fn position(&self, id: TabId) -> Option<usize> {
@@ -263,8 +257,11 @@ impl TabState {
     }
 
     /// Every tab as the strip draws it, in order.
-    pub(crate) fn entries(&self) -> Vec<TabEntry> {
-        self.tabs.iter().map(Tab::entry).collect()
+    pub(crate) fn entries(&self, sending: Option<TabId>) -> Vec<TabEntry> {
+        self.tabs
+            .iter()
+            .map(|tab| tab.entry(sending == Some(tab.id)))
+            .collect()
     }
 }
 
@@ -359,6 +356,14 @@ impl Workspace {
             return;
         }
         self.tabs = TabState::new(tabs);
+        // Each restored tab needs a document of its own, seeded from the tab so
+        // the panes have an entity to observe before the first adopt.
+        let seeded: Vec<(TabId, Entity<Document>)> = self
+            .tabs
+            .iter()
+            .map(|tab| (tab.id, self.seeded_document(tab, cx)))
+            .collect();
+        self.documents = seeded.into_iter().collect();
         self.tabs.set_active(active);
         self.adopt_active(cx);
         if dropped > 0 {
@@ -380,16 +385,6 @@ impl Workspace {
         self.flush_leaving_draft(cx);
         self.tabs.set_active(index);
         self.adopt_active(cx);
-        // The "Sending" marker in the document belongs to the tab that started
-        // the send. Landing anywhere else clears it, so the newly active tab
-        // shows its own state instead of inheriting someone else's in-flight
-        // request, and its Send button is its own to press.
-        if self.sending != self.active_tab_id() {
-            self.document.update(cx, |document, cx| {
-                document.forget_send();
-                cx.notify();
-            });
-        }
         self.persist_tabs(cx);
     }
 
@@ -594,10 +589,9 @@ impl Workspace {
         let take_over =
             self.tabs.is_empty() || (self.tabs.len() == 1 && self.tabs[0].is_pristine());
         if !take_over {
-            // `select_tab` snapshots the tab being left before it stops being the
-            // active one.
-            self.tabs.push(Tab::blank());
-            let index = self.tabs.len() - 1;
+            // `select_tab` snapshots the tab being left before it stops being
+            // the active one. `push_tab` gives the new tab a document of its own.
+            let index = self.push_tab(Tab::blank(), cx);
             self.select_tab(index, cx);
         }
         self.adopt_saved(node, request, cx);
@@ -608,49 +602,45 @@ impl Workspace {
     /// draft the tab was persisting is stale, so its sends are reassigned and
     /// the row is deleted.
     fn adopt_saved(&mut self, node: String, request: RequestDef, cx: &mut Context<Self>) {
-        self.panes
-            .request
-            .update(cx, |panel, cx| panel.adopt_request(request.clone(), cx));
-        // The editor queues the request for its next render; the document must
-        // be updated on the same tick or Send reads an empty URL until a second
-        // click re-fires the editor's observer.
-        self.document.update(cx, |document, cx| {
-            document.request = request.clone();
-            // The response belongs to the request that was on screen, not to the
-            // one this row is about to open.
-            document.response = None;
-            document.error = None;
-            document.last_url = None;
-            // A Canceled strip belongs to the send that just ended.
-            document.forget_cancel();
-            // Sends belong to the node, not the URL, so they are still this
-            // request's history in the response pane.
-            document.origin = Origin::Saved { node: node.clone() };
-            cx.notify();
-        });
-
         // With no tab open (every one was closed) this revives a fresh one.
-        let index = self.ensure_active_tab();
+        let index = self.ensure_active_tab(cx);
+        let id = self.tabs[index].id;
+        let origin = Origin::Saved { node: node.clone() };
         let stale = {
             let tab = &mut self.tabs[index];
             tab.request = request.clone();
-            tab.response = None;
-            tab.error = None;
-            tab.last_url = None;
             tab.saved = Some(RequestStamp::of(&request));
             tab.node = Some(node.clone());
             tab.draft.take()
         };
-        if let Some(id) = stale {
+        if let Some(draft) = stale {
             // The draft just became a saved request. Its sends are the same
             // requests, so they follow the new owner rather than disappearing
             // behind a dead draft id.
-            let _ = self.store.reassign_history_origin(
-                &Origin::Draft { draft: id },
-                &Origin::Saved { node: node.clone() },
-            );
-            let _ = self.store.delete_draft(id);
+            let _ = self
+                .store
+                .reassign_history_origin(&Origin::Draft { draft }, &origin);
+            let _ = self.store.delete_draft(draft);
         }
+        // The row's request replaces whatever the tab's document held; the
+        // response belonged to the old request, so it goes with it.
+        if let Some(document) = self.documents.get(&id).cloned() {
+            document.update(cx, |document, cx| {
+                document.request = request.clone();
+                document.response = None;
+                document.error = None;
+                document.last_url = None;
+                document.forget_cancel();
+                document.origin = origin;
+                cx.notify();
+            });
+        }
+        // The editor queues the request for its next render; the document is
+        // updated above so Send reads the new URL without a second click.
+        self.panes
+            .request
+            .update(cx, |panel, cx| panel.adopt_request(request, cx));
+        self.point_at(id, cx);
         self.push_tabs(cx);
         if stale.is_some() {
             self.refresh_drafts(cx);
@@ -673,7 +663,8 @@ impl Workspace {
             }
             Err(error) => {
                 log::error!(target: "restbook_app::ui", "history pick: id={id} failed: {error}");
-                self.document.update(cx, |document, cx| {
+                let document = self.document.clone();
+                document.update(cx, |document, cx| {
                     document.error = Some(error.failure());
                     cx.notify();
                 });
@@ -686,24 +677,28 @@ impl Workspace {
             entry.request.method,
             crate::logging::redact_url(&entry.request.url),
         );
-        let index = self.ensure_active_tab();
+        let index = self.ensure_active_tab(cx);
+        let id = self.tabs[index].id;
         // The editor queues the request for its next render; the document has
         // to be told on the same tick or Send reads the previous URL.
         self.panes.request.update(cx, |panel, cx| {
             panel.adopt_request(entry.request.clone(), cx)
         });
-        self.document.update(cx, |document, cx| {
-            document.request = entry.request.clone();
-            document.response = Some(entry.response.clone());
-            document.error = None;
-            cx.notify();
-        });
-        // A switch back adopts the tab's snapshot, so it holds the pick rather
-        // than the request it replaced.
-        let tab = &mut self.tabs[index];
-        tab.request = entry.request;
-        tab.response = Some(entry.response);
-        tab.error = None;
+        if let Some(document) = self.documents.get(&id).cloned() {
+            document.update(cx, |document, cx| {
+                document.request = entry.request.clone();
+                document.response = Some(entry.response.clone());
+                document.error = None;
+                // `url()` drives the cookie jar and the history scope, so it has
+                // to name the picked request, not the one the tab sent last.
+                document.last_url = Some(entry.request.url.clone());
+                cx.notify();
+            });
+        }
+        // A switch back adopts the tab's request from the document, so the tab
+        // snapshot carries the pick rather than the request it replaced.
+        self.tabs[index].request = entry.request;
+        self.point_at(id, cx);
         self.push_tabs(cx);
     }
 
@@ -731,7 +726,7 @@ impl Workspace {
         self.flush_leaving_draft(cx);
         let mut tab = Tab::blank();
         tab.request.url = url.to_owned();
-        let index = self.tabs.push(tab);
+        let index = self.push_tab(tab, cx);
         self.tabs.set_active(index);
         self.adopt_active(cx);
         log::info!(
@@ -748,7 +743,7 @@ impl Workspace {
         // with work the user did not ask to carry over. Saving it creates a new
         // entry, while the tab left behind keeps its own edits.
         self.flush_leaving_draft(cx);
-        let index = self.tabs.push(Tab::blank());
+        let index = self.push_tab(Tab::blank(), cx);
         self.tabs.set_active(index);
         self.adopt_active(cx);
         log::debug!(target: "restbook_app::ui", "new tab: {} open", self.tabs.len());
@@ -761,7 +756,7 @@ impl Workspace {
     pub(crate) fn open_draft(&mut self, draft: Draft, cx: &mut Context<Self>) {
         let id = draft.id;
         self.flush_leaving_draft(cx);
-        let index = self.tabs.push(Tab::from_draft(draft));
+        let index = self.push_tab(Tab::from_draft(draft), cx);
         self.tabs.set_active(index);
         self.adopt_active(cx);
         log::info!(
@@ -783,10 +778,10 @@ impl Workspace {
     /// Opening a saved request, a draft, or a history pick is what revives an
     /// empty editor, so it is factored out instead of repeated in each event
     /// arm.
-    pub(crate) fn ensure_active_tab(&mut self) -> usize {
+    pub(crate) fn ensure_active_tab(&mut self, cx: &mut Context<Self>) -> usize {
         if self.tabs.is_empty() {
-            self.tabs.push(Tab::blank());
-            self.tabs.set_active(0);
+            let index = self.push_tab(Tab::blank(), cx);
+            self.tabs.set_active(index);
         }
         self.tabs.active()
     }
@@ -880,7 +875,33 @@ impl Workspace {
         // screen copies the edits that are in the editor, not the last snapshot.
         self.flush_leaving_draft(cx);
         let copy = self.tabs[index].copy_of();
+        let copy_id = copy.id;
+        // The copy shares what the source shows, response included, under a new
+        // document of its own.
+        let fields = self.documents.get(&id).map(|source| {
+            let source = source.read(cx);
+            (
+                source.request.clone(),
+                source.response.clone(),
+                source.error.clone(),
+                source.last_url.clone(),
+                source.origin.clone(),
+            )
+        });
+        let document = match fields {
+            Some((request, response, error, last_url, origin)) => cx.new(|_| {
+                let mut document = Document::new();
+                document.request = request;
+                document.response = response;
+                document.error = error;
+                document.last_url = last_url;
+                document.origin = origin;
+                document
+            }),
+            None => self.seeded_document(&copy, cx),
+        };
         self.tabs.insert(index + 1, copy);
+        self.documents.insert(copy_id, document);
         self.tabs.set_active(index + 1);
         self.adopt_active(cx);
         log::debug!(target: "restbook_app::ui", "duplicated tab {id}");
@@ -923,7 +944,7 @@ impl Workspace {
             return;
         };
         self.flush_leaving_draft(cx);
-        let index = self.tabs.push(tab.reopened());
+        let index = self.push_tab(tab.reopened(), cx);
         self.tabs.set_active(index);
         self.adopt_active(cx);
         log::debug!(target: "restbook_app::ui", "reopened a closed tab");
@@ -973,19 +994,17 @@ impl Workspace {
         if self.sending == Some(self.tabs[index].id) {
             // The tab that owned the send is gone. The transfer still resolves
             // in the background, but nothing will take its result, so the send
-            // slot is free again and the "Sending" marker goes with the tab.
+            // slot is free again.
             self.sending = None;
-            self.document.update(cx, |document, cx| {
-                document.forget_send();
-                cx.notify();
-            });
         }
         // Keep the content for Reopen Closed Tab. The draft row is gone, so a
         // reopened tab comes back as a copy with a new identity and no row.
+        // The response lived in the tab's document and is not carried over.
         self.closed.push(self.tabs[index].clone());
         if self.closed.len() > CLOSED_TAB_LIMIT {
             self.closed.remove(0);
         }
+        self.documents.remove(&id);
         if was_active {
             // The armed debounce belonged to the tab that just closed; let it
             // go rather than have it write whichever tab becomes active.
@@ -1022,83 +1041,133 @@ impl Workspace {
         self.persist_tabs(cx);
     }
 
-    /// Store the live editor and document in the tab being left.
+    /// Store the live editor in the tab being left. The response already lives
+    /// in that tab's document, so only the request has to be folded back.
     pub(crate) fn snapshot_active(&mut self, cx: &App) {
         // An adoption queued for the next frame means the widgets still belong
         // to the tab being left. Folding them here would write the request on
         // screen into whichever tab is current, so two switches inside one
         // frame used to copy one tab's body onto another.
-        let pending = self.panes.request.read(cx).has_pending_adoption(cx);
-        let request = (!pending).then(|| self.panes.request.read(cx).current_request(cx));
-        let (response, error, last_url) = {
-            let document = self.document.read(cx);
-            (
-                document.response.clone(),
-                document.error.clone(),
-                document.last_url.clone(),
-            )
-        };
-        let active = self.tabs.active();
-        let Some(tab) = self.tabs.get_mut(active) else {
+        if self.panes.request.read(cx).has_pending_adoption(cx) {
             return;
-        };
-        if let Some(request) = request {
+        }
+        let request = self.panes.request.read(cx).current_request(cx);
+        let active = self.tabs.active();
+        if let Some(tab) = self.tabs.get_mut(active) {
             tab.request = request;
         }
-        tab.response = response;
-        tab.error = error;
-        tab.last_url = last_url;
     }
 
-    /// Write the active tab into the editor and the document. The editor applies
-    /// the request on its next render, the same path a history pick uses. With
-    /// no tab left, both are emptied so the strip below does not describe a
-    /// request that is no longer open.
+    /// Point the panes at the active tab's document. The document already holds
+    /// that tab's request, response, and in-flight state, so nothing is copied
+    /// between tabs here: the editor adopts the request and every pane follows
+    /// the new document.
     fn adopt_active(&mut self, cx: &mut Context<Self>) {
         let active = self.tabs.active();
-        let Some(tab) = self.tabs.get(active).cloned() else {
-            self.clear_editor(cx);
+        let Some(tab) = self.tabs.get(active) else {
+            self.show_empty(cx);
             return;
         };
-        // Read the owner before the fields below are moved into the closures.
+        let id = tab.id;
+        let request = tab.request.clone();
         let origin = tab.origin();
-        self.panes
-            .request
-            .update(cx, |panel, cx| panel.adopt_request(tab.request, cx));
-        self.document.update(cx, |document, cx| {
-            document.forget_cancel();
-            document.response = tab.response;
-            document.error = tab.error;
-            document.last_url = tab.last_url;
-            document.origin = origin;
-            cx.notify();
-        });
+        // Keep the tab snapshot authoritative for the request and its owner, so
+        // a send names the right history scope.
+        if let Some(document) = self.documents.get(&id).cloned() {
+            document.update(cx, |document, cx| {
+                document.request = request;
+                document.origin = origin;
+                cx.notify();
+            });
+        }
+        self.point_at(id, cx);
         self.push_tabs(cx);
     }
 
-    /// Reset the editor and document for a window with no open request.
-    fn clear_editor(&mut self, cx: &mut Context<Self>) {
+    /// Point the editor and every pane at a blank document for a window with no
+    /// open request.
+    fn show_empty(&mut self, cx: &mut Context<Self>) {
         let blank = RequestDef::new(Method::Get, "");
-        self.panes
-            .request
-            .update(cx, |panel, cx| panel.adopt_request(blank.clone(), cx));
-        self.document.update(cx, |document, cx| {
+        let document = self.empty_document.clone();
+        document.update(cx, |document, cx| {
             document.forget_cancel();
-            document.request = blank;
+            document.request = blank.clone();
             document.response = None;
             document.error = None;
             document.last_url = None;
+            document.pending = None;
+            document.progress = None;
+            document.started_at = None;
             document.origin = Origin::default();
             cx.notify();
         });
+        self.panes
+            .request
+            .update(cx, |panel, cx| panel.adopt_request(blank, cx));
+        self.set_active_document(document, cx);
         self.push_tabs(cx);
+    }
+
+    /// Push `tab` onto the strip and give it a document of its own, seeded from
+    /// its request and binding.
+    fn push_tab(&mut self, tab: Tab, cx: &mut Context<Self>) -> usize {
+        let document = self.seeded_document(&tab, cx);
+        let id = tab.id;
+        let index = self.tabs.push(tab);
+        self.documents.insert(id, document);
+        index
+    }
+
+    /// A fresh document carrying `tab`'s request and history owner.
+    fn seeded_document(&self, tab: &Tab, cx: &mut Context<Self>) -> Entity<Document> {
+        let request = tab.request.clone();
+        let origin = tab.origin();
+        cx.new(|_| {
+            let mut document = Document::new();
+            document.request = request;
+            document.origin = origin;
+            document
+        })
+    }
+
+    /// Point every pane at the document owning `id`, if it exists.
+    fn point_at(&mut self, id: TabId, cx: &mut Context<Self>) {
+        if let Some(document) = self.documents.get(&id).cloned() {
+            self.set_active_document(document, cx);
+        }
+    }
+
+    /// Make `document` the one the panes observe. Re-subscribes the draft writer
+    /// and hands the new entity to each pane, which swaps its own observer.
+    fn set_active_document(&mut self, document: Entity<Document>, cx: &mut Context<Self>) {
+        let resubscribe = self.document != document || self.document_sub.is_none();
+        self.document = document.clone();
+        if resubscribe {
+            self.document_sub =
+                Some(cx.observe(&document, |this, _, cx| this.schedule_draft_save(cx)));
+        }
+        self.panes
+            .request
+            .update(cx, |pane, cx| pane.set_document(document.clone(), cx));
+        self.panes
+            .response
+            .update(cx, |pane, cx| pane.set_document(document.clone(), cx));
+        self.panes
+            .history
+            .update(cx, |pane, cx| pane.set_document(document.clone(), cx));
+        self.panes
+            .environment
+            .update(cx, |pane, cx| pane.set_document(document.clone(), cx));
+        self.panes
+            .collections
+            .update(cx, |pane, cx| pane.set_document(document, cx));
     }
 
     /// Hand the open-tab labels to the request pane, which draws the strip.
     /// Called after every change to the tab list, so the pane never has to
     /// guess what is open; the live label of the active tab is its own.
     pub(crate) fn push_tabs(&mut self, cx: &mut Context<Self>) {
-        let tabs = self.tabs.entries();
+        let tabs = self.tabs.entries(self.sending);
         let active = self.tabs.active();
         self.panes
             .request
@@ -1148,7 +1217,7 @@ mod tests {
         assert_eq!(tabs[0].node.as_deref(), Some("node-1"));
         assert_eq!(tabs[0].request.url, "https://api.test/items");
         assert_eq!(tabs[0].saved, Some(RequestStamp::of(&request)));
-        assert!(tabs[0].response.is_none() && tabs[0].error.is_none());
+        assert!(tabs[0].draft.is_none());
     }
 
     /// A node deleted since the last run drops its tab rather than opening a
@@ -1296,13 +1365,19 @@ mod tests {
         let second_id = second.id;
 
         let state = TabState::new(vec![first, second]);
-        let entries = state.entries();
+        let entries = state.entries(None);
 
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].id, first_id);
         assert_eq!(entries[1].id, second_id);
         assert_eq!(entries[0].method, Method::Put);
         assert_eq!(&*entries[0].url, "https://api.test/a");
+
+        // The spinner follows the global send slot, so only the sending tab's
+        // entry carries `pending`.
+        let sending = state.entries(Some(second_id));
+        assert!(!sending[0].pending);
+        assert!(sending[1].pending);
     }
 
     #[test]

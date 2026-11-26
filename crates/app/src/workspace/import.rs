@@ -35,6 +35,10 @@ pub(super) struct PendingImport {
     parsed: BulkImport,
 }
 
+/// Refuse files past this size. Parsing is synchronous once read, and a file
+/// this big is far more likely to be hostile or a mistake than a real export.
+const MAX_IMPORT_BYTES: u64 = 32 * 1024 * 1024;
+
 /// The toast an import shows while it works. The type is the key, so the step
 /// from reading to saving replaces one notification instead of stacking two.
 struct ImportNotice;
@@ -325,7 +329,21 @@ impl Workspace {
             let read = cx
                 .background_spawn({
                     let path = path.clone();
-                    async move { std::fs::read_to_string(path) }
+                    async move {
+                        match std::fs::metadata(&path) {
+                            Ok(meta) if meta.len() > MAX_IMPORT_BYTES => {
+                                let size = meta.len() / (1024 * 1024);
+                                let limit = MAX_IMPORT_BYTES / (1024 * 1024);
+                                Err(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    format!(
+                                        "the file is {size} MB, over the {limit} MB import limit"
+                                    ),
+                                ))
+                            }
+                            _ => std::fs::read_to_string(path),
+                        }
+                    }
                 })
                 .await;
             let text = match read {
@@ -755,6 +773,30 @@ mod tests {
         assert!(error.contains("broken.har"), "{error}");
         assert!(error.contains("HAR"), "{error}");
         assert!(store.collections().unwrap().is_empty());
+    }
+
+    /// Every malformed shape errors with the file named, and none panics. The
+    /// `.har` name forces one reader, so the corpus tests the parser, not the
+    /// format guess.
+    #[test]
+    fn a_corpus_of_malformed_files_all_error_without_panicking() {
+        let corpus = [
+            "",
+            "   ",
+            "{",
+            "[",
+            "null",
+            "not json",
+            r#"{"log": {}}"#,
+            r#"{"log": {"entries": "not a list"}}"#,
+        ];
+        for text in corpus {
+            let store = MemoryStore::new();
+            let error = as_new_collections(&store, "broken.har", text)
+                .expect_err(&format!("malformed input parsed: {text:?}"));
+            assert!(error.contains("broken.har"), "{text:?}: {error}");
+            assert!(store.collections().unwrap().is_empty(), "{text:?}");
+        }
     }
 
     #[test]

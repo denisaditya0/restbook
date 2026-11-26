@@ -96,6 +96,8 @@ pub(crate) struct EnvironmentPanel {
     variables: Entity<Variables>,
     /// The request being edited, observed so the inspector follows it.
     document: Entity<Document>,
+    /// The document observer, replaced when the active tab changes.
+    document_sub: Option<Subscription>,
     /// The name of a new environment. Existing environments show their stored
     /// name instead, so a rename can never orphan the old row.
     name_input: Entity<InputState>,
@@ -222,7 +224,7 @@ impl EnvironmentPanel {
         // Redraw when either the variables or the request change: the editor
         // reads the first and the inspector reads both.
         cx.observe(&variables, |_, _, cx| cx.notify()).detach();
-        cx.observe(&document, |_, _, cx| cx.notify()).detach();
+        let document_sub = Some(cx.observe(&document, |_, _, cx| cx.notify()));
 
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("name"));
 
@@ -231,6 +233,7 @@ impl EnvironmentPanel {
             metrics: Metrics::current(cx),
             variables,
             document,
+            document_sub,
             name_input,
             rows: Vec::new(),
             target: Target::Globals,
@@ -246,6 +249,16 @@ impl EnvironmentPanel {
     fn loaded(mut self, window: &mut Window, cx: &mut Context<Self>) -> Self {
         self.load(&Target::Globals, window, cx);
         self
+    }
+
+    /// Re-point the inspector at the active tab's document.
+    pub(crate) fn set_document(&mut self, document: Entity<Document>, cx: &mut Context<Self>) {
+        if self.document == document {
+            return;
+        }
+        self.document = document.clone();
+        self.document_sub = Some(cx.observe(&document, |_, _, cx| cx.notify()));
+        cx.notify();
     }
 
     /// Rebuild the cached palette after a theme or zoom change.

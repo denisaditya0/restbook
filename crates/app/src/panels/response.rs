@@ -24,6 +24,7 @@ use gpui_kit::*;
 
 use restbook_core::{Failure, FailureKind, HistoryHit, Origin, ResponseRecord, Store, Transport};
 
+use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -106,6 +107,14 @@ enum ResponseTab {
     Cookies,
 }
 
+/// Per-tab state the pane restores when a tab comes back: the selected response
+/// tab and the first visible body row. Keyed by the tab's document id.
+#[derive(Clone, Copy)]
+struct ViewState {
+    tab: ResponseTab,
+    scroll_item: Option<usize>,
+}
+
 impl ResponseTab {
     const ALL: [ResponseTab; 3] = [
         ResponseTab::Body,
@@ -147,6 +156,8 @@ pub(crate) struct ResponsePanel {
     palette: Palette,
     metrics: Metrics,
     document: Entity<Document>,
+    /// The document observer, replaced when the active tab changes.
+    document_sub: Option<Subscription>,
     /// The history store, so the header can list the prior sends of the
     /// request whose response is showing.
     store: Arc<dyn Store>,
@@ -208,6 +219,9 @@ pub(crate) struct ResponsePanel {
     /// untouched, so this is what tells the pane its in-flight strip has
     /// become a failure view.
     painted: (ResponseState, Option<String>),
+    /// The selected tab and scroll of each tab, so switching back restores what
+    /// the user was looking at instead of resetting to Body at the top.
+    view: HashMap<EntityId, ViewState>,
     /// The centre's current split, pushed by the workspace like the tab list:
     /// the pane draws the toggle's next-action glyph from it, but the workspace
     /// owns the orientation and decides what the click does.
@@ -837,8 +851,7 @@ impl ResponsePanel {
     ) -> Self {
         // A new response or URL is also the moment the Earlier sends count may
         // change.
-        cx.observe(&document, |this, _, cx| this.sync_history(cx))
-            .detach();
+        let document_sub = Some(cx.observe(&document, |this, _, cx| this.sync_history(cx)));
         // The pane's pretty-print start state is an app-level preference. It is
         // only a *start* state: the format dropdown below still overrides it per
         // response, so a settings change flips what the next body opens as, not
@@ -873,6 +886,7 @@ impl ResponsePanel {
             palette: Palette::new(cx),
             metrics: Metrics::current(cx),
             document,
+            document_sub,
             store,
             transport,
             cookie_edit: None,
@@ -893,6 +907,7 @@ impl ResponsePanel {
             failure_log: None,
             failure_painted: false,
             painted: (ResponseState::Idle, None),
+            view: HashMap::new(),
             center_side_by_side: false,
             focus_handle: cx.focus_handle(),
         };
@@ -974,6 +989,62 @@ impl ResponsePanel {
         // key would only burn a frame.
         if pending || changed || repaint {
             cx.notify();
+        }
+    }
+
+    /// Re-point the pane at the active tab's document. The cached display and
+    /// history belong to the old tab, so they are dropped and rebuilt from the
+    /// new one, and the new tab's selected view and scroll are restored.
+    pub(crate) fn set_document(&mut self, document: Entity<Document>, cx: &mut Context<Self>) {
+        if self.document == document {
+            return;
+        }
+        self.view
+            .insert(self.document.entity_id(), self.capture_view());
+        self.document = document.clone();
+        self.document_sub = Some(cx.observe(&document, |this, _, cx| this.sync_history(cx)));
+        self.display = None;
+        self.finding = None;
+        self.failure_details = false;
+        self.failure_log = None;
+        self.failure_painted = false;
+        // An edit belongs to the tab it was started in; committing it against the
+        // tab just entered would write one request's cookie into another's jar.
+        self.cookie_edit = None;
+        self.history_query = String::new();
+        self.history_origin = Origin::default();
+        self.history_stamp = None;
+        self.history_revision = 0;
+        self.painted = (ResponseState::Idle, None);
+        let view = self
+            .view
+            .get(&document.entity_id())
+            .copied()
+            .unwrap_or(ViewState {
+                tab: ResponseTab::Body,
+                scroll_item: None,
+            });
+        self.tab = view.tab;
+        if let Some(item) = view.scroll_item {
+            self.body_scroll.scroll_to_item(item, ScrollStrategy::Top);
+        }
+        self.sync_history(cx);
+        cx.notify();
+    }
+
+    /// The selected tab and first visible body row, for the tab being left.
+    fn capture_view(&self) -> ViewState {
+        let scroll_item = {
+            let state = self.body_scroll.0.borrow();
+            state.last_item_size.and_then(|size| {
+                let height = f32::from(size.item.height);
+                (height > 0.0)
+                    .then(|| (f32::from(state.base_handle.offset().y).max(0.0) / height) as usize)
+            })
+        };
+        ViewState {
+            tab: self.tab,
+            scroll_item,
         }
     }
 

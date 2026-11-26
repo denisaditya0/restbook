@@ -6,6 +6,7 @@
 //! where it would read as a second title bar, and the workspace still owns it.
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use gpui_kit::base::{ElementExt as _, InteractiveElementExt as _};
@@ -13,9 +14,10 @@ use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputEvent};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tab::{TabBar, TabVariant};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{h_flex, v_flex, Disableable as _};
+use gpui_kit::component::{h_flex, v_flex, Disableable as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -155,6 +157,10 @@ pub(crate) struct RequestPanel {
     /// reaches the bands and controls, not only the text inside them.
     metrics: Metrics,
     document: Entity<Document>,
+    /// The document observer, replaced when the active tab changes.
+    document_sub: Option<Subscription>,
+    /// The editor tab each tab was last showing, so a switch restores it.
+    view_tabs: HashMap<EntityId, EditorTab>,
     editor: Entity<RequestEditor>,
     /// The variable scopes a send resolves against. Observed so the unresolved
     /// warning follows what the user edits in the Environment pane.
@@ -209,6 +215,9 @@ struct StripTab {
     url: SharedString,
     active: bool,
     unsaved: bool,
+    insecure: bool,
+    /// The tab owns the in-flight send, so its status slot shows a spinner.
+    pending: bool,
 }
 
 impl EventEmitter<Event> for RequestPanel {}
@@ -400,44 +409,9 @@ impl RequestPanel {
         // Document -> editor: a history pick. The comparison lives in
         // `RequestEditor::adopt`, which leaves the input alone when the URL
         // already matches.
-        cx.observe(&document, |this, document, cx| {
-            let (method, url, pending) = {
-                let document = document.read(cx);
-                (
-                    document.request.method,
-                    document.request.url.clone(),
-                    document.is_pending(),
-                )
-            };
-            // Only adopt when the document actually differs from the editor,
-            // so the editor's own write-through does not trigger a second frame.
-            let stale = {
-                let editor = this.editor.read(cx);
-                editor.url_value(cx) != url || editor.method() != method
-            };
-            // The Send button is not a request field: `begin_send` and the
-            // resolution touch `pending` alone, so `stale` stays false while the
-            // row still says "Sending". Ask for that frame here for the same
-            // reason the response pane keys its redraw on the send state.
-            let repaint = pending != this.pending_painted;
-            this.pending_painted = pending;
-            if repaint {
-                log::debug!(
-                    target: "restbook_app::perf",
-                    "request pane send state change: pending={pending}",
-                );
-            }
-            if !stale && !repaint {
-                return;
-            }
-            if stale {
-                this.editor
-                    .update(cx, |editor, cx| editor.adopt(method, &url, cx));
-            }
-            // The adopted URL lands in the input on the next render.
-            cx.notify();
-        })
-        .detach();
+        let document_sub = Some(cx.observe(&document, |this, document, cx| {
+            this.sync_from_document(document.clone(), cx);
+        }));
 
         // A new environment or active selection changes which names resolve
         // and therefore whether Send is usable.
@@ -466,6 +440,8 @@ impl RequestPanel {
             palette: Palette::new(cx),
             metrics: Metrics::current(cx),
             document,
+            document_sub,
+            view_tabs: HashMap::new(),
             editor,
             variables,
             tabs: Vec::new(),
@@ -479,6 +455,80 @@ impl RequestPanel {
             url_row_width: Rc::new(Cell::new(f32::INFINITY)),
             focus_handle: cx.focus_handle(),
         }
+    }
+
+    /// Re-point the pane at the active tab's document and adopt its request.
+    pub(crate) fn set_document(&mut self, document: Entity<Document>, cx: &mut Context<Self>) {
+        if self.document == document {
+            return;
+        }
+        let leaving = self.document.entity_id();
+        let leaving_tab = self.editor.read(cx).tab;
+        self.view_tabs.insert(leaving, leaving_tab);
+        self.document = document.clone();
+        self.document_sub = Some(cx.observe(&document, |this, document, cx| {
+            this.sync_from_document(document.clone(), cx);
+        }));
+        // Hand the new tab its own editor tab, after stashing the one we just
+        // left under the tab that owned it.
+        let view_tab = self.view_tabs.get(&document.entity_id()).copied();
+        if let Some(tab) = view_tab {
+            self.editor.update(cx, |editor, _| editor.tab = tab);
+        }
+        // Adopt the whole request, not just the method/URL diff: this discards
+        // any adoption still queued for the tab just left, so a switch before
+        // the previous frame flushed cannot land the old tab's URL here.
+        let (request, pending) = {
+            let document = document.read(cx);
+            (document.request.clone(), document.is_pending())
+        };
+        self.editor.update(cx, |editor, cx| {
+            editor.adopt_request(request);
+            cx.notify();
+        });
+        self.pending_painted = pending;
+        cx.notify();
+    }
+
+    /// Fold a document change into the editor, adopting its request and the
+    /// send state. The comparison lives in `RequestEditor::adopt`, which leaves
+    /// the input alone when the URL already matches.
+    fn sync_from_document(&mut self, document: Entity<Document>, cx: &mut Context<Self>) {
+        let (method, url, pending) = {
+            let document = document.read(cx);
+            (
+                document.request.method,
+                document.request.url.clone(),
+                document.is_pending(),
+            )
+        };
+        // Only adopt when the document actually differs from the editor, so the
+        // editor's own write-through does not trigger a second frame.
+        let stale = {
+            let editor = self.editor.read(cx);
+            editor.url_value(cx) != url || editor.method() != method
+        };
+        // The Send button is not a request field: `begin_send` and the
+        // resolution touch `pending` alone, so `stale` stays false while the
+        // row still says "Sending". Ask for that frame here for the same
+        // reason the response pane keys its redraw on the send state.
+        let repaint = pending != self.pending_painted;
+        self.pending_painted = pending;
+        if repaint {
+            log::debug!(
+                target: "restbook_app::perf",
+                "request pane send state change: pending={pending}",
+            );
+        }
+        if !stale && !repaint {
+            return;
+        }
+        if stale {
+            self.editor
+                .update(cx, |editor, cx| editor.adopt(method, &url, cx));
+        }
+        // The adopted URL lands in the input on the next render.
+        cx.notify();
     }
 
     /// Rebuild the palette after a theme or zoom change, and pass the cue to the
@@ -696,6 +746,12 @@ impl RequestPanel {
                     },
                     active,
                     unsaved: is_unsaved(tab.saved.as_deref(), current),
+                    insecure: if active {
+                        document.request.insecure
+                    } else {
+                        tab.insecure
+                    },
+                    pending: tab.pending,
                 }
             })
             .collect()
@@ -766,6 +822,8 @@ impl RequestPanel {
                     url,
                     active,
                     unsaved,
+                    insecure,
+                    pending,
                 } = entry;
 
                 let select = cx.listener(move |_, _, _, cx| {
@@ -847,10 +905,25 @@ impl RequestPanel {
                             .text_color(text_color)
                             .child(label),
                     )
+                    // A tab that skips certificate verification says so on the
+                    // strip, so the hazard is visible without opening Settings.
+                    .when(insecure, |style| {
+                        style.child(
+                            icons::sized(IconName::TriangleAlert, icons::SMALL)
+                                .flex_none()
+                                .text_color(palette.danger),
+                        )
+                    })
+                    // A sending tab shows a spinner in the unsaved dot's slot,
+                    // so the in-flight send is visible without new width; the
+                    // spinner is the kit's, which honours reduced motion.
+                    .when(pending, |style| {
+                        style.child(Spinner::new().xsmall().color(palette.muted))
+                    })
                     // The unsaved marker is a glyph of its own, not a replacement
                     // for the close button: the tab can still be closed, and the
                     // dot is what says the close would ask first.
-                    .when(unsaved, |style| {
+                    .when(unsaved && !pending, |style| {
                         style.child(
                             div()
                                 .flex_none()
@@ -1049,7 +1122,15 @@ impl RequestPanel {
         let palette = self.palette.clone();
         let document = self.document.read(cx);
         let pending = document.is_pending();
-        let sendable = document.is_sendable() && unresolved.is_empty();
+        let insecure = document.request.insecure;
+        // A second send is refused while one is on the wire; the other tabs show
+        // a disabled Send naming the reason so the refusal is not a silent no-op.
+        let other_sending = self
+            .tabs
+            .iter()
+            .enumerate()
+            .any(|(index, tab)| tab.pending && index != self.active_tab);
+        let sendable = document.is_sendable() && unresolved.is_empty() && !other_sending;
 
         // A dock pane can be dragged down to the dock's floor, well under the
         // width this row needs. The field and Send are the task; the Save verb
@@ -1057,7 +1138,9 @@ impl RequestPanel {
         let breakpoint = NARROW_URL_ROW * crate::theme::zoom(cx);
         let narrow = self.url_row_width.get() < breakpoint;
 
-        let send_tooltip = if unresolved.is_empty() {
+        let send_tooltip = if other_sending {
+            "Another tab is sending; wait for it to finish".to_owned()
+        } else if unresolved.is_empty() {
             with_shortcut("Send", shortcut(&SendRequest, window))
         } else {
             format!("Unresolved variables: {}", unresolved.join(", "))
@@ -1110,6 +1193,27 @@ impl RequestPanel {
                 }
                 group
             });
+
+        if insecure {
+            let mut chip = h_flex()
+                .id("url-insecure")
+                .flex_none()
+                .items_center()
+                .gap(px(self.metrics.space_1p5))
+                .child(
+                    icons::sized(IconName::TriangleAlert, icons::SMALL).text_color(palette.danger),
+                );
+            if !narrow {
+                chip = chip.child(div().text_xs().text_color(palette.danger).child("TLS off"));
+            }
+            row = row.child(chip.tooltip(|window, cx| {
+                Tooltip::new(
+                    "Certificate verification is off for this request; \
+                     anyone on the network can read and change it",
+                )
+                .build(window, cx)
+            }));
+        }
 
         if pending {
             row = row.child(
@@ -1477,6 +1581,8 @@ mod tests {
             saved: None,
             node: None,
             draft: None,
+            insecure: false,
+            pending: false,
         }];
         assert_eq!(menu_tab(&tabs, 0), Some(7));
         assert_eq!(menu_tab(&tabs, 1), None);
@@ -1510,6 +1616,8 @@ mod enter_tests {
             saved: None,
             node: None,
             draft: None,
+            insecure: false,
+            pending: false,
         }
     }
 

@@ -86,10 +86,11 @@ glyphs on a US layout, and the OS reports the produced character. Binding
 `secondary-shift-/` would look for a stroke no layout emits.
 
 The palette searches the formatted shortcut as well as the label, so typing
-`ctrl+shift+v` finds **Paste cURL**. Every shortcut in this page is also a
-palette row (focusing and closing a pane, and resetting the layout, are
-palette-only). The window menu's **View** section lists every pane with a check
-for the one its dock is showing.
+`ctrl+shift+v` finds **Paste cURL**. Most shortcuts here also have a palette row,
+but three are keybinding- or menu-only: `secondary-\\` and `secondary-/` (the two
+dock toggles) and `secondary-s` (Save). Focusing and closing a pane, and resetting
+the layout, are palette-only. The window menu's **View** section lists every pane
+with a check for the one its dock is showing.
 
 `f6` walks the panes in the View menu's order — Collections, History,
 Environment, Request, Response — and wraps at both ends. A pane whose dock is
