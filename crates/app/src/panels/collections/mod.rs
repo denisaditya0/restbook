@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui_kit::component::button::*;
-use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu, PopupMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{h_flex, v_flex, WindowExt as _};
@@ -496,6 +496,21 @@ impl CollectionsPanel {
         let new_collection = cx.new(|cx| InputState::new(window, cx).placeholder("New collection"));
         let rename_input = cx.new(|cx| InputState::new(window, cx).placeholder("name"));
 
+        // Enter confirms the inline rename without reaching for the confirm
+        // button; Escape and the focus move live on the editing row itself.
+        cx.subscribe_in(
+            &rename_input,
+            window,
+            |this, _input, event: &InputEvent, window, cx| {
+                if let InputEvent::PressEnter { secondary, shift } = event {
+                    if !secondary && !shift {
+                        this.commit_rename(window, cx);
+                    }
+                }
+            },
+        )
+        .detach();
+
         // Observe the document so "Save request" reflects the live request, and
         // the search box so typing in it re-filters: both notify their own
         // state, not this pane.
@@ -904,15 +919,30 @@ impl CollectionsPanel {
     fn start_rename(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let current = node_name(&self.collections, id).unwrap_or_default();
         self.renaming = Some(id.to_owned());
-        self.rename_input
-            .update(cx, |state, cx| state.set_value(current, window, cx));
+        // Focus and select the whole name so typing replaces it, the way an
+        // inline editor is expected to open under the keyboard.
+        self.rename_input.update(cx, |state, cx| {
+            state.set_value(current, window, cx);
+            state.focus(window, cx);
+            state.select_all(window, cx);
+        });
         cx.notify();
+    }
+
+    /// Abandon an inline rename, leaving the row's name untouched, and hand the
+    /// keyboard back to the tree so it keeps navigating.
+    fn cancel_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.renaming.take().is_some() {
+            self.focus_handle.focus(window, cx);
+            cx.notify();
+        }
     }
 
     fn commit_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(id) = self.renaming.take() else {
             return;
         };
+        self.focus_handle.focus(window, cx);
         let name = self.rename_input.read(cx).value().trim().to_owned();
         if !name.is_empty() && rename_item(&mut self.collections, &id, &name) {
             self.revision += 1;
@@ -1581,6 +1611,16 @@ fn rename_area(
         .min_w_0()
         .gap(px(metrics.space_xs))
         .items_center()
+        // Escape bubbles up from the input to cancel the whole rename; Enter is
+        // caught through the input's own `PressEnter` event.
+        .on_key_down({
+            let panel = panel.clone();
+            move |event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" {
+                    panel.update(cx, |this, cx| this.cancel_rename(window, cx));
+                }
+            }
+        })
         .child(
             Input::new(rename_input)
                 .id(format!("{prefix}-rename-input"))
@@ -1971,8 +2011,8 @@ mod tests {
     use std::sync::Arc;
 
     use gpui_kit::{
-        AppContext as _, KeyDownEvent, Keystroke, Modifiers, PlatformInput, TestAppContext,
-        VisualTestContext,
+        AppContext as _, Focusable as _, KeyDownEvent, Keystroke, Modifiers, PlatformInput,
+        TestAppContext, VisualTestContext,
     };
     use restbook_core::{Collection, CollectionItem, Folder, Store};
     use restbook_store::{FolderStore, MemoryStore};
@@ -2094,9 +2134,9 @@ mod tests {
         cx.add_window_view(|window, cx| CollectionsPanel::new(store, document, window, cx))
     }
 
-    /// Dispatch `F2` through the real keymap, after a paint, the way the
-    /// platform delivers a function key: a `KeyDownEvent` with no text.
-    fn press_f2(cx: &mut VisualTestContext) {
+    /// Dispatch a key through the real keymap, after a paint, the way the
+    /// platform delivers it.
+    fn press(cx: &mut VisualTestContext, key: &str) {
         cx.update(|window, cx| {
             window.refresh();
             window.draw(cx).clear(cx);
@@ -2104,7 +2144,7 @@ mod tests {
                 PlatformInput::KeyDown(KeyDownEvent {
                     keystroke: Keystroke {
                         modifiers: Modifiers::default(),
-                        key: "f2".to_owned(),
+                        key: key.to_owned(),
                         key_char: None,
                     },
                     is_held: false,
@@ -2116,15 +2156,18 @@ mod tests {
         cx.run_until_parked();
     }
 
-    /// `F2` renames the selected row: the keyboard route the row menu also
-    /// offers. It fires because the pane declares the `Collections` key context
-    /// the binding is scoped to, so this also pins that the two agree.
-    #[gpui_kit::test]
-    fn f2_arms_the_rename_on_the_selected_row(cx: &mut TestAppContext) {
+    /// Dispatch `F2` through the real keymap, after a paint, the way the
+    /// platform delivers a function key: a `KeyDownEvent` with no text.
+    fn press_f2(cx: &mut VisualTestContext) {
+        press(cx, "f2");
+    }
+
+    /// A pane holding one collection, selected and armed for rename by `F2`.
+    fn arm_rename_on_a_collection(
+        cx: &mut TestAppContext,
+    ) -> (gpui_kit::Entity<CollectionsPanel>, &mut VisualTestContext) {
         cx.update(gpui_kit::init);
         crate::test_support::init_ui(cx);
-        // `main` installs the keymap; a test that skips it has no bindings to
-        // dispatch, so the action could never fire.
         cx.update(|cx| cx.bind_keys(crate::actions::bindings(cx)));
 
         let store = Arc::new(MemoryStore::new());
@@ -2137,8 +2180,6 @@ mod tests {
             .unwrap();
         let (panel, cx) = open(cx, store);
 
-        // Paint once so the pane's tracked focus handle is registered; a focus
-        // set before that lands on nothing.
         cx.update(|window, cx| {
             window.refresh();
             window.draw(cx).clear(cx);
@@ -2151,9 +2192,59 @@ mod tests {
             });
         });
         press_f2(cx);
+        (panel, cx)
+    }
 
+    /// `F2` renames the selected row: the keyboard route the row menu also
+    /// offers. It fires because the pane declares the `Collections` key context
+    /// the binding is scoped to, so this also pins that the two agree.
+    #[gpui_kit::test]
+    fn f2_arms_the_rename_on_the_selected_row(cx: &mut TestAppContext) {
+        let (panel, cx) = arm_rename_on_a_collection(cx);
         let renaming = cx.update(|_, cx| panel.read(cx).renaming.clone());
         assert_eq!(renaming.as_deref(), Some("col-a"));
+    }
+
+    /// The rename opens ready to type: the input takes focus and selects the
+    /// whole name, so a keystroke replaces it without a click first.
+    #[gpui_kit::test]
+    fn f2_focuses_the_rename_input(cx: &mut TestAppContext) {
+        let (panel, cx) = arm_rename_on_a_collection(cx);
+        // Render the inline editor, then ask the window where focus actually is.
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        let focused = cx.update(|window, cx| {
+            panel
+                .read(cx)
+                .rename_input
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+        });
+        assert!(
+            focused,
+            "the rename input takes focus so typing lands in it"
+        );
+    }
+
+    /// Escape abandons the inline rename and leaves the name as it was.
+    #[gpui_kit::test]
+    fn escape_cancels_the_rename(cx: &mut TestAppContext) {
+        let (panel, cx) = arm_rename_on_a_collection(cx);
+        press(cx, "escape");
+        let renaming = cx.update(|_, cx| panel.read(cx).renaming.clone());
+        assert_eq!(renaming, None, "escape ends the inline rename");
+    }
+
+    /// Enter confirms the rename without reaching for the confirm button.
+    #[gpui_kit::test]
+    fn enter_commits_the_rename(cx: &mut TestAppContext) {
+        let (panel, cx) = arm_rename_on_a_collection(cx);
+        press(cx, "enter");
+        let renaming = cx.update(|_, cx| panel.read(cx).renaming.clone());
+        assert_eq!(renaming, None, "enter ends the inline rename");
     }
 
     /// A move writes both collections; the store is what proves the request left
