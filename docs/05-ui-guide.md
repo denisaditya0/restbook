@@ -689,8 +689,9 @@ The hint is derived from the keymap, not typed:
 1. Bind the action in `actions::bindings()` as usual (see above).
 2. Call `actions::shortcut(&SendRequest, window)` where you render the hint; it
    returns `Option<String>` formatted per OS (`⌘⏎` / `Ctrl+Enter`).
-3. For a palette command, add its action to the `command_hint` match in
-   `panels/command_palette.rs`; the table itself holds only `(Command, title)`.
+3. For a palette command, give its row in `panels/command_palette.rs` the
+action (`Row::bound`); a command with no binding uses `Row::plain`. The
+formatted shortcut is still computed, never stored.
 
 A hint with no binding is `None`, so a navigation-only palette command renders
 blank instead of inventing a key.

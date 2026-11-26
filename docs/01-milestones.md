@@ -235,8 +235,8 @@ Already scheduled or shipped, so no longer a candidate here: `U34` is in `0.2.6`
   missing was showing them. `shortcut()` asks the window for the binding that
   would fire, so the label is derived rather than typed, and the one
   OS-formatted string comes from `Kbd::format` (no separators on macOS, `+`
-  elsewhere). The palette's command table therefore holds only
-  `(Command, title)` — its right column is computed.
+  elsewhere). The palette's command table therefore holds the action, not the
+  formatted key — its right column is computed.
 - **U32 is context-scoped on purpose.** `ctrl-n`/`ctrl-p` are bound in the
   palette's `"Command"` context, not globally, so they cannot steal a key from
   an input, and they are the literal `ctrl-` stroke rather than `secondary-`,

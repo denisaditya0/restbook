@@ -12,7 +12,11 @@ use gpui_kit::component::command::{Command as Palette, CommandItem, CommandState
 use gpui_kit::component::{h_flex, WindowExt as _};
 use gpui_kit::*;
 
-use crate::actions::shortcut;
+use crate::actions::{
+    shortcut, CloseTab, CopyCurl, ExportFile, FindInResponse, FocusUrl, ImportFile, NewTab,
+    NextTab, OpenSettings, PasteCurl, PreviousTab, ReopenClosedTab, ResetZoom, SendRequest,
+    ShowShortcuts, ZoomIn, ZoomOut,
+};
 use crate::workspace::PanelName;
 
 /// A command the palette can run. The workspace maps each variant to an
@@ -45,95 +49,99 @@ pub(crate) enum Command {
     ResetZoom,
 }
 
-/// A label for every command, in display order. The key hint is not stored
-/// here: it is read from the live keymap at render time by [`command_hint`], so
-/// it formats itself per platform and cannot drift from the binding.
-fn commands() -> Vec<(Command, &'static str)> {
+/// One command, and what the palette shows for it.
+///
+/// The order of [`ROWS`] is the palette's order and therefore its confirm
+/// index, so it stays a fixed list rather than a registry. The key hint does
+/// not live here: it is read from the live keymap at render time by [`hint`],
+/// so it formats itself per platform and cannot drift from the binding.
+pub(crate) struct Row {
+    pub(crate) command: Command,
+    pub(crate) label: &'static str,
+    /// The typed action behind the command, when it has a keystroke. `None` is
+    /// a command only the palette can reach.
+    pub(crate) action: Option<&'static dyn Action>,
+}
+
+impl Row {
+    const fn bound(command: Command, label: &'static str, action: &'static dyn Action) -> Self {
+        Self {
+            command,
+            label,
+            action: Some(action),
+        }
+    }
+
+    const fn plain(command: Command, label: &'static str) -> Self {
+        Self {
+            command,
+            label,
+            action: None,
+        }
+    }
+}
+
+/// Every command, one row each. The palette lists them all in this order; the
+/// shortcuts sheet lists the bound ones.
+fn rows() -> Vec<Row> {
     vec![
-        (Command::Send, "Send request"),
-        (Command::NewTab, "New tab"),
-        (Command::CloseTab, "Close tab"),
-        (Command::NextTab, "Next tab"),
-        (Command::PreviousTab, "Previous tab"),
-        (Command::ReopenClosedTab, "Reopen closed tab"),
-        (Command::FocusUrl, "Focus URL"),
-        (Command::FindInResponse, "Find in response"),
-        (Command::PasteCurl, "Paste cURL"),
-        (Command::ImportFile, "Import…"),
-        (Command::ExportFile, "Export…"),
-        (Command::CopyCurl, "Copy as cURL"),
-        (Command::Snapshot, "Snapshot…"),
-        // One focus and one close per pane, so the fixed table stays flat and
-        // the confirm index remains a plain position in this list.
-        (Command::FocusPanel(PanelName::History), "Focus history"),
-        (
+        Row::bound(Command::Send, "Send request", &SendRequest),
+        Row::bound(Command::NewTab, "New tab", &NewTab),
+        Row::bound(Command::CloseTab, "Close tab", &CloseTab),
+        Row::bound(Command::NextTab, "Next tab", &NextTab),
+        Row::bound(Command::PreviousTab, "Previous tab", &PreviousTab),
+        Row::bound(
+            Command::ReopenClosedTab,
+            "Reopen closed tab",
+            &ReopenClosedTab,
+        ),
+        Row::bound(Command::FocusUrl, "Focus URL", &FocusUrl),
+        Row::bound(Command::FindInResponse, "Find in response", &FindInResponse),
+        Row::bound(Command::PasteCurl, "Paste cURL", &PasteCurl),
+        Row::bound(Command::ImportFile, "Import…", &ImportFile),
+        Row::bound(Command::ExportFile, "Export…", &ExportFile),
+        Row::bound(Command::CopyCurl, "Copy as cURL", &CopyCurl),
+        Row::plain(Command::Snapshot, "Snapshot…"),
+        // One focus and one close per pane, so the fixed table stays flat and the
+        // confirm index remains a plain position in this list.
+        Row::plain(Command::FocusPanel(PanelName::History), "Focus history"),
+        Row::plain(
             Command::FocusPanel(PanelName::Collections),
             "Focus collections",
         ),
-        (
+        Row::plain(
             Command::FocusPanel(PanelName::Environment),
             "Focus environment",
         ),
-        (Command::FocusPanel(PanelName::Request), "Focus request"),
-        (Command::FocusPanel(PanelName::Response), "Focus response"),
-        (Command::ClosePanel(PanelName::History), "Close history"),
-        (
+        Row::plain(Command::FocusPanel(PanelName::Request), "Focus request"),
+        Row::plain(Command::FocusPanel(PanelName::Response), "Focus response"),
+        Row::plain(Command::ClosePanel(PanelName::History), "Close history"),
+        Row::plain(
             Command::ClosePanel(PanelName::Collections),
             "Close collections",
         ),
-        (
+        Row::plain(
             Command::ClosePanel(PanelName::Environment),
             "Close environment",
         ),
-        (Command::ClosePanel(PanelName::Request), "Close request"),
-        (Command::ClosePanel(PanelName::Response), "Close response"),
-        (Command::ToggleEnvironment, "Toggle environment"),
-        (Command::ToggleCollections, "Toggle collections"),
-        (Command::ToggleSideBySide, "Toggle side-by-side"),
-        (Command::ResetLayout, "Reset layout"),
-        (Command::OpenSettings, "Settings…"),
-        (Command::ShowShortcuts, "Keyboard shortcuts"),
-        (Command::ZoomIn, "Zoom in"),
-        (Command::ZoomOut, "Zoom out"),
-        (Command::ResetZoom, "Reset zoom"),
+        Row::plain(Command::ClosePanel(PanelName::Request), "Close request"),
+        Row::plain(Command::ClosePanel(PanelName::Response), "Close response"),
+        Row::plain(Command::ToggleEnvironment, "Toggle environment"),
+        Row::plain(Command::ToggleCollections, "Toggle collections"),
+        Row::plain(Command::ToggleSideBySide, "Toggle side-by-side"),
+        Row::plain(Command::ResetLayout, "Reset layout"),
+        Row::bound(Command::OpenSettings, "Settings…", &OpenSettings),
+        Row::bound(Command::ShowShortcuts, "Keyboard shortcuts", &ShowShortcuts),
+        Row::bound(Command::ZoomIn, "Zoom in", &ZoomIn),
+        Row::bound(Command::ZoomOut, "Zoom out", &ZoomOut),
+        Row::bound(Command::ResetZoom, "Reset zoom", &ResetZoom),
     ]
 }
 
-/// The shortcut a command shows beside its label, or `None` for the commands
-/// that only live in the palette and have no keybinding of their own.
-fn command_hint(command: Command, window: &Window) -> Option<String> {
-    use crate::actions::{
-        CloseTab, CopyCurl, ExportFile, FindInResponse, FocusUrl, ImportFile, NewTab, NextTab,
-        OpenSettings, PasteCurl, PreviousTab, ReopenClosedTab, ResetZoom, SendRequest,
-        ShowShortcuts, ZoomIn, ZoomOut,
-    };
-
-    match command {
-        Command::Send => shortcut(&SendRequest, window),
-        Command::NewTab => shortcut(&NewTab, window),
-        Command::CloseTab => shortcut(&CloseTab, window),
-        Command::NextTab => shortcut(&NextTab, window),
-        Command::PreviousTab => shortcut(&PreviousTab, window),
-        Command::ReopenClosedTab => shortcut(&ReopenClosedTab, window),
-        Command::FocusUrl => shortcut(&FocusUrl, window),
-        Command::FindInResponse => shortcut(&FindInResponse, window),
-        Command::PasteCurl => shortcut(&PasteCurl, window),
-        Command::ImportFile => shortcut(&ImportFile, window),
-        Command::ExportFile => shortcut(&ExportFile, window),
-        Command::CopyCurl => shortcut(&CopyCurl, window),
-        Command::OpenSettings => shortcut(&OpenSettings, window),
-        Command::ShowShortcuts => shortcut(&ShowShortcuts, window),
-        Command::ZoomIn => shortcut(&ZoomIn, window),
-        Command::ZoomOut => shortcut(&ZoomOut, window),
-        Command::ResetZoom => shortcut(&ResetZoom, window),
-        Command::FocusPanel(_)
-        | Command::ClosePanel(_)
-        | Command::ToggleEnvironment
-        | Command::ToggleCollections
-        | Command::ToggleSideBySide
-        | Command::ResetLayout
-        | Command::Snapshot => None,
-    }
+/// The shortcut a row shows beside its label, or `None` for a command that has
+/// no keybinding of its own.
+fn hint(row: &Row, window: &Window) -> Option<String> {
+    row.action.and_then(|action| shortcut(action, window))
 }
 
 /// Extra search terms for a row, beyond the label the kit already searches.
@@ -148,11 +156,9 @@ fn search_terms(hint: Option<String>) -> Vec<SharedString> {
 /// command that has a binding. Palette-only commands are left out — the sheet is
 /// about keys, and an empty hint would only take a line.
 pub(crate) fn shortcut_rows(window: &Window) -> Vec<(String, String)> {
-    commands()
-        .into_iter()
-        .filter_map(|(command, label)| {
-            command_hint(command, window).map(|hint| (label.to_owned(), hint))
-        })
+    rows()
+        .iter()
+        .filter_map(|row| hint(row, window).map(|hint| (row.label.to_owned(), hint)))
         .collect()
 }
 
@@ -162,7 +168,7 @@ where
     F: Fn(Command, &mut Window, &mut App) + 'static,
 {
     let state = cx.new(|cx| CommandState::new(window, cx));
-    let commands = commands();
+    let table = rows();
     let on_run = Rc::new(on_run);
     // `open_dialog` focuses the dialog shell, so the first build claims focus
     // for the query field. Later builds must not steal it back.
@@ -173,13 +179,14 @@ where
         // A shortcut hint is quieter than the command it sits beside, so it
         // takes the palette's subtle role rather than the muted value color.
         let hint_color = crate::theme::Palette::new(cx).subtle;
-        let items = commands
+        let items = table
             .iter()
-            .map(|&(command, label)| {
+            .map(|row| {
                 // Resolve the hint once per build: the row shows it, and it
                 // also rides along as a search term so a typed shortcut finds
                 // its command.
-                let hint = command_hint(command, window);
+                let hint = hint(row, window);
+                let label = row.label;
                 let item = CommandItem::new()
                     .label(label)
                     .keywords(search_terms(hint.clone()));
@@ -194,9 +201,9 @@ where
                 })
             })
             .collect::<Vec<_>>();
-        let by_index = commands
+        let by_index = table
             .iter()
-            .map(|&(command, _)| command)
+            .map(|row| row.command)
             .collect::<Vec<Command>>();
 
         if initial_focus.replace(false) {
@@ -242,8 +249,8 @@ mod tests {
     #[test]
     fn every_command_is_in_the_flows_doc() {
         let doc = flows_doc();
-        for command in super::commands() {
-            let label = command.1.to_lowercase();
+        for row in super::rows() {
+            let label = row.label.to_lowercase();
             assert!(
                 doc.contains(&label),
                 "docs/07-flows.md is missing the command {label:?}",
@@ -251,61 +258,25 @@ mod tests {
         }
     }
 
-    /// Every variant has exactly one row and one label. This is the drift guard
-    /// for the palette: a new command that forgets its row, or a copy-pasted
-    /// label that hides two rows from search, fails here. The variant list is
-    /// hand-written because `Command` has no `ALL`; `0.2.4` replaces this with
-    /// the one command table.
+    /// One row per command and one label per row. The table is the command list
+    /// now, so a duplicated variant hides a command from search and a
+    /// copy-pasted label hides a second one; both fail here.
     #[test]
     fn every_command_has_exactly_one_palette_row() {
-        use Command::*;
-
-        let mut all = vec![
-            Send,
-            NewTab,
-            CloseTab,
-            NextTab,
-            PreviousTab,
-            ReopenClosedTab,
-            FocusUrl,
-            FindInResponse,
-            PasteCurl,
-            ImportFile,
-            ExportFile,
-            CopyCurl,
-            Snapshot,
-        ];
-        for name in crate::workspace::PanelName::all() {
-            all.push(FocusPanel(name));
-            all.push(ClosePanel(name));
-        }
-        all.extend([
-            ToggleEnvironment,
-            ToggleCollections,
-            ToggleSideBySide,
-            ResetLayout,
-            OpenSettings,
-            ShowShortcuts,
-            ZoomIn,
-            ZoomOut,
-            ResetZoom,
-        ]);
-
-        let rows = super::commands();
-        assert_eq!(
-            rows.len(),
-            all.len(),
-            "the palette and the variant list disagree"
-        );
-        for command in all {
+        let rows = super::rows();
+        for row in rows.iter() {
+            let count = rows
+                .iter()
+                .filter(|each| each.command == row.command)
+                .count();
             assert_eq!(
-                rows.iter().filter(|(each, _)| *each == command).count(),
-                1,
-                "expected exactly one palette row for {command:?}",
+                count, 1,
+                "expected exactly one palette row for {:?}",
+                row.command
             );
         }
 
-        let mut labels: Vec<&str> = rows.iter().map(|(_, label)| *label).collect();
+        let mut labels: Vec<&str> = rows.iter().map(|row| row.label).collect();
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), rows.len(), "two commands share a label");
@@ -331,8 +302,8 @@ mod tests {
     /// uses, so every pane has both a focus and a close entry.
     #[test]
     fn every_panel_has_a_focus_and_a_close_command() {
-        let commands = super::commands();
-        let has = |wanted: Command| commands.iter().any(|&(command, _)| command == wanted);
+        let rows = super::rows();
+        let has = |wanted: Command| rows.iter().any(|row| row.command == wanted);
         for name in crate::workspace::PanelName::all() {
             assert!(
                 has(Command::FocusPanel(name)),

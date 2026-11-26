@@ -394,7 +394,7 @@ Each stage above is a type in `crates/core`; the stage-to-directory map is in
 ## Keeping this honest
 
 The command table above is the part most likely to drift. `Command` in
-`panels/command_palette.rs` is guarded by a test that fails if a variant is added
+`panels/command_palette.rs` is guarded by a test that fails if a row is added
 without appearing in this document, mirroring how `actions::bindings()` is
 guarded by `every_binding_parses` (`actions.rs`). See the `mod tests` block in
 `command_palette.rs`.
