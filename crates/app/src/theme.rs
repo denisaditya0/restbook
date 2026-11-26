@@ -171,6 +171,59 @@ pub(crate) fn appearance(cx: &App) -> Appearance {
     ThemeRegistry::get(cx).appearance
 }
 
+/// Lay the active theme file's roles over the live component theme.
+///
+/// `apply_appearance` first switches the component theme to the built-in
+/// light/dark set, so this must run after it: a mode switch reloads the built-in
+/// colors. Every `gpui-kit` component then draws from the same surfaces, text,
+/// borders, and accents the panes get from [`Palette`]. A role the file does not
+/// set keeps the component theme's value.
+pub(crate) fn sync_component_theme(cx: &mut App) {
+    let registry = ThemeRegistry::get(cx);
+    let Some(colors) = registry.file.colors_for(cx.theme().is_dark()) else {
+        return;
+    };
+
+    gpui_kit::component::Theme::update(cx, |theme| {
+        let c = &mut theme.colors;
+        set_role(&colors.background, &mut c.background);
+        set_role(&colors.tab_bar, &mut c.tab_bar);
+        set_role(&colors.tab_active, &mut c.tab_active);
+        set_role(&colors.sidebar, &mut c.sidebar);
+        set_role(&colors.sidebar_accent, &mut c.sidebar_accent);
+        set_role(&colors.title_bar, &mut c.title_bar);
+        set_role(&colors.status_bar, &mut c.status_bar);
+        // The chrome hairline is one color; give it to both bar borders so the
+        // kit's TitleBar and StatusBar match the app's own chrome.
+        set_role(&colors.chrome_border, &mut c.title_bar_border);
+        set_role(&colors.chrome_border, &mut c.status_bar_border);
+        set_role(&colors.list_hover, &mut c.list_hover);
+        set_role(&colors.list_active, &mut c.list_active);
+        set_role(&colors.segmented, &mut c.tab_bar_segmented);
+        set_role(&colors.foreground, &mut c.foreground);
+        set_role(&colors.muted, &mut c.muted_foreground);
+        set_role(&colors.subtle, &mut c.secondary_foreground);
+        set_role(&colors.border, &mut c.border);
+        set_role(&colors.input_border, &mut c.input);
+        set_role(&colors.hover, &mut c.secondary_hover);
+        set_role(&colors.selected, &mut c.secondary_active);
+        set_role(&colors.success, &mut c.success);
+        set_role(&colors.warning, &mut c.warning);
+        set_role(&colors.info, &mut c.info);
+        set_role(&colors.danger, &mut c.danger);
+    });
+}
+
+/// Apply one optional theme-file role to a component-theme color slot.
+fn set_role(role: &Option<String>, target: &mut Hsla) {
+    if let Some(color) = role
+        .as_deref()
+        .and_then(|value| try_parse_color(value).ok())
+    {
+        *target = color;
+    }
+}
+
 /// The colors a pane draws from. Every field is a role, not a token name.
 ///
 /// A file may set any subset; the rest come from the live component theme. See
@@ -662,6 +715,27 @@ mod tests {
         assert!(!file.colors.is_empty(), "the built-in theme sets colors");
         assert_eq!(file.colors.background.as_deref(), Some("#1b1d21"));
         assert_eq!(file.metrics.unwrap().font_body, Some(13.0));
+    }
+
+    #[gpui_kit::test]
+    fn the_theme_file_colors_reach_the_component_theme(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::component::ActiveTheme as _;
+
+        cx.update(gpui_kit::init);
+        cx.update(|cx| {
+            super::ThemeRegistry::install(cx, super::DEFAULT_THEME, 1.0, super::Appearance::Dark);
+            // `apply_appearance` does these two in this order, without a window.
+            gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx);
+            super::sync_component_theme(cx);
+
+            let theme = cx.theme();
+            let needle = |hex: &str| super::try_parse_color(hex).unwrap();
+            assert_eq!(theme.background, needle("#1b1d21"));
+            assert_eq!(theme.foreground, needle("#e6e8ec"));
+            // The one chrome hairline reaches both bar borders a component draws.
+            assert_eq!(theme.title_bar_border, needle("#2a2d33"));
+            assert_eq!(theme.status_bar_border, needle("#2a2d33"));
+        });
     }
 
     #[test]

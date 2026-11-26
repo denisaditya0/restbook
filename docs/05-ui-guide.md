@@ -716,11 +716,55 @@ lone sentence. Use `panels::empty`:
 The same panes' error states stay single lines: an error is a fact, not a task,
 and a filtered list's “No matches.” is a result, not a first run.
 
+### Render a large list or a large body
+
+Three surfaces meet more data than fits on screen, and they share one rule with
+two different bounds.
+
+- **A list virtualizes; it is bounded by rows.** Collections and History build a
+  `uniform_list` over a flattened row vector, so only the visible slice is laid
+  out. Collections flattens into `FlatRow`s cached by `(query, revision, sort)`
+  in `flat_cache` (`panels/collections/mod.rs`), so an imported tree of
+  thousands of nodes is walked once per mutation, not once per repaint; History
+  caps at `history_limit` (up to 1000). The kit's `TreeState` (`gpui-base`)
+  virtualizes the same way — `uniform_list` over a flattened `entries` vec — so
+  migrating Collections to `Tree` keeps this cost model; the difference is that
+  `set_items` clears selection, so reselect by item id, not a stored index.
+- **A body is capped; it is bounded by bytes and lines.** The response viewer
+  clips to `util::MAX_BODY_BYTES` (256 KiB) before drawing — the full record is
+  kept, only the view is bounded — and `MAX_NUMBERED_LINES` (3000) picks the
+  shape: pretty JSON under the limit is a `uniform_list("response-body-lines")`
+  of numbered rows, while raw or over the limit is one `SelectableLine` block.
+  Decode, pretty-print, line split, highlight slicing and the `widest_line`
+  measure are computed once into `DisplayCache`, keyed by `(ptr, len, pretty)`,
+  so a scroll repaint borrows them instead of redoing the work.
+
+Same rule both places: do the proportional-to-size work once per change, cache
+it, build only what is on screen. The difference is what bounds it — rows
+virtualize, so a list needs no cap; per-item work that grows with the payload
+(splitting, measuring, highlighting) does, so a body is clipped. When you add a
+surface:
+
+- Give `uniform_list` a fixed row height and a `'static` closure; flatten into a
+  cached `Rc<Vec<_>>` keyed by what invalidates it, never inside the render.
+- Cap input whose per-item cost scales with its size, and say on screen what was
+  clipped (`Showing the first N lines.`).
+- A menu whose rows come from user data still needs `.scrollable(true)`; its
+  default caps at half the window height (see [Change the look](#change-the-look)).
+
 ### Change the look
 
 - Colors come from `Palette` (`src/theme.rs`), built once per pane from the
-  active `gpui-component` theme. Add meaning there (`method()`, `status()`), not
-  inline `Hsla` values.
+  active theme file over the live `gpui-component` theme. Add meaning there
+  (`method()`, `status()`), not inline `Hsla` values.
+- The theme file drives the components too, not just the panes.
+  `apply_appearance` switches the kit theme, then `theme::sync_component_theme`
+  lays the file's roles over the live `Theme` (surfaces, text, borders,
+  `list_*`, the chrome hairline, and the status accents), so a `Button`,
+  `Input`, `Dialog`, or `TabBar` draws the same charcoal and hairlines the panes
+  do. A role the file does not name — `primary`, `accent`, `popover`, `list` —
+  keeps the kit theme's value; add the role to `ColorRoles` and the mapping in
+  `sync_component_theme` together.
 - Shared formatting (bytes, duration, cookies, JSON pretty-printing) belongs in
   `src/util.rs` with a unit test; do not test view code through the widget tree.
 - Layout numbers are view-local, and a pane that cannot shrink **scrolls**. Give
