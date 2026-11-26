@@ -25,9 +25,9 @@ by default, GUI-first but text-friendly, and limited to HTTP.
   fallback without saying so.
 - **Collections and environments** — nested folders, `{{variables}}` with scope
   precedence, and secrets redacted from anything shareable.
-- **A workspace you can commit** — point restbook at a folder with a
-  `restbook.json` marker and collections and environments become Git-friendly
-  files; history stays local and encrypted.
+- **A workspace you can share** — point restbook at a folder with a
+  `restbook.json` marker and collections and environments become plain files a
+  team can share; history stays local and encrypted.
 - **Import and export** — import Postman v2.1, OpenAPI 3, HAR, and cURL; export
   back to Postman and OpenAPI JSON.
 - **Text in, text out** — paste a cURL command to build a request, copy one back
