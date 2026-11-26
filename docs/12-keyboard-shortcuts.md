@@ -1,10 +1,14 @@
 # restbook — keyboard shortcuts
 
-Every shortcut is a GPUI `KeyBinding` from `crates/app/src/actions.rs`. The table
-is installed once in `main.rs` (`cx.bind_keys(actions::bindings())`), so the
-binding and the tooltip that shows it always come from the same place. Tooltips
-read the live keymap through `actions::shortcut`, which is why they print
-`⌘⏎` on macOS and `Ctrl+Enter` on Windows/Linux.
+Every shortcut is a GPUI `KeyBinding` produced by `actions::bindings()`. For a
+palette command the keystroke lives on the command's row in
+`panels/command_palette.rs`; for a pane-only action (`F2` rename, `secondary-s`
+save, the dock toggles) it is declared in `crates/app/src/actions.rs` beside the
+action. Either way the table is installed once in `main.rs`
+(`cx.bind_keys(actions::bindings())`), so the binding and the tooltip that shows
+it always come from the same place. Tooltips read the live keymap through
+`actions::shortcut`, which is why they print `⌘⏎` on macOS and `Ctrl+Enter` on
+Windows/Linux.
 
 `secondary` means **Cmd** on macOS and **Ctrl** on Windows and Linux.
 
@@ -91,16 +95,28 @@ from the canvas, but a question mark typed into a URL or body stays text. Use
 the palette row or the window menu's **Keyboard shortcuts** entry from inside an
 editor.
 
+## Collections
+
+| Shortcut | Action | Where it works |
+| --- | --- | --- |
+| `f2` | Rename the selected collection, folder, or request in place | While the Collections pane has focus and a row is selected |
+
+`f2` is the keyboard twin of the row menu's **Rename**. It is scoped to the
+Collections pane's key context, so a press while typing in the request body does
+nothing. Clicking a row both selects it and gives the pane focus, which is what
+makes `f2` reach the tree after a click.
+
 ## Completion
 
 | Shortcut | Action |
 | --- | --- |
 | `ctrl-space` | Open the raw body's `{{…}}` completion popover |
 | `up` / `down`, `ctrl-p` / `ctrl-n` | Move through a completion list |
-| `enter` | Accept the highlighted completion |
+| `enter` / `tab` | Accept the highlighted completion |
 
 The URL bar and key/value rows draw their own completion lists; they open as soon
-as `{{` is typed and do not need `ctrl-space`.
+as `{{` is typed and do not need `ctrl-space`. `tab` accepts there too: the list
+stops the key so the input does not also indent.
 
 ## When a shortcut does not fire
 

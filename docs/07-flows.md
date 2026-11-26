@@ -281,6 +281,7 @@ should not disappear when the user switches to Headers or Cookies.
 | `+` menu → Save request… / Import… / Export… | open the save dialog, the import picker, or the export picker | Left dock → Overlay |
 | Sort → Manual / Name A-Z / Name Z-A | re-sort the tree | Left dock |
 | Row tools: up / down / rename / move / delete | move within the siblings, rename (label only), pick a new home, or delete (opens the alert dialog) | Left dock → Overlay |
+| `f2` while the pane has focus | rename the selected row in place, the keyboard twin of the row menu's Rename | Left dock |
 
 ### Environment panel (in-pane)
 

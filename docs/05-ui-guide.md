@@ -1179,6 +1179,11 @@ default arrangement changes; the user gets the new default and a fresh file.
   `"Command"` context instead of globally: a global binding would fire while
   typing anywhere. `div().on_key_down` is bubble-only and cannot swallow a key;
   `capture_key_down` or a context-scoped binding can.
+- A pane-scoped key is two halves that must agree: `.key_context("Collections")`
+  on the pane's root (the `track_focus` element) and a binding whose predicate
+  names the same word. The context only applies when the pane holds focus, so a
+  pane key that never fires usually means the click that selects a row did not
+  also call `window.focus(&focus_handle, cx)`.
 - A binding's context argument is a **predicate**, not a key context string.
   The grammar spells a key/value pair `mode == editor`; the element declares it
   as `Input mode=editor`, and copying that string into `KeyBinding::new` panics
