@@ -73,6 +73,7 @@ so a space, `&`, `$`, or an embedded quote survives a paste into a terminal.
 | --- | --- |
 | `secondary-\` | Show or hide the sidebar dock |
 | `secondary-/` | Show or hide the History + Environment dock |
+| `f6` / `shift-f6` | Focus the next / previous pane, wrapping and revealing a closed pane's dock |
 | `secondary-shift-p` | Command palette |
 | `?` | Show the keyboard shortcuts sheet when focus is not in a text field |
 | `secondary-,` | Settings |
@@ -89,6 +90,11 @@ The palette searches the formatted shortcut as well as the label, so typing
 palette row (focusing and closing a pane, and resetting the layout, are
 palette-only). The window menu's **View** section lists every pane with a check
 for the one its dock is showing.
+
+`f6` walks the panes in the View menu's order — Collections, History,
+Environment, Request, Response — and wraps at both ends. A pane whose dock is
+closed is opened before it takes focus, so the cycle never lands on something
+hidden.
 
 `?` is a printable key, so its binding is scoped to `!Input`: it opens the sheet
 from the canvas, but a question mark typed into a URL or body stays text. Use
