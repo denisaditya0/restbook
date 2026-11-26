@@ -321,7 +321,7 @@ impl PanelName {
 
     /// The name a menu shows. Kept apart from [`Self::as_str`], which is the
     /// persisted spelling and must not change with a label edit.
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             PanelName::History => "History",
             PanelName::Request => "Request",
@@ -345,7 +345,7 @@ impl PanelName {
         ]
     }
 
-    fn parse(name: &str) -> Option<Self> {
+    pub(crate) fn parse(name: &str) -> Option<Self> {
         Self::all().into_iter().find(|panel| panel.as_str() == name)
     }
 }

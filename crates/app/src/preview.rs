@@ -28,6 +28,7 @@ use crate::theme::{self, Metrics, Palette};
 use crate::variables::Variables;
 use crate::workspace::settings::{Settings, SETTINGS_FILE};
 use crate::workspace::storage;
+use crate::workspace::PanelName;
 
 /// The URL the fixture request names. It is never contacted: the response in
 /// the fixture document is the one on screen.
@@ -52,57 +53,9 @@ pub(crate) enum Invocation {
 #[derive(Clone, Copy)]
 pub(crate) enum Preview {
     /// One pane filling the window.
-    One(Pane),
+    One(PanelName),
     /// Every pane in a grid, so a shared change is visible everywhere at once.
     All,
-}
-
-/// A pane the preview can build. The names are the `--preview` arguments.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Pane {
-    History,
-    Request,
-    Response,
-    Environment,
-    Collections,
-}
-
-impl Pane {
-    /// Every pane, in the order `--preview all` lays them out. The list is also
-    /// what an unknown name is answered with.
-    const ALL: [Pane; 5] = [
-        Pane::History,
-        Pane::Request,
-        Pane::Response,
-        Pane::Environment,
-        Pane::Collections,
-    ];
-
-    /// The command-line name, lowercase and stable.
-    fn name(self) -> &'static str {
-        match self {
-            Pane::History => "history",
-            Pane::Request => "request",
-            Pane::Response => "response",
-            Pane::Environment => "environment",
-            Pane::Collections => "collections",
-        }
-    }
-
-    /// The label drawn above a pane in `--preview all`.
-    fn label(self) -> &'static str {
-        match self {
-            Pane::History => "History",
-            Pane::Request => "Request",
-            Pane::Response => "Response",
-            Pane::Environment => "Environment",
-            Pane::Collections => "Collections",
-        }
-    }
-
-    fn parse(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|pane| pane.name() == name)
-    }
 }
 
 /// Read `--preview` out of the process arguments.
@@ -129,7 +82,7 @@ pub(crate) fn invocation<I: IntoIterator<Item = String>>(args: I) -> Invocation 
         if value == "all" {
             return Invocation::Show(Preview::All);
         }
-        return match Pane::parse(&value) {
+        return match PanelName::parse(&value) {
             Some(pane) => Invocation::Show(Preview::One(pane)),
             None => Invocation::Unknown(value),
         };
@@ -144,7 +97,7 @@ pub(crate) fn title(invocation: &Invocation) -> Option<String> {
         Invocation::Show(Preview::One(pane)) => Some(format!(
             "{} — preview: {}",
             crate::branding::NAME,
-            pane.name()
+            pane.as_str()
         )),
         Invocation::Show(Preview::All) => {
             Some(format!("{} — preview: all panes", crate::branding::NAME))
@@ -160,7 +113,7 @@ pub(crate) fn title(invocation: &Invocation) -> Option<String> {
 pub(crate) fn summary(invocation: &Invocation) -> String {
     match invocation {
         Invocation::Launch => "launch: workspace".to_owned(),
-        Invocation::Show(Preview::One(pane)) => format!("preview: {}", pane.name()),
+        Invocation::Show(Preview::One(pane)) => format!("preview: {}", pane.as_str()),
         Invocation::Show(Preview::All) => "preview: all panes".to_owned(),
         Invocation::Unknown(name) if name.is_empty() => {
             "preview: --preview has no pane name".to_owned()
@@ -181,7 +134,7 @@ pub(crate) struct PreviewRoot {
 }
 
 struct PreviewSlot {
-    pane: Pane,
+    pane: PanelName,
     /// `Err` is a pane that could not be built; see the module comment.
     view: Result<PaneView, String>,
 }
@@ -264,9 +217,9 @@ impl PreviewRoot {
             Invocation::Unknown(name) => (None, Some(unknown_message(&name))),
         };
 
-        let panes: Vec<Pane> = match layout {
+        let panes: Vec<PanelName> = match layout {
             Some(Preview::One(pane)) => vec![pane],
-            Some(Preview::All) => Pane::ALL.to_vec(),
+            Some(Preview::All) => PanelName::all().to_vec(),
             None => Vec::new(),
         };
         let slots = panes
@@ -330,7 +283,7 @@ impl PreviewRoot {
 
     /// One grid cell: the pane's label and the pane, or whatever stood in for
     /// the pane.
-    fn render_cell(&self, pane: Pane, cx: &App) -> AnyElement {
+    fn render_cell(&self, pane: PanelName, cx: &App) -> AnyElement {
         let palette = Palette::new(cx);
         let metrics = Metrics::current(cx);
         let body = match self.slots.iter().find(|slot| slot.pane == pane) {
@@ -381,16 +334,16 @@ impl PreviewRoot {
                     h_flex()
                         .flex_1()
                         .min_h_0()
-                        .child(self.render_cell(Pane::History, cx))
-                        .child(self.render_cell(Pane::Collections, cx))
-                        .child(self.render_cell(Pane::Environment, cx)),
+                        .child(self.render_cell(PanelName::History, cx))
+                        .child(self.render_cell(PanelName::Collections, cx))
+                        .child(self.render_cell(PanelName::Environment, cx)),
                 )
                 .child(
                     h_flex()
                         .flex_1()
                         .min_h_0()
-                        .child(self.render_cell(Pane::Request, cx))
-                        .child(self.render_cell(Pane::Response, cx)),
+                        .child(self.render_cell(PanelName::Request, cx))
+                        .child(self.render_cell(PanelName::Response, cx)),
                 )
                 .into_any_element(),
             None => message("Nothing to preview.", cx),
@@ -437,9 +390,9 @@ fn message(text: &str, cx: &App) -> AnyElement {
 }
 
 fn unknown_message(name: &str) -> String {
-    let names = Pane::ALL
+    let names = PanelName::all()
         .iter()
-        .map(|pane| pane.name())
+        .map(|pane| pane.as_str())
         .collect::<Vec<_>>()
         .join(", ");
     if name.is_empty() {
@@ -456,13 +409,13 @@ fn unknown_message(name: &str) -> String {
 /// whose setup can fail (a fixture file that must parse, say) returns the
 /// reason here and the shell shows it in that pane's place.
 fn build_pane(
-    pane: Pane,
+    pane: PanelName,
     fixture: &Fixture,
     window: &mut Window,
     cx: &mut Context<PreviewRoot>,
 ) -> Result<PaneView, String> {
     Ok(match pane {
-        Pane::History => PaneView::History(cx.new(|cx| {
+        PanelName::History => PaneView::History(cx.new(|cx| {
             HistoryPanel::new(
                 fixture.store.clone(),
                 fixture.document.clone(),
@@ -471,7 +424,7 @@ fn build_pane(
                 cx,
             )
         })),
-        Pane::Request => PaneView::Request(cx.new(|cx| {
+        PanelName::Request => PaneView::Request(cx.new(|cx| {
             RequestPanel::new(
                 fixture.document.clone(),
                 fixture.variables.clone(),
@@ -479,7 +432,7 @@ fn build_pane(
                 cx,
             )
         })),
-        Pane::Response => PaneView::Response(cx.new(|cx| {
+        PanelName::Response => PaneView::Response(cx.new(|cx| {
             // The pane reads a session jar for its Cookies tab; a seeded fake
             // keeps the tab populated without a network or a real store.
             let transport = FakeTransport::always(Reply::Status(200));
@@ -496,7 +449,7 @@ fn build_pane(
                 cx,
             )
         })),
-        Pane::Environment => PaneView::Environment(cx.new(|cx| {
+        PanelName::Environment => PaneView::Environment(cx.new(|cx| {
             EnvironmentPanel::new(
                 fixture.variables.clone(),
                 fixture.document.clone(),
@@ -504,7 +457,7 @@ fn build_pane(
                 cx,
             )
         })),
-        Pane::Collections => PaneView::Collections(cx.new(|cx| {
+        PanelName::Collections => PaneView::Collections(cx.new(|cx| {
             CollectionsPanel::new(fixture.store.clone(), fixture.document.clone(), window, cx)
         })),
     })
@@ -768,7 +721,8 @@ pub(crate) mod tree {
 mod tests {
     // Named imports only: the crate glob-imports `gpui_kit::*`, whose `test`
     // macro would shadow the built-in `#[test]`.
-    use super::{invocation, Invocation, Pane, Preview};
+    use super::{invocation, Invocation, Preview};
+    use crate::workspace::PanelName;
 
     fn args(list: &[&str]) -> Invocation {
         invocation(
@@ -788,12 +742,12 @@ mod tests {
     fn a_pane_name_selects_that_pane() {
         assert!(matches!(
             args(&["--preview", "response"]),
-            Invocation::Show(Preview::One(Pane::Response))
+            Invocation::Show(Preview::One(PanelName::Response))
         ));
         // The `=` form costs nothing and is what a shell completion offers.
         assert!(matches!(
             args(&["--preview=history"]),
-            Invocation::Show(Preview::One(Pane::History))
+            Invocation::Show(Preview::One(PanelName::History))
         ));
     }
 
