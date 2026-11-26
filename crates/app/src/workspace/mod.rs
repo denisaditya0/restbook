@@ -964,7 +964,35 @@ impl Workspace {
             Command::ZoomIn => self.zoom_by(theme::ZOOM_STEP, window, cx),
             Command::ZoomOut => self.zoom_by(1.0 / theme::ZOOM_STEP, window, cx),
             Command::ResetZoom => self.set_zoom(1.0, window, cx),
+            Command::ToggleCommandPalette => self.open_palette(window, cx),
+            Command::CopyLogPath => self.copy_log_path(cx),
+            Command::CopyRecentLog => self.copy_recent_log(cx),
         }
+    }
+
+    /// Copy the log file's path. The window menu is the only route: the path is
+    /// a diagnostic, not something the palette should offer.
+    fn copy_log_path(&mut self, cx: &mut Context<Self>) {
+        let message = match logging::file_path() {
+            Some(path) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(path.display().to_string()));
+                format!("Log path copied: {}", path.display())
+            }
+            None => "No log file is being written".to_owned(),
+        };
+        self.flash(chrome::FlashKind::Success, message, cx);
+    }
+
+    fn copy_recent_log(&mut self, cx: &mut Context<Self>) {
+        let message = match logging::tail(200) {
+            Some(text) if !text.is_empty() => {
+                let lines = text.lines().count();
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                format!("Copied the last {lines} log lines")
+            }
+            _ => "No log file is being written".to_owned(),
+        };
+        self.flash(chrome::FlashKind::Success, message, cx);
     }
     fn refresh_theme(&mut self, window: &mut Window, cx: &mut App) {
         apply_appearance(window, cx);
@@ -1244,153 +1272,60 @@ impl Render for Workspace {
             .gap(px(metrics.space_2xs))
             .child(environment_chip)
             .child({
-                // The window menu. Settings lives here as well as in the command
-                // palette: a mouse user has no other route. Every entry is a command
-                // with no other pointer route; a pane with a dedicated button beside
-                // its dock does not need a second entry one menu deep.
+                // The window menu is the command table's menu rows, grouped by
+                // slot. A pointer user reaches Settings, the clipboard verbs, and
+                // the log utilities here; a command with a button or a keystroke
+                // elsewhere does not need a second route one menu deep.
                 let workspace = cx.entity();
-                let menu = move |mut menu: PopupMenu,
-                                 _: &mut Window,
-                                 _: &mut Context<PopupMenu>| {
-                    let palette = workspace.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new("Command palette\u{2026}")
-                            .icon(IconName::Search)
-                            .on_click(move |_, window, cx| {
-                                palette
-                                    .update(cx, |workspace, cx| workspace.open_palette(window, cx));
-                            }),
-                    );
-                    let settings = workspace.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new("Settings\u{2026}")
-                            .icon(IconName::Settings)
-                            .on_click(move |_, window, cx| {
-                                settings.update(cx, |workspace, cx| {
-                                    workspace.open_settings(window, cx)
+                let menu =
+                    move |mut menu: PopupMenu, _: &mut Window, _: &mut Context<PopupMenu>| {
+                        let mut slot = None;
+                        for row in command_palette::menu_rows() {
+                            let Some(row_slot) = row.menu else {
+                                continue;
+                            };
+                            // The View section lists a pane only when it has no
+                            // status-bar toggle, so the two routes never both exist
+                            // for one pane.
+                            if let Command::FocusPanel(name) = row.command {
+                                if Self::has_corner_toggle(name) {
+                                    continue;
+                                }
+                            }
+                            // A separator marks a slot change, not every item.
+                            if slot.is_some_and(|last| last != row_slot) {
+                                menu = menu.separator();
+                            }
+                            slot = Some(row_slot);
+
+                            let command = row.command;
+                            let label = match command {
+                                Command::FocusPanel(name) => name.label(),
+                                _ => row.label,
+                            };
+                            let mut item = PopupMenuItem::new(label);
+                            if let Some(icon) = row.icon {
+                                item = item.icon(icon);
+                            }
+                            if let Command::FocusPanel(name) = command {
+                                let visible = panel_visibility
+                                    .iter()
+                                    .any(|&(each, visible)| each == name && visible);
+                                item = item.checked(visible);
+                            }
+                            let target = workspace.clone();
+                            item = item.on_click(move |_, window, cx| {
+                                target.update(cx, |workspace, cx| {
+                                    workspace.run_command(command, window, cx)
                                 });
-                            }),
-                    );
-                    let shortcuts = workspace.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new("Keyboard shortcuts")
-                            .icon(IconName::Keyboard)
-                            .on_click(move |_, window, cx| {
-                                shortcuts.update(cx, |workspace, cx| {
-                                    workspace.open_shortcuts(window, cx)
-                                });
-                            }),
-                    );
-                    let snapshot = workspace.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new("Snapshot\u{2026}")
-                            .icon(IconName::Image)
-                            .on_click(move |_, window, cx| {
-                                snapshot.update(cx, |workspace, cx| {
-                                    workspace.open_snapshot_dialog(window, cx)
-                                });
-                            }),
-                    );
-                    // The clipboard pair is a request command, so it sits above
-                    // the diagnostics block and below the window commands.
-                    let paste = workspace.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new("Paste cURL")
-                            .icon(IconName::ClipboardPaste)
-                            .on_click(move |_, window, cx| {
-                                paste.update(cx, |workspace, cx| {
-                                    workspace
-                                        .panes
-                                        .request
-                                        .update(cx, |panel, cx| panel.paste_curl(window, cx))
-                                });
-                            }),
-                    );
-                    let copy = workspace.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new("Copy as cURL")
-                            .icon(IconName::Copy)
-                            .on_click(move |_, _, cx| {
-                                copy.update(cx, |workspace, cx| workspace.copy_curl(cx));
-                            }),
-                    );
-                    // The View section: the panes with no other pointer route.
-                    // Collections and the tools dock each have a status-bar toggle,
-                    // so repeating them here is a second way to do one thing;
-                    // Request and Response have none, and Reset Layout is the way
-                    // back. Clicking a pane reveals it, then focuses it.
-                    menu = menu.separator();
-                    for &(name, visible) in &panel_visibility {
-                        if Self::has_corner_toggle(name) {
-                            continue;
+                            });
+                            menu = menu.item(item);
                         }
-                        let target = workspace.clone();
-                        menu =
-                            menu.item(PopupMenuItem::new(name.label()).checked(visible).on_click(
-                                move |_, window, cx| {
-                                    target.update(cx, |workspace, cx| {
-                                        workspace.reveal_panel(name, window, cx);
-                                        workspace.focus_panel(name, window, cx);
-                                    });
-                                },
-                            ));
-                    }
-                    let reset = workspace.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new("Reset layout")
-                            .icon(IconName::RefreshCcw)
-                            .on_click(move |_, window, cx| {
-                                reset
-                                    .update(cx, |workspace, cx| workspace.reset_layout(window, cx));
-                            }),
-                    );
-                    // The diagnostics pair is a run of quiet utilities, not a
-                    // command the window is about; keep it last and below a
-                    // separator so a missing-the-target click does not copy a
-                    // log by accident.
-                    let diagnostics = workspace.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new("Copy log path")
-                            .icon(IconName::ClipboardCopy)
-                            .on_click(move |_, _, cx: &mut App| {
-                                let message = match logging::file_path() {
-                                    Some(path) => {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(
-                                            path.display().to_string(),
-                                        ));
-                                        format!("Log path copied: {}", path.display())
-                                    }
-                                    None => "No log file is being written".to_owned(),
-                                };
-                                diagnostics.update(cx, |workspace, cx| {
-                                    workspace.flash(chrome::FlashKind::Success, message, cx)
-                                });
-                            }),
-                    );
-                    let logs = workspace.clone();
-                    menu = menu.separator();
-                    menu.item(
-                        PopupMenuItem::new("Copy recent log")
-                            .icon(IconName::ClipboardCopy)
-                            .on_click(move |_, _, cx: &mut App| {
-                                let message = match logging::tail(200) {
-                                    Some(text) if !text.is_empty() => {
-                                        let lines = text.lines().count();
-                                        cx.write_to_clipboard(ClipboardItem::new_string(text));
-                                        format!("Copied the last {lines} log lines")
-                                    }
-                                    _ => "No log file is being written".to_owned(),
-                                };
-                                logs.update(cx, |workspace, cx| {
-                                    workspace.flash(chrome::FlashKind::Success, message, cx)
-                                });
-                            }),
-                    )
-                    // The menu is taller than a 640x480 window. The kit's
-                    // scrollable mode caps it and shows a vertical scrollbar
-                    // rather than clipping the diagnostics rows.
-                    .scrollable(true)
-                };
+                        // The menu is taller than a 640x480 window. The kit's
+                        // scrollable mode caps it and shows a vertical scrollbar
+                        // rather than clipping the diagnostics rows.
+                        menu.scrollable(true)
+                    };
                 Button::new("window-menu")
                     // `Menu`, not `Ellipsis`: the ellipsis was also the glyph on
                     // the "Command palette" item inside this very menu, so the

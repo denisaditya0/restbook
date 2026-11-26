@@ -15,8 +15,9 @@ use gpui_kit::*;
 use crate::actions::{
     shortcut, CloseTab, CopyCurl, ExportFile, FindInResponse, FocusUrl, ImportFile, NewTab,
     NextTab, OpenSettings, PasteCurl, PreviousTab, ReopenClosedTab, ResetZoom, SendRequest,
-    ShowShortcuts, ZoomIn, ZoomOut,
+    ShowShortcuts, ToggleCommandPalette, ZoomIn, ZoomOut,
 };
+use crate::icons::IconName;
 use crate::workspace::PanelName;
 
 /// A command the palette can run. The workspace maps each variant to an
@@ -47,11 +48,34 @@ pub(crate) enum Command {
     ZoomIn,
     ZoomOut,
     ResetZoom,
+    /// Open the command palette (`secondary-shift-p`). Menu-only: the palette
+    /// cannot list the command that opens it.
+    ToggleCommandPalette,
+    /// Write the log file's path to the clipboard. Menu-only; a diagnostic.
+    CopyLogPath,
+    /// Write the most recent log lines to the clipboard. Menu-only.
+    CopyRecentLog,
+}
+
+/// Where a row sits in the titlebar menu. The variants are in menu order; a
+/// slot change draws a separator, and rows keep the table's order inside one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum MenuSlot {
+    /// The palette opener, alone at the top.
+    Palette,
+    /// App-level commands a pointer user has no other route to.
+    App,
+    /// The View panes: the ones with no status-bar toggle.
+    View,
+    /// Reset layout, below the panes it restores.
+    Layout,
+    /// The diagnostics run at the bottom.
+    Diagnostics,
 }
 
 /// One command, and what the palette shows for it.
 ///
-/// The order of [`ROWS`] is the palette's order and therefore its confirm
+/// The order of [`rows`] is the palette's order and therefore its confirm
 /// index, so it stays a fixed list rather than a registry. The key hint does
 /// not live here: it is read from the live keymap at render time by [`hint`],
 /// so it formats itself per platform and cannot drift from the binding.
@@ -61,6 +85,12 @@ pub(crate) struct Row {
     /// The typed action behind the command, when it has a keystroke. `None` is
     /// a command only the palette can reach.
     pub(crate) action: Option<&'static dyn Action>,
+    /// The titlebar menu slot, when the menu lists the row.
+    pub(crate) menu: Option<MenuSlot>,
+    /// The glyph the menu draws. The palette shows a shortcut instead.
+    pub(crate) icon: Option<IconName>,
+    /// Whether the palette lists the row. A menu-only command is off.
+    pub(crate) palette: bool,
 }
 
 impl Row {
@@ -69,6 +99,9 @@ impl Row {
             command,
             label,
             action: Some(action),
+            menu: None,
+            icon: None,
+            palette: true,
         }
     }
 
@@ -77,12 +110,37 @@ impl Row {
             command,
             label,
             action: None,
+            menu: None,
+            icon: None,
+            palette: true,
         }
+    }
+
+    /// List the row in the titlebar menu under `slot`.
+    const fn in_menu(mut self, slot: MenuSlot) -> Self {
+        self.menu = Some(slot);
+        self
+    }
+
+    /// Give the menu item a glyph. The View rows have none: the label already
+    /// names the pane.
+    const fn with_icon(mut self, icon: IconName) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
+    /// List the row in the menu only: it already has a pointer route, or the
+    /// palette must not offer it.
+    const fn menu_only(mut self, slot: MenuSlot) -> Self {
+        self.menu = Some(slot);
+        self.palette = false;
+        self
     }
 }
 
-/// Every command, one row each. The palette lists them all in this order; the
-/// shortcuts sheet lists the bound ones.
+/// Every command, one row each. The palette lists the rows that are not
+/// menu-only; the shortcuts sheet lists the bound ones; the titlebar menu lists
+/// the rows with a slot, in slot order.
 fn rows() -> Vec<Row> {
     vec![
         Row::bound(Command::Send, "Send request", &SendRequest),
@@ -97,24 +155,35 @@ fn rows() -> Vec<Row> {
         ),
         Row::bound(Command::FocusUrl, "Focus URL", &FocusUrl),
         Row::bound(Command::FindInResponse, "Find in response", &FindInResponse),
-        Row::bound(Command::PasteCurl, "Paste cURL", &PasteCurl),
+        Row::bound(Command::PasteCurl, "Paste cURL", &PasteCurl)
+            .in_menu(MenuSlot::App)
+            .with_icon(IconName::ClipboardPaste),
         Row::bound(Command::ImportFile, "Import…", &ImportFile),
         Row::bound(Command::ExportFile, "Export…", &ExportFile),
-        Row::bound(Command::CopyCurl, "Copy as cURL", &CopyCurl),
-        Row::plain(Command::Snapshot, "Snapshot…"),
+        Row::bound(Command::CopyCurl, "Copy as cURL", &CopyCurl)
+            .in_menu(MenuSlot::App)
+            .with_icon(IconName::Copy),
+        Row::plain(Command::Snapshot, "Snapshot…")
+            .in_menu(MenuSlot::App)
+            .with_icon(IconName::Image),
         // One focus and one close per pane, so the fixed table stays flat and the
         // confirm index remains a plain position in this list.
-        Row::plain(Command::FocusPanel(PanelName::History), "Focus history"),
+        Row::plain(Command::FocusPanel(PanelName::History), "Focus history")
+            .in_menu(MenuSlot::View),
         Row::plain(
             Command::FocusPanel(PanelName::Collections),
             "Focus collections",
-        ),
+        )
+        .in_menu(MenuSlot::View),
         Row::plain(
             Command::FocusPanel(PanelName::Environment),
             "Focus environment",
-        ),
-        Row::plain(Command::FocusPanel(PanelName::Request), "Focus request"),
-        Row::plain(Command::FocusPanel(PanelName::Response), "Focus response"),
+        )
+        .in_menu(MenuSlot::View),
+        Row::plain(Command::FocusPanel(PanelName::Request), "Focus request")
+            .in_menu(MenuSlot::View),
+        Row::plain(Command::FocusPanel(PanelName::Response), "Focus response")
+            .in_menu(MenuSlot::View),
         Row::plain(Command::ClosePanel(PanelName::History), "Close history"),
         Row::plain(
             Command::ClosePanel(PanelName::Collections),
@@ -129,13 +198,45 @@ fn rows() -> Vec<Row> {
         Row::plain(Command::ToggleEnvironment, "Toggle environment"),
         Row::plain(Command::ToggleCollections, "Toggle collections"),
         Row::plain(Command::ToggleSideBySide, "Toggle side-by-side"),
-        Row::plain(Command::ResetLayout, "Reset layout"),
-        Row::bound(Command::OpenSettings, "Settings…", &OpenSettings),
-        Row::bound(Command::ShowShortcuts, "Keyboard shortcuts", &ShowShortcuts),
+        Row::plain(Command::ResetLayout, "Reset layout")
+            .in_menu(MenuSlot::Layout)
+            .with_icon(IconName::RefreshCcw),
+        Row::bound(Command::OpenSettings, "Settings…", &OpenSettings)
+            .in_menu(MenuSlot::App)
+            .with_icon(IconName::Settings),
+        Row::bound(Command::ShowShortcuts, "Keyboard shortcuts", &ShowShortcuts)
+            .in_menu(MenuSlot::App)
+            .with_icon(IconName::Keyboard),
         Row::bound(Command::ZoomIn, "Zoom in", &ZoomIn),
         Row::bound(Command::ZoomOut, "Zoom out", &ZoomOut),
         Row::bound(Command::ResetZoom, "Reset zoom", &ResetZoom),
+        Row::bound(
+            Command::ToggleCommandPalette,
+            "Command palette…",
+            &ToggleCommandPalette,
+        )
+        .menu_only(MenuSlot::Palette)
+        .with_icon(IconName::Search),
+        Row::plain(Command::CopyLogPath, "Copy log path")
+            .menu_only(MenuSlot::Diagnostics)
+            .with_icon(IconName::ClipboardCopy),
+        Row::plain(Command::CopyRecentLog, "Copy recent log")
+            .menu_only(MenuSlot::Diagnostics)
+            .with_icon(IconName::ClipboardCopy),
     ]
+}
+
+/// The rows the titlebar menu lists, in menu order: slot order first, then the
+/// table's order inside a slot. The caller draws a separator where the slot
+/// changes.
+pub(crate) fn menu_rows() -> Vec<Row> {
+    let mut rows: Vec<Row> = rows()
+        .into_iter()
+        .filter(|row| row.menu.is_some())
+        .collect();
+    // Stable, so rows inside one slot keep the table's order.
+    rows.sort_by_key(|row| row.menu);
+    rows
 }
 
 /// The shortcut a row shows beside its label, or `None` for a command that has
@@ -168,7 +269,9 @@ where
     F: Fn(Command, &mut Window, &mut App) + 'static,
 {
     let state = cx.new(|cx| CommandState::new(window, cx));
-    let table = rows();
+    // A menu-only command is the menu's business; the palette lists the rest, in
+    // table order, because the confirm index is a position in this list.
+    let table: Vec<Row> = rows().into_iter().filter(|row| row.palette).collect();
     let on_run = Rc::new(on_run);
     // `open_dialog` focuses the dialog shell, so the first build claims focus
     // for the query field. Later builds must not steal it back.
@@ -262,24 +365,57 @@ mod tests {
     /// now, so a duplicated variant hides a command from search and a
     /// copy-pasted label hides a second one; both fail here.
     #[test]
-    fn every_command_has_exactly_one_palette_row() {
+    fn every_command_has_exactly_one_row() {
         let rows = super::rows();
         for row in rows.iter() {
             let count = rows
                 .iter()
                 .filter(|each| each.command == row.command)
                 .count();
-            assert_eq!(
-                count, 1,
-                "expected exactly one palette row for {:?}",
-                row.command
-            );
+            assert_eq!(count, 1, "expected exactly one row for {:?}", row.command);
         }
 
         let mut labels: Vec<&str> = rows.iter().map(|row| row.label).collect();
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), rows.len(), "two commands share a label");
+    }
+
+    /// The three menu-only commands stay out of the palette: the palette cannot
+    /// list the command that opens it, and the log utilities are diagnostics a
+    /// pointer user reaches from the window menu.
+    #[test]
+    fn the_palette_leaves_out_the_menu_only_rows() {
+        let palette: Vec<Command> = super::rows()
+            .into_iter()
+            .filter(|row| row.palette)
+            .map(|row| row.command)
+            .collect();
+        for command in [
+            Command::ToggleCommandPalette,
+            Command::CopyLogPath,
+            Command::CopyRecentLog,
+        ] {
+            assert!(
+                !palette.contains(&command),
+                "{command:?} must not be a palette row"
+            );
+            assert!(
+                super::menu_rows().iter().any(|row| row.command == command),
+                "{command:?} must be a menu row"
+            );
+        }
+    }
+
+    /// The menu groups by slot in declaration order and keeps the table's order
+    /// inside one, so the caller can draw a separator wherever the slot changes.
+    #[test]
+    fn the_menu_is_ordered_by_slot() {
+        let rows = super::menu_rows();
+        assert!(
+            rows.windows(2).all(|pair| pair[0].menu <= pair[1].menu),
+            "the menu rows are not grouped by slot"
+        );
     }
 
     /// The palette searches the hint as well as the label. This pins the
