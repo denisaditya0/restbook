@@ -65,7 +65,9 @@ reopens the tabs without their responses — History is the durable copy. One se
 runs at a time (`Workspace::sending`); while it is on the wire, its own tab shows
 a spinner in the strip's status slot and every other tab's **Send** is disabled
 with a tooltip naming the reason, so a second send is refused rather than
-silently dropped.
+silently dropped. Closing the sending tab frees the send slot before the
+transfer ends: the detached send runs on and still writes its history row, so a
+new send can overlap it (A4).
 
 A history pick loads the stored request and response into the active tab, so it
 keeps that tab's collection binding and replaces its content without asking.
@@ -139,6 +141,10 @@ quit*, and *Cancel*. A *Remember my choice* tick writes *Always save* or *Don't
 save* to Settings (`Settings › General › Quitting`), where it can be set back to
 *Ask every time*. An unbound draft is never in the prompt: the debounce already
 wrote its row, so closing loses nothing.
+
+A background tab's send is not cancelled on quit: flush cancels only the active
+tab's request, so a transfer on another tab ends with the process and its
+pending history row is lost (A6).
 
 **Cancel means cancel here.** Every other alert in the app performs the action
 when its Cancel/confirm pair is dismissed the other way; this dialog's Cancel
