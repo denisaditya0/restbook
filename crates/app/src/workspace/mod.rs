@@ -30,6 +30,7 @@ use import::PendingImport;
 pub(crate) use persistence::MIN_WINDOW_WIDTH;
 pub(crate) use tabs::{Tab, TabAction, TabEntry, TabId, TabState};
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -123,9 +124,17 @@ pub(crate) struct Workspace {
     workspace_root: Option<PathBuf>,
     /// How the history this session writes is protected, for the status bar.
     history: storage::HistoryMode,
-    /// The request, and the outcome of sending it. One per window; the tab
-    /// strip swaps its contents in and out so panes can keep one entity.
+    /// The request, and the outcome of sending it, for the active tab. Each open
+    /// tab owns one of these so a response lands in the tab that asked for it;
+    /// the panes observe only this one.
     document: Entity<Document>,
+    /// One document per open tab, keyed by its [`TabId`].
+    documents: HashMap<TabId, Entity<Document>>,
+    /// The document shown when no tab is open.
+    empty_document: Entity<Document>,
+    /// The draft-save observer on the active document. Replaced whenever the
+    /// active tab changes, so edits to whichever tab is on screen are persisted.
+    document_sub: Option<Subscription>,
     /// Environments and globals, the scopes a send resolves against.
     variables: Entity<Variables>,
     /// Application preferences, shared with every pane that has an app-level
@@ -370,7 +379,13 @@ impl Workspace {
 
         let (dock, _skin) = DockSkin::dock_area(DOCK_ID, Some(DOCK_VERSION), window, cx);
 
-        let document = cx.new(|_| Document::new());
+        // The window opens on one blank tab, and that tab owns the one document
+        // on screen. `empty_document` backs the window when every tab is closed.
+        let initial_id = tabs.active_id();
+        let initial = cx.new(|_| Document::new());
+        let empty_document = cx.new(|_| Document::new());
+        let documents = HashMap::from_iter(initial_id.into_iter().map(|id| (id, initial.clone())));
+        let document = initial.clone();
         let variables = cx.new(|cx| Variables::new(store.clone(), cx));
         let save_name = cx.new(|cx| InputState::new(window, cx).placeholder("Request name"));
         let save_new_collection_name =
@@ -428,6 +443,9 @@ impl Workspace {
             workspace_root,
             history,
             document,
+            documents,
+            empty_document,
+            document_sub: None,
             variables,
             settings,
             panes,
@@ -638,8 +656,8 @@ impl Workspace {
         // Every edit mirrors into the document, so observing it is the cue to
         // re-persist the active tab after a pause, the way a drag cues the
         // layout write.
-        cx.observe(&self.document, |this, _, cx| this.schedule_draft_save(cx))
-            .detach();
+        self.document_sub =
+            Some(cx.observe(&self.document, |this, _, cx| this.schedule_draft_save(cx)));
 
         cx.subscribe(&self.dock, |this, _, event, cx| {
             if matches!(event, DockEvent::LayoutChanged) && !this.suppress_layout_save {
@@ -1842,6 +1860,48 @@ mod tests {
             assert_eq!(tabs, 1, "the pick must leave a tab open for the request");
             assert_eq!(url, "https://api.test/picked");
         }
+
+        /// The pick replaces the response, so `url()` must follow it to the
+        /// restored request; otherwise the history control and cookie jar still
+        /// name the request the tab sent last.
+        #[gpui_kit::test]
+        fn a_pick_points_the_url_at_the_restored_request(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("history-pick-url");
+            let (workspace, cx) = cx.add_window_view(Workspace::new);
+
+            let (id, before) = cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    let document = workspace.document.clone();
+                    document.update(cx, |document, cx| {
+                        // As if this tab had already sent a different request.
+                        document.last_url = Some("https://api.test/previous".to_owned());
+                        cx.notify();
+                    });
+                    let id = workspace
+                        .store
+                        .append_history(&HistoryEntry {
+                            id: 0,
+                            request: RequestDef::new(Method::Get, "https://api.test/picked"),
+                            response: responded(),
+                            url: "https://api.test/picked".to_owned(),
+                            origin: Default::default(),
+                        })
+                        .expect("the store records the send");
+                    (id, document.read(cx).url())
+                })
+            });
+            assert_eq!(before, "https://api.test/previous");
+
+            cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| workspace.pick_history(id, cx));
+            });
+            cx.run_until_parked();
+
+            let after = cx.update(|_, cx| workspace.read(cx).document.read(cx).url());
+            assert_eq!(after, "https://api.test/picked");
+        }
     }
 
     /// A tab keeps its own request, body included.
@@ -1852,7 +1912,7 @@ mod tests {
     /// second tab showing the first tab's raw body.
     mod tab_bodies {
         use gpui_kit::{Entity, TestAppContext, VisualTestContext};
-        use restbook_core::{Body, Method, RequestDef};
+        use restbook_core::{Auth, Body, Method, OAuthConfig, RequestDef, TokenResponse};
 
         use super::super::Workspace;
 
@@ -1868,6 +1928,16 @@ mod tests {
 
         fn plain(url: &str) -> RequestDef {
             RequestDef::new(Method::Get, url)
+        }
+
+        fn oauth(url: &str) -> RequestDef {
+            RequestDef {
+                auth: Auth::OAuth2 {
+                    config: OAuthConfig::default(),
+                    access_token: None,
+                },
+                ..RequestDef::new(Method::Get, url)
+            }
         }
 
         fn open(
@@ -1972,6 +2042,73 @@ mod tests {
             assert_eq!(raw_text(&bodies[0]), Some("{\"a\":1}"));
             assert!(matches!(bodies[1], Body::None));
             assert!(matches!(body_of(cx, &workspace), Body::None));
+        }
+
+        /// A token fetched for one tab stays with that tab even when the user
+        /// switches away before it answers, so the tab on screen never shows a
+        /// token it did not ask for.
+        #[gpui_kit::test]
+        fn an_oauth_token_stays_with_the_tab_that_fetched_it(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("tab-token");
+            let (workspace, cx) = cx.add_window_view(Workspace::new);
+
+            open(cx, &workspace, "node-a", oauth("https://api.test/a"));
+            cx.run_until_parked();
+            open(cx, &workspace, "node-b", oauth("https://api.test/b"));
+            cx.run_until_parked();
+
+            // The fetch is for the tab on screen when it starts; the user leaves
+            // it before the transport answers.
+            let origin = cx
+                .update(|_, cx| workspace.read(cx).active_tab_id())
+                .expect("a tab is open");
+            cx.update(|_, cx| workspace.update(cx, |workspace, cx| workspace.select_tab(0, cx)));
+            cx.run_until_parked();
+
+            cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.apply_token_result(
+                        Some(origin),
+                        Ok(TokenResponse {
+                            access_token: "fetched-for-b".to_owned(),
+                            token_type: None,
+                            expires_in: None,
+                            refresh_token: None,
+                            scope: None,
+                        }),
+                        cx,
+                    );
+                });
+            });
+            cx.run_until_parked();
+
+            let (editor_token, origin_token) =
+                cx.update(|_, cx| {
+                    let workspace = workspace.read(cx);
+                    let editor_token = workspace
+                        .panes
+                        .request
+                        .read(cx)
+                        .editor()
+                        .read(cx)
+                        .oauth_access_token
+                        .clone();
+                    let origin_token = workspace.tabs.iter().find(|tab| tab.id == origin).and_then(
+                        |tab| match &tab.request.auth {
+                            Auth::OAuth2 { access_token, .. } => access_token.clone(),
+                            _ => None,
+                        },
+                    );
+                    (editor_token, origin_token)
+                });
+
+            assert_eq!(
+                editor_token, None,
+                "the tab on screen must not take the other tab's token"
+            );
+            assert_eq!(origin_token.as_deref(), Some("fetched-for-b"));
         }
     }
 

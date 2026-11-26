@@ -335,6 +335,8 @@ pub(crate) struct CollectionsPanel {
     store: Arc<dyn Store>,
     /// The request being edited, observed so a save reads the live one.
     document: Entity<Document>,
+    /// The document observer, replaced when the active tab changes.
+    document_sub: Option<Subscription>,
     collections: Vec<Collection>,
     /// The drafts the workspace persists, newest first. Read back from the store
     /// so the Unsaved list follows what is actually on disk.
@@ -514,7 +516,7 @@ impl CollectionsPanel {
         // Observe the document so "Save request" reflects the live request, and
         // the search box so typing in it re-filters: both notify their own
         // state, not this pane.
-        cx.observe(&document, |_, _, cx| cx.notify()).detach();
+        let document_sub = Some(cx.observe(&document, |_, _, cx| cx.notify()));
         cx.observe(&query, |_, _, cx| cx.notify()).detach();
         // The pane no longer observes `Variables`: the environment chip moved
         // to the titlebar, so an environment change repaints no row here.
@@ -524,6 +526,7 @@ impl CollectionsPanel {
             metrics: Metrics::current(cx),
             store,
             document,
+            document_sub,
             collections,
             drafts,
             query,
@@ -538,6 +541,16 @@ impl CollectionsPanel {
             revision: 0,
             focus_handle: cx.focus_handle(),
         }
+    }
+
+    /// Re-point the pane at the active tab's document.
+    pub(crate) fn set_document(&mut self, document: Entity<Document>, cx: &mut Context<Self>) {
+        if self.document == document {
+            return;
+        }
+        self.document = document.clone();
+        self.document_sub = Some(cx.observe(&document, |_, _, cx| cx.notify()));
+        cx.notify();
     }
 
     /// Re-read the palette and metrics after a theme, zoom, or appearance

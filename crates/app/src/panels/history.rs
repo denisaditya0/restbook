@@ -114,6 +114,8 @@ pub(crate) struct HistoryPanel {
     store: Arc<dyn Store>,
     /// The request on screen, so *This request* knows which one that is.
     document: Entity<Document>,
+    /// The document observer, replaced when the active tab changes.
+    document_sub: Option<Subscription>,
     /// Which rows the list shows.
     scope: Scope,
     /// `(origin, url, revision)` the scoped list was read at, so a document
@@ -244,8 +246,7 @@ impl HistoryPanel {
         // A different request changes what *This request* means. Progress ticks
         // notify the document many times per second, so the scope key filters
         // those out before the store is read.
-        cx.observe(&document, |this, _, cx| this.sync_scope(cx))
-            .detach();
+        let document_sub = Some(cx.observe(&document, |this, _, cx| this.sync_scope(cx)));
 
         let limit = settings.read(cx).current().history_limit;
         let (hits, error) = search(
@@ -262,6 +263,7 @@ impl HistoryPanel {
             metrics: Metrics::current(cx),
             store,
             document,
+            document_sub,
             scope: Scope::All,
             scope_key: (Origin::default(), String::new(), 0),
             settings,
@@ -275,6 +277,16 @@ impl HistoryPanel {
             selected: None,
             focus_handle: cx.focus_handle(),
         }
+    }
+
+    /// Re-point the pane at the active tab's document and resync the scope.
+    pub(crate) fn set_document(&mut self, document: Entity<Document>, cx: &mut Context<Self>) {
+        if self.document == document {
+            return;
+        }
+        self.document = document.clone();
+        self.document_sub = Some(cx.observe(&document, |this, _, cx| this.sync_scope(cx)));
+        self.sync_scope(cx);
     }
 
     /// Rebuild the cached palette and metrics after a theme or zoom change.

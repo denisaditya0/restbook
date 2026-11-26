@@ -28,7 +28,7 @@ use crate::theme::{self, Metrics, Palette};
 use crate::variables::Variables;
 use crate::workspace::settings::{Settings, SETTINGS_FILE};
 use crate::workspace::storage;
-use crate::workspace::PanelName;
+use crate::workspace::{PanelName, RequestStamp, TabEntry, TabId};
 
 /// The URL the fixture request names. It is never contacted: the response in
 /// the fixture document is the one on screen.
@@ -165,9 +165,21 @@ impl PaneView {
 /// The shared state every pane is wired to.
 struct Fixture {
     store: Arc<dyn Store>,
-    document: Entity<Document>,
+    /// One document per open tab, as the workspace holds them. The panes observe
+    /// the active one; the other stays alive so its own response survives a
+    /// switch, exactly as the per-tab model promises.
+    documents: Vec<Entity<Document>>,
+    active_tab: usize,
+    /// The strip entries, so the request pane draws more than one tab.
+    tabs: Vec<TabEntry>,
     variables: Entity<Variables>,
     settings: Entity<Settings>,
+}
+
+impl Fixture {
+    fn document(&self) -> Entity<Document> {
+        self.documents[self.active_tab].clone()
+    }
 }
 
 impl PreviewRoot {
@@ -178,7 +190,7 @@ impl PreviewRoot {
         seed_store(&store);
         let store: Arc<dyn Store> = store;
 
-        let document = cx.new(|_| fixture_document());
+        let (documents, tabs) = fixture_documents(cx);
         let variables = cx.new(|cx| Variables::new(store.clone(), cx));
         let settings = cx.new(|_| Settings::new(state_dir.join(SETTINGS_FILE)));
 
@@ -203,7 +215,9 @@ impl PreviewRoot {
 
         let fixture = Fixture {
             store,
-            document,
+            documents,
+            active_tab: 0,
+            tabs,
             variables,
             settings,
         };
@@ -418,20 +432,25 @@ fn build_pane(
         PanelName::History => PaneView::History(cx.new(|cx| {
             HistoryPanel::new(
                 fixture.store.clone(),
-                fixture.document.clone(),
+                fixture.document(),
                 fixture.settings.clone(),
                 window,
                 cx,
             )
         })),
-        PanelName::Request => PaneView::Request(cx.new(|cx| {
-            RequestPanel::new(
-                fixture.document.clone(),
-                fixture.variables.clone(),
-                window,
-                cx,
-            )
-        })),
+        PanelName::Request => {
+            // Build over a blank document, then point the pane at the active tab,
+            // so the editor adopts the whole request the way a real switch does —
+            // `RequestPanel::new` never seeds itself from the document it is handed.
+            let blank = cx.new(|_| Document::new());
+            let panel =
+                cx.new(|cx| RequestPanel::new(blank, fixture.variables.clone(), window, cx));
+            panel.update(cx, |panel, cx| {
+                panel.set_tabs(fixture.tabs.clone(), fixture.active_tab, cx);
+                panel.set_document(fixture.document(), cx);
+            });
+            PaneView::Request(panel)
+        }
         PanelName::Response => PaneView::Response(cx.new(|cx| {
             // The pane reads a session jar for its Cookies tab; a seeded fake
             // keeps the tab populated without a network or a real store.
@@ -441,7 +460,7 @@ fn build_pane(
                 ("theme".to_owned(), "dark".to_owned()),
             ]);
             ResponsePanel::new(
-                fixture.document.clone(),
+                fixture.document(),
                 fixture.store.clone(),
                 transport,
                 fixture.settings.clone(),
@@ -450,15 +469,10 @@ fn build_pane(
             )
         })),
         PanelName::Environment => PaneView::Environment(cx.new(|cx| {
-            EnvironmentPanel::new(
-                fixture.variables.clone(),
-                fixture.document.clone(),
-                window,
-                cx,
-            )
+            EnvironmentPanel::new(fixture.variables.clone(), fixture.document(), window, cx)
         })),
         PanelName::Collections => PaneView::Collections(cx.new(|cx| {
-            CollectionsPanel::new(fixture.store.clone(), fixture.document.clone(), window, cx)
+            CollectionsPanel::new(fixture.store.clone(), fixture.document(), window, cx)
         })),
     })
 }
@@ -477,13 +491,44 @@ fn fixture_request() -> RequestDef {
         mime: "application/json".to_owned(),
         text: "{\n  \"message\": \"hello from the preview fixture\"\n}".to_owned(),
     };
+    // Insecure so the URL row and the strip both carry the U64 marker.
+    request.insecure = true;
     request
 }
 
-/// The document every pane observes: a finished send, so the response pane is
-/// in its completed state on the first frame, and an owner so the history
-/// control lists the seeded sends.
-fn fixture_document() -> Document {
+/// Two open tabs, each with its own document: the active Echo send (insecure,
+/// so both warning surfaces show) and a plain health check behind it. A
+/// response lives in its tab's document, never on the tab entry.
+fn fixture_documents(cx: &mut Context<PreviewRoot>) -> (Vec<Entity<Document>>, Vec<TabEntry>) {
+    let echo = fixture_echo_document();
+    let health = fixture_health_document();
+    let tabs = vec![
+        fixture_tab(1, &echo.request, Some(FIXTURE_NODE)),
+        fixture_tab(2, &health.request, None),
+    ];
+    let documents = vec![cx.new(|_| echo), cx.new(|_| health)];
+    (documents, tabs)
+}
+
+fn fixture_tab(id: TabId, request: &RequestDef, node: Option<&str>) -> TabEntry {
+    TabEntry {
+        id,
+        method: request.method,
+        label: crate::panels::request::tab_label(request),
+        url: request.url.clone().into(),
+        current: RequestStamp::of(request),
+        saved: node.map(|_| RequestStamp::of(request)),
+        node: node.map(str::to_owned),
+        draft: None,
+        insecure: request.insecure,
+        pending: false,
+    }
+}
+
+/// The active tab's document: a finished send, so the response pane is in its
+/// completed state on the first frame, and an owner so the history control lists
+/// the seeded sends.
+fn fixture_echo_document() -> Document {
     let mut document = Document::new();
     document.request = fixture_request();
     document.last_url = Some(FIXTURE_URL.to_owned());
@@ -492,6 +537,30 @@ fn fixture_document() -> Document {
     };
     document.response = Some(fixture_response(200, Duration::milliseconds(142)));
     document
+}
+
+/// The tab behind the active one, so the strip shows a second document that
+/// keeps its own response across a switch.
+fn fixture_health_document() -> Document {
+    let mut document = Document::new();
+    document.request = RequestDef::new(Method::Get, "https://localhost:8443/health");
+    document.request.name = "Health check (preview)".to_owned();
+    document.last_url = Some(document.request.url.clone());
+    document.origin = Origin::Standalone;
+    document.response = Some(fixture_health_response());
+    document
+}
+
+fn fixture_health_response() -> ResponseRecord {
+    ResponseRecord {
+        status: 503,
+        headers: vec![("content-type".to_owned(), "application/json".to_owned())],
+        body: b"{\n  \"status\": \"unavailable\"\n}".to_vec().into(),
+        duration_ms: 38,
+        received_at: Utc::now(),
+        final_url: None,
+        redirects: Vec::new(),
+    }
 }
 
 fn fixture_response(status: u16, duration: chrono::Duration) -> ResponseRecord {

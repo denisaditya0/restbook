@@ -10,18 +10,22 @@ use std::sync::Arc;
 use gpui_kit::*;
 
 use restbook_core::{
-    prepare, CancelToken, Error, Failure, HistoryEntry, OAuthConfig, OAuthGrant, OAuthTransport,
-    Progress, Store, Transport,
+    prepare, Auth, CancelToken, Error, Failure, HistoryEntry, OAuthConfig, OAuthGrant,
+    OAuthTransport, Progress, Store, Transport,
 };
 
-use crate::workspace::Workspace;
+use crate::workspace::{TabId, Workspace};
 
 impl Workspace {
-    /// Fetch an OAuth token for the Auth tab and hand it back to the editor.
+    /// Fetch an OAuth token for the Auth tab and hand it back to the tab that
+    /// asked, never the one on screen.
     ///
     /// Only the client-credentials grant can be completed without a browser, so
-    /// the other grant reports why it stopped instead of guessing. The token
-    /// lives in memory on the editor until the next send or fetch.
+    /// the other grant reports why it stopped instead of guessing. The editor is
+    /// shared across tabs, so the completion is bound to the originating
+    /// [`TabId`]: while that tab is still active the editor takes the token, and
+    /// otherwise it is written into that tab's request so returning to it
+    /// re-adopts the token.
     pub(crate) fn fetch_token(&mut self, config: OAuthConfig, cx: &mut Context<Self>) {
         let editor = self.panes.request.read(cx).editor();
 
@@ -52,28 +56,59 @@ impl Workspace {
         });
 
         let transport = self.transport.clone();
+        // The tab that asked for the token. The transfer outlives a switch, so
+        // the result cannot be written to whichever editor is current when it
+        // lands — that is how one tab's token would appear in another.
+        let origin = self.active_tab_id();
         cx.spawn(async move |this, cx| {
             let result = transport.fetch_token(request).await;
-            this.update(cx, |this, cx| {
-                let editor = this.panes.request.read(cx).editor();
-                editor.update(cx, |editor, cx| match result {
-                    Ok(token) => {
-                        let status = match token.expires_in {
-                            Some(expires) => format!("Token ready; expires in {expires}s."),
-                            None => "Token ready.".to_owned(),
-                        };
-                        log::debug!(target: "restbook_app::send", "oauth: token fetched");
-                        editor.set_oauth_token(Some(token.access_token), status, cx);
-                    }
-                    Err(error) => {
-                        log::error!(target: "restbook_app::send", "oauth: {error}");
-                        editor.set_oauth_token(None, error.to_string(), cx);
-                    }
-                });
-            })
-            .ok();
+            this.update(cx, |this, cx| this.apply_token_result(origin, result, cx))
+                .ok();
         })
         .detach();
+    }
+
+    /// Deliver a fetched token to the tab that asked for it.
+    pub(super) fn apply_token_result(
+        &mut self,
+        origin: Option<TabId>,
+        result: restbook_core::Result<restbook_core::TokenResponse>,
+        cx: &mut Context<Self>,
+    ) {
+        let (token, status) = match result {
+            Ok(token) => {
+                let status = match token.expires_in {
+                    Some(expires) => format!("Token ready; expires in {expires}s."),
+                    None => "Token ready.".to_owned(),
+                };
+                log::debug!(target: "restbook_app::send", "oauth: token fetched");
+                (Some(token.access_token), status)
+            }
+            Err(error) => {
+                log::error!(target: "restbook_app::send", "oauth: {error}");
+                (None, error.to_string())
+            }
+        };
+
+        if self.active_tab_id() == origin {
+            let editor = self.panes.request.read(cx).editor();
+            editor.update(cx, |editor, cx| editor.set_oauth_token(token, status, cx));
+            return;
+        }
+
+        // The tab that asked was closed mid-fetch: there is no request to hand
+        // the token to, and the active tab must not take it.
+        let Some(index) = origin.and_then(|id| self.tabs.position(id)) else {
+            return;
+        };
+        // A failure belongs to the tab that asked; do not surface it on another.
+        let Some(token) = token else {
+            return;
+        };
+        if let Auth::OAuth2 { access_token, .. } = &mut self.tabs[index].request.auth {
+            *access_token = Some(token);
+        }
+        self.push_tabs(cx);
     }
 
     /// Send the request as currently edited.
@@ -84,13 +119,17 @@ impl Workspace {
         // One send at a time. `sending` stays set while a transfer from a tab
         // the user has since left is still on the wire, so switching tabs
         // cannot start a second one.
-        if self.document.read(cx).is_pending() || self.sending.is_some() {
+        if self.sending.is_some() {
             return;
         }
         // The send belongs to the tab it started from, even if the user
         // switches tabs while it is on the wire. Read the owner now, by id: a
-        // closed tab shifts every index after it.
+        // closed tab shifts every index after it, and the tab's own document is
+        // where all of this send's outcome lands.
         let Some(send_id) = self.active_tab_id() else {
+            return;
+        };
+        let Some(document) = self.documents.get(&send_id).cloned() else {
             return;
         };
         // Read the editor live: a body or auth keystroke notifies its own
@@ -105,7 +144,7 @@ impl Workspace {
         let prepared = match prepare(&request, &scopes.context()) {
             Ok(prepared) => prepared,
             Err(error) => {
-                self.document.update(cx, |document, cx| {
+                document.update(cx, |document, cx| {
                     document.fail_without_sending(scrub_failure(error.failure()));
                     cx.notify();
                 });
@@ -126,7 +165,7 @@ impl Workspace {
                 .active()
                 .unwrap_or("none"),
         );
-        self.document.update(cx, |document, cx| {
+        document.update(cx, |document, cx| {
             document.begin_send(cancel.clone(), progress.snapshot(), sent_url.clone());
             cx.notify();
         });
@@ -147,6 +186,10 @@ impl Workspace {
             .map(|tab| tab.origin())
             .unwrap_or_default();
         self.sending = Some(send_id);
+        // Tell the strip which tab is now sending, so its spinner and the other
+        // tabs' disabled Send appear before the first tick.
+        self.push_tabs(cx);
+        let watcher_document = document.clone();
 
         cx.spawn(async move |this, cx| {
             // Poll the sink while the request runs so the document always holds
@@ -156,7 +199,6 @@ impl Workspace {
             let done = Arc::new(AtomicBool::new(false));
             let watcher = progress.clone();
             let watcher_done = done.clone();
-            let watcher_workspace = this.clone();
             cx.spawn(async move |cx| {
                 while !watcher_done.load(Ordering::Relaxed) {
                     // This watcher is the single heartbeat for the response
@@ -167,28 +209,18 @@ impl Workspace {
                         .timer(std::time::Duration::from_millis(100))
                         .await;
                     let now = watcher.snapshot();
-                    watcher_workspace
-                        .update(cx, |this, cx| {
-                            // Only the tab still on screen may show this send's
-                            // progress. A switched-away tab gets the finished
-                            // response when it resolves, not a live tick.
-                            if this.active_tab_id() != Some(send_id) {
-                                return;
+                    // Tick the sending tab's own document, whichever tab is on
+                    // screen: the elapsed clock derives from `started_at` at
+                    // paint time, so every tick must repaint even when no bytes
+                    // arrived. Rewrite the snapshot only when it differs.
+                    watcher_document.update(cx, |document, cx| {
+                        if document.is_pending() {
+                            if document.progress != Some(now) {
+                                document.progress = Some(now);
                             }
-                            this.document.update(cx, |document, cx| {
-                                if document.is_pending() {
-                                    // The elapsed clock derives from `started_at` at
-                                    // paint time, so every tick must repaint even when
-                                    // no bytes arrived. Rewrite the snapshot only when
-                                    // it differs, to keep it from churning.
-                                    if document.progress != Some(now) {
-                                        document.progress = Some(now);
-                                    }
-                                    cx.notify();
-                                }
-                            });
-                        })
-                        .ok();
+                            cx.notify();
+                        }
+                    });
                 }
             })
             .detach();
@@ -228,34 +260,16 @@ impl Workspace {
                         if this.sending == Some(send_id) {
                             this.sending = None;
                         }
-                        if this.active_tab_id() == Some(send_id) {
-                            this.document.update(cx, |document, cx| {
-                                // Frozen first: the summary must keep the bytes
-                                // that did arrive before the request was
-                                // cancelled or died.
-                                document.finish_send(canceled);
-                                document.error = failure;
-                                cx.notify();
-                            });
-                        } else {
-                            if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == send_id) {
-                                // The document now describes the tab the user
-                                // switched to, so the failure goes into the
-                                // sender's snapshot; the other tab keeps its own
-                                // state untouched. `last_url` still names the
-                                // attempt that failed, matching what the tab
-                                // would have shown had it stayed on screen.
-                                tab.error = failure;
-                                tab.last_url = Some(sent_url.clone());
-                            }
-                            // The visible tab only inherited the sender's
-                            // "Sending" marker: it has no summary of its own
-                            // to freeze, and clearing it frees its Send button.
-                            this.document.update(cx, |document, cx| {
-                                document.forget_send();
-                                cx.notify();
-                            });
-                        }
+                        // The failure lands in the tab that sent it, whichever
+                        // tab is on screen now.
+                        document.update(cx, |document, cx| {
+                            // Frozen first: the summary must keep the bytes that
+                            // did arrive before the request was cancelled or died.
+                            document.finish_send(canceled);
+                            document.error = failure;
+                            cx.notify();
+                        });
+                        this.push_tabs(cx);
                     })
                     .ok();
                     log::debug!(
@@ -344,32 +358,17 @@ impl Workspace {
                 if this.sending == Some(send_id) {
                     this.sending = None;
                 }
-                if this.active_tab_id() == Some(send_id) {
-                    this.document.update(cx, |document, cx| {
-                        document.finish_send(false);
-                        document.response = Some(response);
-                        cx.notify();
-                    });
-                } else {
-                    if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == send_id) {
-                        // The user switched tabs mid-send. Adopt the response
-                        // into the tab that asked for it; `select_tab` loads it
-                        // back when the user returns, and the visible tab's
-                        // document is left alone. `last_url` travels with the
-                        // response, or the pane would show it without naming
-                        // the URL it came from.
-                        tab.response = Some(response);
-                        tab.error = None;
-                        tab.last_url = Some(sent_url.clone());
-                    }
-                    // The visible tab only inherited the sender's "Sending"
-                    // marker: it has no summary of its own to freeze, and
-                    // clearing it frees its Send button.
-                    this.document.update(cx, |document, cx| {
-                        document.forget_send();
-                        cx.notify();
-                    });
-                }
+                // The response lands in the tab that sent it, whichever tab is
+                // on screen now; `last_url` travels with it so the pane names
+                // the URL it came from.
+                document.update(cx, |document, cx| {
+                    document.finish_send(false);
+                    document.response = Some(response);
+                    document.error = None;
+                    document.last_url = Some(sent_url.clone());
+                    cx.notify();
+                });
+                this.push_tabs(cx);
             })
             .ok();
 
