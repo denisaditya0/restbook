@@ -166,6 +166,8 @@ the shortcuts sheet lists the rows with a binding.
 | Previous tab | `ctrl-shift-tab` / `ctrl-pageup` | select the previous tab, wrapping at the start | Center (tab strip) | `Workspace::select_relative` |
 | Reopen closed tab | `secondary-shift-t` | restore the most recently closed tab | Center (tab strip) | `Workspace::reopen_closed_tab` |
 | Focus URL | `secondary-l` | focus the URL field | Center | `RequestPanel::focus_url` |
+| Focus next pane | `f6` | move focus to the next pane in `PanelName::all` order, revealing a closed dock before it takes focus, and wrapping at the end | Window (any pane) | `Workspace::focus_relative_pane` |
+| Focus previous pane | `shift-f6` | the same step backwards, wrapping at the start | Window (any pane) | `Workspace::focus_relative_pane` |
 | Find in response | `secondary-f` | open the find row and focus it; Enter steps forward, Shift+Enter back, Escape closes | Center (Response) | `ResponsePanel::open_find` |
 | Paste cURL | `secondary-shift-v` | clipboard → `RequestDef`, adopt it, then offer to save it | Center | `RequestPanel::paste_curl` |
 | Import… | `secondary-shift-i` | file picker → a busy notification naming the file (read, guess, parse; closing it cancels before the parse) → destination dialog (new collections, the default, or an existing collection or folder) → save, busy again under the same notification → result dialog | Overlay (dialog) + Chrome (notification) + Left dock | `Workspace::import_file` |

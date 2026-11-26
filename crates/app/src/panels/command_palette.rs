@@ -13,9 +13,9 @@ use gpui_kit::component::{h_flex, WindowExt as _};
 use gpui_kit::*;
 
 use crate::actions::{
-    shortcut, CloseTab, CopyCurl, ExportFile, FindInResponse, FocusUrl, ImportFile, NewTab,
-    NextTab, OpenSettings, PasteCurl, PreviousTab, ReopenClosedTab, ResetZoom, SendRequest,
-    ShowShortcuts, ToggleCommandPalette, ZoomIn, ZoomOut,
+    shortcut, CloseTab, CopyCurl, ExportFile, FindInResponse, FocusNextPane, FocusPreviousPane,
+    FocusUrl, ImportFile, NewTab, NextTab, OpenSettings, PasteCurl, PreviousTab, ReopenClosedTab,
+    ResetZoom, SendRequest, ShowShortcuts, ToggleCommandPalette, ZoomIn, ZoomOut,
 };
 use crate::icons::IconName;
 use crate::workspace::PanelName;
@@ -31,6 +31,10 @@ pub(crate) enum Command {
     PreviousTab,
     ReopenClosedTab,
     FocusUrl,
+    /// Move focus to the next pane in the View order, wrapping at the end.
+    FocusNextPane,
+    /// Move focus to the previous pane, wrapping at the start.
+    FocusPreviousPane,
     FindInResponse,
     PasteCurl,
     ImportFile,
@@ -197,6 +201,20 @@ pub(crate) fn rows() -> Vec<Row> {
             &["secondary-shift-t"],
         ),
         Row::bound(Command::FocusUrl, "Focus URL", &FocusUrl, &["secondary-l"]),
+        // The cycle follows `PanelName::all`, so focus-next visits the panes in
+        // the same order the View menu lists them.
+        Row::bound(
+            Command::FocusNextPane,
+            "Focus next pane",
+            &FocusNextPane,
+            &["f6"],
+        ),
+        Row::bound(
+            Command::FocusPreviousPane,
+            "Focus previous pane",
+            &FocusPreviousPane,
+            &["shift-f6"],
+        ),
         Row::bound(
             Command::FindInResponse,
             "Find in response",

@@ -47,9 +47,10 @@ use restbook_core::{RequestDef, Store};
 use restbook_transport::ReqwestTransport;
 
 use crate::actions::{
-    self as actions, CloseTab, CopyCurl, ExportFile, FindInResponse, ImportFile, NewTab, NextTab,
-    OpenSettings, PreviousTab, ReopenClosedTab, ResetZoom, SaveRequestAs, ShowShortcuts,
-    ToggleCommandPalette, ToggleSidebar, ToggleTools, ZoomIn, ZoomOut,
+    self as actions, CloseTab, CopyCurl, ExportFile, FindInResponse, FocusNextPane,
+    FocusPreviousPane, ImportFile, NewTab, NextTab, OpenSettings, PreviousTab, ReopenClosedTab,
+    ResetZoom, SaveRequestAs, ShowShortcuts, ToggleCommandPalette, ToggleSidebar, ToggleTools,
+    ZoomIn, ZoomOut,
 };
 use crate::document::Document;
 use crate::icons::IconName;
@@ -951,6 +952,8 @@ impl Workspace {
                 self.reveal_panel(name, window, cx);
                 self.focus_panel(name, window, cx);
             }
+            Command::FocusNextPane => self.focus_relative_pane(1, window, cx),
+            Command::FocusPreviousPane => self.focus_relative_pane(-1, window, cx),
             Command::ClosePanel(name) => self.close_panel(name, window, cx),
             // The two pane commands are the status bar's two corner buttons, so
             // a palette entry and its button are one command: same scope (the
@@ -1406,6 +1409,14 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &PreviousTab, _, cx| this.select_relative(-1, cx)))
             .on_action(cx.listener(|this, _: &ReopenClosedTab, _, cx| this.reopen_closed_tab(cx)))
             .on_action(cx.listener(|this, _: &SaveRequestAs, _, cx| this.save_active_as(cx)))
+            // The focus cycle is canvas-level like the tab rotation: it must work
+            // from every pane, so the workspace root catches it.
+            .on_action(cx.listener(|this, _: &FocusNextPane, window, cx| {
+                this.focus_relative_pane(1, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &FocusPreviousPane, window, cx| {
+                this.focus_relative_pane(-1, window, cx)
+            }))
             // Settings is app-level, so its key works with focus anywhere, the
             // same as the menu entry and the palette command.
             .on_action(
@@ -1572,6 +1583,119 @@ mod tests {
         assert_eq!(wrap_index(2, 3, 1), 0);
         assert_eq!(wrap_index(1, 3, 1), 2);
         assert_eq!(wrap_index(1, 3, -1), 0);
+    }
+
+    /// The focus cycle walks `PanelName::all` and wraps at both ends; a pane in a
+    /// closed dock is revealed before it takes focus, so a press always lands on
+    /// something the user can see.
+    mod focus_cycle {
+        use gpui_kit::{
+            App, KeyDownEvent, Keystroke, Modifiers, PlatformInput, TestAppContext,
+            VisualTestContext, Window,
+        };
+
+        use super::super::{PanelName, Workspace};
+
+        /// The pane the window is actually focused in.
+        fn focused(window: &Window, workspace: &Workspace, cx: &App) -> Option<PanelName> {
+            PanelName::all()
+                .into_iter()
+                .find(|name| workspace.pane_focus_handle(*name, cx).is_focused(window))
+        }
+
+        /// Dispatch a key the way the platform delivers it: a `KeyDownEvent` on a
+        /// painted tree.
+        fn press(cx: &mut VisualTestContext, key: &str) {
+            cx.update(|window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+                window.dispatch_event(
+                    PlatformInput::KeyDown(KeyDownEvent {
+                        keystroke: Keystroke {
+                            modifiers: Modifiers::default(),
+                            key: key.to_owned(),
+                            key_char: None,
+                        },
+                        is_held: false,
+                        prefer_character_input: false,
+                    }),
+                    cx,
+                );
+            });
+            cx.run_until_parked();
+        }
+
+        fn open(cx: &mut TestAppContext) -> (gpui_kit::Entity<Workspace>, &mut VisualTestContext) {
+            cx.update(|cx| cx.bind_keys(crate::actions::bindings(cx)));
+            cx.add_window_view(Workspace::new)
+        }
+
+        /// `f6` from the last pane wraps to the first, so the cycle never stops.
+        #[gpui_kit::test]
+        fn f6_wraps_from_the_last_pane_to_the_first(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("focus-cycle-wrap");
+            let (workspace, cx) = open(cx);
+
+            cx.update(|window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+                workspace.update(cx, |workspace, cx| {
+                    workspace.focus_panel(PanelName::Response, window, cx)
+                });
+            });
+
+            press(cx, "f6");
+
+            let now = cx.update(|window, cx| focused(window, workspace.read(cx), cx));
+            assert_eq!(
+                now,
+                Some(PanelName::Collections),
+                "the cycle wraps from the last pane to the first",
+            );
+        }
+
+        /// Forward from Collections reaches History, which the default layout
+        /// keeps in a closed dock: the cycle opens it rather than aiming at a
+        /// pane nobody can see.
+        #[gpui_kit::test]
+        fn f6_reveals_a_closed_dock_before_focusing_it(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("focus-cycle-reveal");
+            let (workspace, cx) = open(cx);
+
+            cx.update(|window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+                workspace.update(cx, |workspace, cx| {
+                    workspace.focus_panel(PanelName::Collections, window, cx)
+                });
+            });
+            let hidden =
+                cx.update(|_, cx| workspace.read(cx).panel_visible(PanelName::History, cx));
+            assert!(
+                !hidden,
+                "the default layout keeps History behind a closed dock"
+            );
+
+            press(cx, "f6");
+
+            let (now, visible) = cx.update(|window, cx| {
+                let workspace = workspace.read(cx);
+                (
+                    focused(window, workspace, cx),
+                    workspace.panel_visible(PanelName::History, cx),
+                )
+            });
+            assert_eq!(
+                now,
+                Some(PanelName::History),
+                "focus lands on the revealed pane"
+            );
+            assert!(visible, "the cycle opened the dock it focused");
+        }
     }
 
     /// *New collection…* is one confirm: the collection and the request land
