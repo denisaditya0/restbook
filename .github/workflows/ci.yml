@@ -231,6 +231,28 @@ jobs:
         working-directory: crates/app
         run: cargo test --no-default-features
 
+  # RustSec advisories over both lockfiles. A dependency can go bad without a
+  # line of our code changing, and nothing else here reads the advisory database.
+  # `cargo-audit` is installed from crates.io rather than pulling an unpinned
+  # action, so the whole gate is a script we can read.
+  audit:
+    name: Audit
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Audit engine dependencies
+        run: cargo audit
+
+      - name: Audit app dependencies
+        working-directory: crates/app
+        run: cargo audit
+
   # The encrypted store is feature-gated and touched by no other job: `release.yml`
   # turns SQLCipher off on Linux for its runtime cost, which also means nothing
   # there compiles `SqlcipherStore`. This one job compiles and tests it, so a
