@@ -1760,7 +1760,7 @@ mod tests {
                             origin: Default::default(),
                         })
                         .expect("the store records the send");
-                    while workspace.tabs.len() > 0 {
+                    while !workspace.tabs.is_empty() {
                         let tab = workspace.tabs[0].id;
                         workspace.close_tab(tab, cx);
                     }
