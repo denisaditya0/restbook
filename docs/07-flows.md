@@ -152,8 +152,10 @@ the bar.
 ## Commands (palette + keybindings)
 
 Every command is a variant of `Command` (`panels/command_palette.rs`), routed by
-`Workspace::run_command` (`workspace/mod.rs`). The palette is a *fixed table*,
-not a registry, so this list is exhaustive.
+`Workspace::run_command` (`workspace/mod.rs`). One fixed table holds every row,
+not a registry, so this list is exhaustive: the palette lists every row except
+the menu-only ones, the titlebar menu lists the rows that carry a menu slot, and
+the shortcuts sheet lists the rows with a binding.
 
 | Command | Keybinding | Effect | POV | Source |
 |---|---|---|---|---|
@@ -169,12 +171,12 @@ not a registry, so this list is exhaustive.
 | Import… | `secondary-shift-i` | file picker → a busy notification naming the file (read, guess, parse; closing it cancels before the parse) → destination dialog (new collections, the default, or an existing collection or folder) → save, busy again under the same notification → result dialog | Overlay (dialog) + Chrome (notification) + Left dock | `Workspace::import_file` |
 | Export… | `secondary-shift-e` | picker → `import::export` → save prompt → write the file | Overlay (dialog) + Chrome (notification) | `Workspace::open_export_dialog` |
 | Copy as cURL | `secondary-shift-c` | live `RequestDef` → `curl::to_curl` → clipboard | Window (any pane) | `Workspace::copy_curl` |
-| Snapshot… | — (palette only) | draw the current request and response as a PNG, then copy it or save it | Overlay (dialog) | `Workspace::open_snapshot_dialog` |
+| Snapshot… | — (menu and palette) | draw the current request and response as a PNG, then copy it or save it | Overlay (dialog) | `Workspace::open_snapshot_dialog` |
 | Focus history | — (palette only) | reveal **then** focus the History pane | Right dock | `run_command` |
 | Focus collections | — (palette only) | reveal **then** focus the Collections pane | Left dock | `run_command` |
 | Focus environment | — (palette only) | reveal **then** focus the Environment pane | Right dock | `run_command` |
-| Focus request | — (palette only) | focus the Request pane (the centre is always mounted) | Center | `Workspace::focus_panel` |
-| Focus response | — (palette only) | focus the Response pane (the centre is always mounted) | Center | `Workspace::focus_panel` |
+| Focus request | — (menu and palette) | focus the Request pane (the centre is always mounted) | Center | `Workspace::focus_panel` |
+| Focus response | — (menu and palette) | focus the Response pane (the centre is always mounted) | Center | `Workspace::focus_panel` |
 | Close history | — (palette only) | remove the History pane from its dock | Right dock | `Workspace::close_panel` |
 | Close collections | — (palette only) | remove the Collections pane from its dock | Left dock | `Workspace::close_panel` |
 | Close environment | — (palette only) | remove the Environment pane from its dock | Right dock | `Workspace::close_panel` |
@@ -183,18 +185,28 @@ not a registry, so this list is exhaustive.
 | Toggle environment | — (palette only) | reveal the Environment pane | Right dock | `reveal_panel` |
 | Toggle collections | — (palette only) | reveal the Collections pane | Left dock | `reveal_panel` |
 | Toggle side-by-side | — (palette only) | flip the centre between stacked and side by side; persisted in `layout.json` | Center | `Workspace::toggle_center_orientation` |
-| Reset layout | — (palette only) | apply the first-run arrangement and persist it | Left dock + Center | `Workspace::reset_layout` |
+| Reset layout | — (menu and palette) | apply the first-run arrangement and persist it | Left dock + Center | `Workspace::reset_layout` |
 | Settings… | `secondary-,` | open the Settings dialog | Overlay (dialog, 880px) | `Workspace::open_settings` |
 | Keyboard shortcuts | `?` | open the shortcuts sheet, generated from the palette table and the live keymap | Overlay (dialog) | `Workspace::open_shortcuts` |
 | Zoom in | `secondary-=` | scale the whole UI up, persist to `settings.json` | Chrome (all panes redraw) | `Workspace::set_zoom` |
 | Zoom out | `secondary--` | scale the whole UI down | Chrome (all panes redraw) | `Workspace::set_zoom` |
 | Reset zoom | `secondary-0` | return zoom to 100% | Chrome (all panes redraw) | `Workspace::set_zoom` |
+| Command palette… | `secondary-shift-p` | open the command palette | Overlay (dialog) | `Workspace::open_palette` |
+| Copy log path | — (menu only) | write the log file's path to the clipboard, or say there is none | Chrome (flash) | `Workspace::copy_log_path` |
+| Copy recent log | — (menu only) | write the last 200 log lines to the clipboard, or say there is none | Chrome (flash) | `Workspace::copy_recent_log` |
 
 `secondary` is ⌘ on macOS and Ctrl elsewhere. `FocusPanel` reveals before it
 focuses because History, Environment, and Collections are docked, and a focus
 request for a pane no dock shows would aim at nothing; the centre panes are
 always mounted, so the reveal is a no-op for them. Closing a pane removes it
 from the tree but keeps the entity, so `Reset layout` puts it back.
+
+The titlebar menu reads the table's rows and groups them by menu slot — palette
+opener, app commands, View panes, reset layout, log utilities — drawing a
+separator where the slot changes, so its order and its separators are the table's
+and not a second list. A `FocusPanel` row is drawn only for a pane with no
+status-bar toggle, which is why Request and Response are the two the View
+section shows.
 
 Every palette row also indexes its formatted shortcut, so typing `ctrl+shift+v`
 finds Paste cURL instead of only matching the label.
