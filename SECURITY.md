@@ -46,6 +46,8 @@ patched; upgrade instead.
   secret values redacted; the real values live in `restbook.local.json` and the
   history in `.restbook/history.jsonl`. The app writes a `.gitignore` that
   excludes both.
+- **Imports are bounded.** A file over 32 MB is refused before it is read, and a
+  malformed file changes nothing in the store.
 
 ## What is not protected
 
@@ -66,6 +68,10 @@ Read this before sharing a file or a log.
   personal data.
 - **Memory.** Secrets are not zeroized after use. A process that can read the
   app's memory or the keyring can read them.
+- **TLS verification can be turned off per request.** A request's Settings tab
+  has a skip-certificate-verification option. While it is on, that request trusts
+  any certificate and can be intercepted or changed on the network; the URL row
+  and the tab strip mark it so it cannot be left on unnoticed.
 - **The update channel.** Downloads are verified against the digest published in
   the manifest, but builds are not code-signed yet, so a compromised release
   account is not excluded by the signature.
@@ -81,8 +87,6 @@ Dated to `0.1.5`; the fixes are tracked in
   redirect somewhere you do not control.
 - **Stored response bodies have no size cap.** Retention bounds age and count,
   not bytes (`B21`), so one very large response can grow the database.
-- **Imports have no file-size cap** and a small malformed-input corpus
-  (`0.2.7`).
 - **The plaintext fallback is a fallback.** It is what the app does when it
   cannot encrypt; it is not a mode to select.
 

@@ -413,46 +413,40 @@ no test. Add it when that file is next touched.
 
 ### 7.1 A response can land in the tab that is active when it arrives
 
-There is one shared `Document` (`workspace/mod.rs:86`); switching tabs
-snapshots it into the leaving `Tab` and loads the next (`Tab`, `:162`).
-`send()` clones that entity (`send.rs:76`) and the completion writes
-`document.response` (`send.rs:199-203`). Switch tabs mid-send and the arriving
-response is adopted into the newly selected tab's document, while `finish_send`
-clears the pending state of the shared document.
+The original shape was one shared `Document` plus a `Tab` snapshot: switching
+tabs serialized the document into the leaving tab and loaded the next, and
+`send()` captured an index before `cx.spawn`. That left two leaks — `snapshot_active`
+overwrote the sender's `response`/`error`/`last_url` with blank state, and
+`document.pending` crossed the switch, so the tab switched to showed "Sending"
+and could not send.
 
-**Fixed**, and the write-up above understates it: the index was captured before
-`cx.spawn`, which left two leaks.
+**Fixed by taking the larger alternative the audit first set aside**: one
+`Document` entity per tab, not one shared document and a snapshot.
 
-- `select_tab` → `snapshot_active` writes the *shared* document's
-  `response`/`error`/`last_url` into the tab being left. A tab sent from and then
-  left mid-flight had those overwritten with its own blank state, so the arriving
-  response replaced `tab.response` but the URL was gone.
-- `document.pending` crossed the switch, so the tab the user landed on showed
-  "Sending" and could not send — for good, because the resolution path wrote to
-  the sender's snapshot and never cleared the document.
-
-What the code does now:
-
-- `Tab` carries a stable `id` (`new_tab_id()`, monotonic); the send is recorded
-  in `Workspace::sending` by that id, not by the index it started from, so a
-  close or a switch cannot redirect the result. `send()` refuses a second send
-  while `sending` is set, which is the one-send-at-a-time rule the document
-  already implied.
-- Both completion paths branch on `active_tab_id() == Some(send_id)`. The
-  off-screen branch writes `response`, `error`, *and* `last_url` into the
-  sender's snapshot, then clears the visible document's inherited marker with
-  `Document::forget_send` — which drops only `pending`/`progress`/`started_at`,
-  leaving that tab's own frozen stats and outcome alone. `finish_send` would have
-  written a zeroed summary over them.
-- `select_tab` clears the marker too when the tab landed on is not the sender,
-  so the new tab is sendable immediately instead of waiting for a stranger's
-  request. Closing the sending tab frees the slot and clears the marker the same
-  way; the orphaned transfer resolves into nothing.
-
-The progress tick gates on the same id, so a switched-away tab stops ticking and
-resumes nothing when it comes back: it gets the finished response, not a live
-clock. A per-tab `Document` entity is still the larger alternative and would
-change `select_tab`'s snapshot model.
+- `Workspace` holds `documents: HashMap<TabId, Entity<Document>>`; "the" document
+  (`self.document`) is whichever tab is active. `Tab` carries only its stable
+  `id`, no response copy.
+- A send is recorded in `Workspace::sending` by `TabId`. Every write — begin,
+  progress tick, completion, failure — targets `self.documents[&send_id]`,
+  unconditional, so a switch or a close cannot redirect the result. `send()`
+  refuses a second send while `sending` is set: one send at a time.
+- The progress watcher ticks the sender's document directly (`cx.update()` on
+  the stored entity), so a switched-away tab stops ticking and resumes nothing
+  when it comes back — it gets the finished response, not a live clock.
+- Panes observe the active document through a `set_document` swap that re-installs
+  the subscription; each pane also keeps per-tab view state (editor tab, response
+  tab, body scroll) keyed by `EntityId`, so switching tabs restores the view the
+  user left.
+- The OAuth access token lived on the shared editor, not the `Document`, so an
+  asynchronous fetch answering after a switch landed in the tab on screen. The
+  fetch now binds to the `TabId` that started it (`Workspace::apply_token_result`):
+  a still-active tab takes the token in the editor, and a switched-away tab has it
+  written into its own request so returning to it re-adopts the token.
+- A history pick rewrites `last_url` with the restored request, so `url()` — which
+  drives the cookie jar and the history scope — names what is on screen instead of
+  the tab's previous send.
+- The response pane clears an in-progress cookie edit in `set_document`, so a
+  value started in one tab can no longer commit against the next tab's URL.
 
 ### 7.2 Failures only reach the log
 

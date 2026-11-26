@@ -873,6 +873,23 @@ and size live in the response header, beside the body they describe; the footer
 holds only what the pane cannot say (see U43). If you add a field to `Status`,
 ask first which pane would print the same thing.
 
+### Mark a hazardous request setting
+
+A setting that weakens safety — currently `insecure` (skip certificate
+verification) — is drawn where the send happens, not only on the control that set
+it. A user who ticked it once and moved on has no other signal.
+
+- **URL row:** a `TriangleAlert` in `palette.danger` plus a `TLS off` label
+  (id `url-insecure`), hidden below `NARROW_URL_ROW`, with a tooltip naming the
+  hazard. The glyph alone survives the narrow row; the tooltip carries the words.
+- **Tab strip:** a bare `TriangleAlert` on any tab whose request is insecure, so a
+  background tab that will skip verification is visible without selecting it.
+
+Both use `icons::SMALL` and `palette.danger` and read the flag from the active
+`Document` (`document.request.insecure`) or a background tab's `TabEntry` copy.
+The Settings editor tab prints the same warning as a text line beside the
+checkbox, because that is where the user can undo it.
+
 ### Add chrome (titlebar / status-bar content)
 
 `src/workspace/chrome.rs` holds both. They are plain functions returning an

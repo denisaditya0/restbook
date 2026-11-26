@@ -370,8 +370,9 @@ version block; only the MSVC build in the R2 matrix has them.
 
 Most of this is code that either exists or fails, so the list stays short:
 
-- **Dependencies.** `cargo audit` is clean in both workspaces. A vulnerable
-  transitive crate is the one release risk the existing CI does not catch.
+- **Dependencies.** `cargo audit` is clean in both workspaces, and the `audit`
+  job in `ci.yml` runs it on every push so a newly disclosed advisory fails the
+  build before a tag is cut.
 - **Redirects.** No `Authorization`, `Cookie`, or `Proxy-Authorization` crosses a
   host change, and an `https → http` downgrade is refused unless the request is
   `insecure` (`B27`, a rider on `0.1.6`).
@@ -379,7 +380,7 @@ Most of this is code that either exists or fails, so the list stays short:
   host, and path, and no body preview or interaction transcript is written. An
   opt-in ten-minute capture adds those details in a separate timestamped file,
   still with credentials redacted, and that file is removed on the next launch.
-  Both are offered for bug reports, so both have to be safe to attach (`0.2.7`).
+  Both are offered for bug reports, so both have to be safe to attach (`0.1.8`).
 - **Exports.** The export dialog redacts secret values by default; “include
   secrets” is an explicit, warned choice (`B28`).
 - **Storage mode.** The release notes name the history mode the build uses. A

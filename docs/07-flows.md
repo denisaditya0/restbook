@@ -48,6 +48,37 @@ untouched tab opens on one. A tab whose collection node was deleted while the
 app was closed — or a draft whose row is gone — is dropped rather than reopened
 against nothing, and one message names how many were dropped.
 
+Switching tabs swaps the whole `Document`, not a snapshot of one: each tab owns
+its request and its response, and `select_tab` hands the new entity to every pane
+through `set_document`. Per-tab view state is the request editor tab, the response
+Body/Headers/Cookies tab, and the body scroll position. Shared across tabs: the
+pretty/raw toggle, the find query and whether its row is open, the failure
+Details disclosure, the in-progress cookie edit (cleared when the tab changes),
+the center orientation, and zoom. A response that arrives after the user has
+switched away still lands in the tab that sent it, so the tab on screen never
+shows another tab's result. An OAuth fetch is bound the same way to the tab that
+asked for it, so a token that answers after a switch does not appear on the tab
+now on screen.
+
+Only open tabs hold a document: closing a tab drops its response, and a restart
+reopens the tabs without their responses — History is the durable copy. One send
+runs at a time (`Workspace::sending`); while it is on the wire, its own tab shows
+a spinner in the strip's status slot and every other tab's **Send** is disabled
+with a tooltip naming the reason, so a second send is refused rather than
+silently dropped.
+
+A history pick loads the stored request and response into the active tab, so it
+keeps that tab's collection binding and replaces its content without asking.
+`last_url` follows the picked request, so the cookie jar and the history scope
+name what is on screen. Opening a pick in its own tab, and detaching a bound tab
+from a request a pick replaced, are recorded as open in `01-milestones.md`.
+
+A request that skips certificate verification says so on the center surface, in
+`palette.danger`: a `TLS off` chip beside the URL field (glyph only in a narrow
+row, hazard in the tooltip) and a `TriangleAlert` on its tab. The mark follows
+the flag, so the tab a send would weaken is visible before it is selected; the
+Settings editor tab carries the same words beside the checkbox that clears it.
+
 The center opens as **Request over Response**, but it is no longer fixed. The
 control is at the right edge of the **response header**, beside the status
 summary: `Columns2` flips the centre to a horizontal split and `Rows3` stacks it
