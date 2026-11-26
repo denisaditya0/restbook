@@ -39,6 +39,10 @@ debug = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+# Drop dependency debug info: it is what makes the dev binary ~500 MB and the
+# link a minute of work, and it is not stepped into. The app crate keeps
+# `debug = 1`, which is the code a developer actually debugs.
+debug = false
 
 [features]
 # The encrypted history database, on by default: this app is run locally and
