@@ -1695,6 +1695,10 @@ impl ResponsePanel {
                 // and `Scrollable`'s wrapper caps the content at the viewport.
                 // `a_raw_body_is_wider_than_the_viewport` pins this.
                 .overflow_scroll()
+                // Lock to the gesture's dominant axis for its whole duration. The
+                // default picks it per event, so a diagonal two-finger scroll
+                // alternates sideways/down; this holds one axis until the flick ends.
+                .restrict_scroll_to_axis()
                 .items_start()
                 .px(px(self.metrics.space_lg))
                 .py(px(self.metrics.space_sm))
@@ -1777,6 +1781,10 @@ impl ResponsePanel {
             // As the pretty view above: the raw line must keep its max-content
             // width to scroll sideways, which the `Scrollable` wrapper caps.
             .overflow_x_scroll()
+            // Without the axis lock a vertical flick nudges the small residual
+            // `x` delta and the rows drift sideways. The `uniform_list` inside
+            // reads only `y`, so this outer axis is the only one that can drift.
+            .restrict_scroll_to_axis()
             .py(px(self.metrics.space_sm))
             .font_family(palette.mono_font.clone())
             .text_size(px(self.metrics.font_small))
