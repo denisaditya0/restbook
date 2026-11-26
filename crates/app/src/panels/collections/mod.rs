@@ -776,6 +776,27 @@ impl CollectionsPanel {
         self.save_request(node, name, target, None, cx)
     }
 
+    /// Overwrite the request stored at `node` with `request`, then persist its
+    /// collection. The quit path saves a dirty bound tab without switching to
+    /// it, so it cannot read the live document the way [`Self::save_request`]
+    /// does. Returns whether the write landed.
+    pub(crate) fn save_request_at(
+        &mut self,
+        node: &str,
+        request: RequestDef,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(collection_id) = owner_collection(&self.collections, node) else {
+            return false;
+        };
+        let Some(saved) = find_saved_mut(&mut self.collections, node) else {
+            return false;
+        };
+        saved.request = request;
+        self.revision += 1;
+        self.persist(&collection_id, None, cx)
+    }
+
     /// The selected collection as `(id, name)`, for a command that acts on one
     /// collection rather than on the tree.
     pub(crate) fn selected_collection(&self) -> Option<(&str, &str)> {

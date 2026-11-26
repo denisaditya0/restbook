@@ -89,6 +89,33 @@ intent, and the fit is re-derived on the next launch. The kit's 100 px split
 floor is unchanged: the handle can still narrow a pane to 100 px by hand, and
 the panes stay responsive below their breakpoints.
 
+## Quitting the window
+
+Closing the window is the only user-reachable quit; the app binds no Quit
+command, so a close is also a quit. The close is cancellable: `save_on_close`
+registers `on_window_should_close`, and `Workspace::close_window` returns
+`false` to keep the window open while a question is unanswered.
+
+| State | What close does | Source |
+|---|---|---|
+| No dirty collection-bound tab | flush layout and drafts, close | `Workspace::flush` |
+| `save_on_quit = Always save` | write every dirty bound tab into its node, then flush, close | `Workspace::save_dirty_bound_tabs` |
+| `save_on_quit = Don't save` | flush, close; the bound edits are dropped | `Workspace::flush` |
+| `save_on_quit = Ask` (default) | show the prompt, return `false`; its buttons close the window | `Workspace::open_quit_dialog` |
+
+The prompt lists the dirty bound tabs and offers *Save and quit*, *Discard and
+quit*, and *Cancel*. A *Remember my choice* tick writes *Always save* or *Don't
+save* to Settings (`Settings › General › Quitting`), where it can be set back to
+*Ask every time*. An unbound draft is never in the prompt: the debounce already
+wrote its row, so closing loses nothing.
+
+**Cancel means cancel here.** Every other alert in the app performs the action
+when its Cancel/confirm pair is dismissed the other way; this dialog's Cancel
+aborts the whole close, because the close was cancelled to show it. A quit that
+closes no window (the update installer's `App::quit`) cannot prompt — gpui-pre
+awaits those quit observers and they cannot be cancelled — so it flushes drafts
+and closes.
+
 ## Global chrome (always visible)
 
 | Element | Shows | Source |
