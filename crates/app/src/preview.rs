@@ -239,6 +239,11 @@ impl PreviewRoot {
             current.zoom,
             current.appearance,
         );
+        // A capture must show the user's theme, not the component defaults:
+        // switch the kit theme to the appearance, then lay the theme file over it.
+        let mode = current.appearance.mode(Some(window.appearance()));
+        gpui_kit::component::Theme::change(mode, Some(window), cx);
+        theme::sync_component_theme(cx);
 
         let fixture = Fixture {
             store,
