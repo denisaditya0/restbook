@@ -38,6 +38,8 @@ actions!(
         /// Save the active request as a new collection entry, even when its tab
         /// came from one. The dialog opens with the current name prefilled.
         SaveRequestAs,
+        /// Rename the selected Collections row in place (`f2`).
+        RenameSelected,
         /// Focus the URL field of the request pane (`secondary-l`).
         FocusUrl,
         /// Open find in the response body (`secondary-f`).
@@ -113,6 +115,10 @@ pub(crate) fn bindings(cx: &App) -> Vec<KeyBinding> {
         // Save is the request pane's own button; it has no palette row, so the
         // key is declared beside the action it runs.
         bound(cx, "secondary-s", SaveRequest, None),
+        // `F2` renames the selected sidebar row. Scoped to the Collections pane's
+        // key context so a press in a body input cannot rename a collection the
+        // user is not looking at.
+        bound(cx, "f2", RenameSelected, Some("Collections")),
         // Emacs-style next/previous inside the command palette. The palette
         // already binds Up/Down; these aliases let a keyboard-only user stay
         // on the home row. Scoped to the palette's own key context, so Ctrl+N
@@ -362,6 +368,34 @@ mod tests {
 
         assert_eq!(strokes(NextTab::name_for_type()), ["tab", "pagedown"]);
         assert_eq!(strokes(PreviousTab::name_for_type()), ["tab", "pageup"]);
+    }
+
+    /// `F2` renames the selected sidebar row, so it must stay scoped to the
+    /// Collections pane: window-wide it would rename a collection while the user
+    /// is typing in a body input.
+    #[test]
+    fn the_rename_shortcut_is_scoped_to_the_collections_pane() {
+        use gpui_kit::Action as _;
+        use gpui_kit::AsKeystroke as _;
+
+        use super::RenameSelected;
+
+        let bindings = app_bindings();
+        let binding = bindings
+            .iter()
+            .find(|b| b.action().name() == RenameSelected::name_for_type())
+            .expect("the rename action is bound");
+        let stroke = binding
+            .keystrokes()
+            .first()
+            .expect("the rename action has a keystroke")
+            .as_keystroke();
+
+        assert_eq!(stroke.key, "f2", "rename opens on the F2 key");
+        assert!(
+            binding.predicate().is_some(),
+            "f2 needs a context predicate, or it would fire over any pane"
+        );
     }
 
     /// The dock shortcuts have to be the keys their documentation promises, and

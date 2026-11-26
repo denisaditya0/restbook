@@ -32,7 +32,7 @@ use self::tree::{
 
 pub(crate) use self::tree::{import_into, Destination, DestinationRow, ImportOutcome};
 
-use crate::actions::{shortcut, ImportFile, PasteCurl};
+use crate::actions::{shortcut, ImportFile, PasteCurl, RenameSelected};
 use crate::document::Document;
 use crate::icons::{self, IconName};
 use crate::notice::Notice;
@@ -891,6 +891,16 @@ impl CollectionsPanel {
         }
     }
 
+    /// Start renaming the selected row, the keyboard twin of the row menu's
+    /// Rename. A tree with nothing selected is silent: there is no row to name.
+    fn rename_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = selection_target(&self.selection) else {
+            return;
+        };
+        let id = target.id().to_owned();
+        self.start_rename(&id, window, cx);
+    }
+
     fn start_rename(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let current = node_name(&self.collections, id).unwrap_or_default();
         self.renaming = Some(id.to_owned());
@@ -1629,9 +1639,12 @@ fn collection_row(
             .on_click({
                 let panel = panel.clone();
                 let id = row.id.to_string();
-                move |_, _, app| {
+                move |_, window, app| {
                     panel.update(app, |this, cx| {
                         this.selection = Selection::collection(&id);
+                        // Give the pane keyboard focus, so `f2` (scoped to the
+                        // `Collections` context) reaches the tree after a click.
+                        window.focus(&this.focus_handle, cx);
                         cx.notify();
                     });
                 }
@@ -1725,13 +1738,14 @@ fn folder_row(
                 let panel = panel.clone();
                 let collection = row.collection.to_string();
                 let path: Vec<String> = row.path.iter().map(|id| id.to_string()).collect();
-                move |_, _, app| {
+                move |_, window, app| {
                     panel.update(app, |this, cx| {
                         this.selection = Selection {
                             collection: Some(collection.clone()),
                             folders: path.clone(),
                             request: None,
                         };
+                        window.focus(&this.focus_handle, cx);
                         cx.notify();
                     });
                 }
@@ -1814,13 +1828,14 @@ fn request_row(
                 let collection = row.collection.to_string();
                 let path: Vec<String> = row.path.iter().map(|id| id.to_string()).collect();
                 let id = row.id.to_string();
-                move |_, _, app| {
+                move |_, window, app| {
                     panel.update(app, |this, cx| {
                         this.selection = Selection {
                             collection: Some(collection.clone()),
                             folders: path.clone(),
                             request: Some(id.clone()),
                         };
+                        window.focus(&this.focus_handle, cx);
                         // Read the request at click time rather than caching a
                         // copy per row; the flattened row carries only what a
                         // row draws.
@@ -1925,6 +1940,12 @@ impl Render for CollectionsPanel {
             .size_full()
             .bg(bg)
             .track_focus(&self.focus_handle)
+            .key_context("Collections")
+            .on_action(
+                cx.listener(|this, _: &RenameSelected, window, cx| {
+                    this.rename_selected(window, cx)
+                }),
+            )
             .child(self.render_header(cx))
             .children(self.composing.then(|| self.render_new_collection(cx)))
             .children((!self.drafts.is_empty()).then(|| self.render_unsaved(cx)))
@@ -1949,7 +1970,10 @@ fn new_id() -> String {
 mod tests {
     use std::sync::Arc;
 
-    use gpui_kit::{AppContext as _, TestAppContext};
+    use gpui_kit::{
+        AppContext as _, KeyDownEvent, Keystroke, Modifiers, PlatformInput, TestAppContext,
+        VisualTestContext,
+    };
     use restbook_core::{Collection, CollectionItem, Folder, Store};
     use restbook_store::{FolderStore, MemoryStore};
 
@@ -2068,6 +2092,68 @@ mod tests {
     ) {
         let document = cx.update(|cx| cx.new(|_| Document::new()));
         cx.add_window_view(|window, cx| CollectionsPanel::new(store, document, window, cx))
+    }
+
+    /// Dispatch `F2` through the real keymap, after a paint, the way the
+    /// platform delivers a function key: a `KeyDownEvent` with no text.
+    fn press_f2(cx: &mut VisualTestContext) {
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+            window.dispatch_event(
+                PlatformInput::KeyDown(KeyDownEvent {
+                    keystroke: Keystroke {
+                        modifiers: Modifiers::default(),
+                        key: "f2".to_owned(),
+                        key_char: None,
+                    },
+                    is_held: false,
+                    prefer_character_input: false,
+                }),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+    }
+
+    /// `F2` renames the selected row: the keyboard route the row menu also
+    /// offers. It fires because the pane declares the `Collections` key context
+    /// the binding is scoped to, so this also pins that the two agree.
+    #[gpui_kit::test]
+    fn f2_arms_the_rename_on_the_selected_row(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        crate::test_support::init_ui(cx);
+        // `main` installs the keymap; a test that skips it has no bindings to
+        // dispatch, so the action could never fire.
+        cx.update(|cx| cx.bind_keys(crate::actions::bindings(cx)));
+
+        let store = Arc::new(MemoryStore::new());
+        store
+            .save_collection(&Collection {
+                id: "col-a".to_owned(),
+                name: "A".to_owned(),
+                items: Vec::new(),
+            })
+            .unwrap();
+        let (panel, cx) = open(cx, store);
+
+        // Paint once so the pane's tracked focus handle is registered; a focus
+        // set before that lands on nothing.
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        cx.update(|window, cx| {
+            panel.update(cx, |this, cx| {
+                this.selection = Selection::collection("col-a");
+                window.focus(&this.focus_handle, cx);
+                cx.notify();
+            });
+        });
+        press_f2(cx);
+
+        let renaming = cx.update(|_, cx| panel.read(cx).renaming.clone());
+        assert_eq!(renaming.as_deref(), Some("col-a"));
     }
 
     /// A move writes both collections; the store is what proves the request left
