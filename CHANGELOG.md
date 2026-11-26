@@ -24,6 +24,18 @@ Contributors and pull requests are added to the release page by `release.yml`;
 do not write them here.
 -->
 
+## 0.2.4
+
+- **The window menu has a View section.** The titlebar's View menu lists every
+  pane with a check beside the one that is open, and a pane can be focused or
+  closed from it and from the command palette.
+- **F2 renames a row in place.** Press F2 on a selected collection, folder, or
+  request to edit its name directly: the whole name is selected, Enter saves it,
+  and Escape cancels.
+- **F6 moves focus between panes.** F6 and Shift+F6 cycle forward and backward
+  through the panes, wrapping at the ends and opening a closed dock so focus
+  never lands somewhere hidden.
+
 ## 0.2.3
 
 - **A new window starts on Collections alone.** A first run opens with your
