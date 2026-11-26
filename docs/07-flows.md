@@ -286,7 +286,7 @@ should not disappear when the user switches to Headers or Cookies.
 | `All` / `This request` | scope the list to every send, or to the owner of the request on screen (URL fallback for a `Standalone` one); the request scope follows a tab switch | Right dock |
 | Search box | filter the scoped list by URL text | Right dock |
 | Filter button | one menu with method, status class, and a sent-within preset; checked items are the state, and *Clear filters* resets all three | Right dock |
-| Row click | `HistoryEvent::Picked { id }`: load the full entry, adopt the request **and** show the stored response | Right dock → Center |
+| Row click | `HistoryEvent::Picked { id }`: load the full entry, adopt the request **and** show the stored response in the active tab; with every tab closed the pick revives one first | Right dock → Center |
 | Row trash | `HistoryEvent::Delete { id }`: delete the send (alert dialog) | Right dock |
 
 ### Request editor tabs (in-pane)
