@@ -38,7 +38,7 @@ Priority:
 | 1.11 Tab tooltip with method + URL | `RequestPanel::render_tab_strip` |
 | 1.12 Overflow tab list | `RequestPanel::render_tab_strip` |
 | 2.1 Separate modified vs would-lose-content | `is_unsaved`, `close_needs_confirmation` |
-| 2.2 Dirty bound tabs are not lost on quit | `Workspace::flush`, `save_on_close` |
+| 2.2 Quit warns about dirty saved-origin tabs, with a remembered choice | `Workspace::close_window`, `Workspace::finish_quit` |
 | 2.3 Save As for a bound tab | `Workspace::save_active_as`, `SaveRequestAs` |
 | 2.4 Stable tab identity | `workspace/tabs.rs` (`TabId`, `TabEntry: PartialEq`) |
 | 2.5 One owner for tab state | `workspace/tabs.rs` (`TabState`) |
@@ -222,20 +222,6 @@ deletes its draft row. Two different questions share one flag.
 
 Refs: `crates/app/src/panels/request.rs` (`is_unsaved`),
 `crates/app/src/workspace/mod.rs` (`Tab.saved`, `Tab.draft`).
-
-### 2.2 Quit does not warn about dirty saved-origin tabs — **P2**
-
-`flush` persists drafts, so draft tabs survive a quit. A tab bound to a
-collection node that was edited but not saved is lost with no prompt.
-
-**Fix:** decide one policy and write it down:
-
-- auto-save a draft of dirty bound tabs on quit, or
-- prompt on close (hard: async dialogs during `on_window_should_close`).
-
-The first is simpler and fits the existing draft mechanism.
-
-Refs: `Workspace::flush`, `Workspace::flush_draft`, `save_on_close`.
 
 ### 2.3 No "Save As" for a bound tab — **P2**
 
