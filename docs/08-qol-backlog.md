@@ -370,6 +370,29 @@ has gone away falls back to the default bounds.
 
 Refs: `main.rs` (`WindowOptions.window_bounds`), `workspace/persistence.rs`.
 
+### 3.12 The URL's query string is not shown in the Params tab — **P2**
+
+`RequestDef.url` may carry `?key=value` and `RequestDef.params` is a second,
+separate list. `prepare()` keeps the URL's query and appends the enabled param
+rows after it, so a pasted address with `?mpeNumber=…` sends correctly but the
+Params tab reads "No rows yet", and the two are never reconciled — a param row
+with the same key as the URL sends that key twice. Postman parses the URL query
+into the Params table and strips it from the URL, which is why the empty table
+looks wrong here.
+
+**Fix:** pick one of two policies:
+
+- **Copy only** — keep the two sources, but the Params empty state names the URL
+  query ("The query string in the URL is sent as-is") while the URL contains a
+  `?`.
+- **Sync** — on paste or blur, parse the URL query into `params` rows and strip
+  it from the URL, the way `import/bruno.rs` merges them. Only on a committed
+  edit, never per keystroke, and only when it round-trips losslessly.
+
+Refs: `core/src/prepare.rs` (`prepare_with` query folding),
+`panels/editor/kv_table.rs`, `panels/editor/mod.rs` (Params tab),
+`core/src/import/bruno.rs` (`query_rows`).
+
 ## 4. Dialogs and destructive actions
 
 Prompts are app-only by construction: `crates/core`, `crates/transport`, and

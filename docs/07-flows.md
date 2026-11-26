@@ -274,6 +274,9 @@ Five tabs, from the `EditorTab` enum: **Params, Headers, Body, Auth, Settings**.
 | Auth | kind strip: None / Basic / Bearer / API key; API key has a "query string" checkbox |
 | Settings | timeout, follow-redirects, insecure TLS |
 
+The table shows `RequestDef.params` only. A query string typed into the URL row
+is sent as-is and does not appear here; the two are not reconciled (3.12).
+
 The Send guard treats `{{$generator}}` differently from `{{name}}`: generators
 (`$randomInt`, `$uuid`) resolve at send time in `restbook_core::template`, so
 the unresolved list and the environment inspector skip every `$`-prefixed name.
