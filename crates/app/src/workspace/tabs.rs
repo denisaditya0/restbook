@@ -658,6 +658,55 @@ impl Workspace {
         self.persist_tabs(cx);
     }
 
+    /// Restore a stored send into the editor, its response included, without
+    /// sending. The pick lands in the active tab; with every tab closed it
+    /// revives one first, because the request pane would otherwise keep drawing
+    /// its empty state over the restored document.
+    pub(crate) fn pick_history(&mut self, id: i64, cx: &mut Context<Self>) {
+        let entry = match self.store.get_history(id) {
+            Ok(Some(entry)) => entry,
+            Ok(None) => {
+                // The row vanished between the search and the click (for
+                // example, a store replaced on disk). Nothing to restore.
+                log::warn!(target: "restbook_app::ui", "history pick: id={id} vanished");
+                return;
+            }
+            Err(error) => {
+                log::error!(target: "restbook_app::ui", "history pick: id={id} failed: {error}");
+                self.document.update(cx, |document, cx| {
+                    document.error = Some(error.failure());
+                    cx.notify();
+                });
+                return;
+            }
+        };
+        log::info!(
+            target: "restbook_app::ui",
+            "history pick: restored {} {}",
+            entry.request.method,
+            crate::logging::redact_url(&entry.request.url),
+        );
+        let index = self.ensure_active_tab();
+        // The editor queues the request for its next render; the document has
+        // to be told on the same tick or Send reads the previous URL.
+        self.panes.request.update(cx, |panel, cx| {
+            panel.adopt_request(entry.request.clone(), cx)
+        });
+        self.document.update(cx, |document, cx| {
+            document.request = entry.request.clone();
+            document.response = Some(entry.response.clone());
+            document.error = None;
+            cx.notify();
+        });
+        // A switch back adopts the tab's snapshot, so it holds the pick rather
+        // than the request it replaced.
+        let tab = &mut self.tabs[index];
+        tab.request = entry.request;
+        tab.response = Some(entry.response);
+        tab.error = None;
+        self.push_tabs(cx);
+    }
+
     /// Open a new request tab whose URL is the text on the clipboard.
     ///
     /// A multi-line paste often carries a stray blank line, so the first
@@ -731,10 +780,10 @@ impl Workspace {
     }
 
     /// The active tab, creating a fresh one when the last tab was closed.
-    /// Opening a saved request or a draft from the sidebar is the one action
-    /// that revives an empty editor, so it is factored out instead of repeated
-    /// in each event arm.
-    fn ensure_active_tab(&mut self) -> usize {
+    /// Opening a saved request, a draft, or a history pick is what revives an
+    /// empty editor, so it is factored out instead of repeated in each event
+    /// arm.
+    pub(crate) fn ensure_active_tab(&mut self) -> usize {
         if self.tabs.is_empty() {
             self.tabs.push(Tab::blank());
             self.tabs.set_active(0);

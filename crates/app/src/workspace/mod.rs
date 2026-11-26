@@ -488,55 +488,15 @@ impl Workspace {
     fn listen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.subscribe(&self.panes.history, |this, _, event: &HistoryEvent, cx| {
             log::debug!(target: "restbook_app::ui", "{}", event.summary());
-            let id = match event {
-                HistoryEvent::Picked { id } => *id,
+            match event {
+                HistoryEvent::Picked { id } => this.pick_history(*id, cx),
                 HistoryEvent::Delete { id } => {
                     this.pending_delete = Some(PendingDelete::HistorySend(*id));
                     cx.notify();
-                    return;
                 }
                 HistoryEvent::ClearAll => {
                     this.pending_delete = Some(PendingDelete::AllHistory);
                     cx.notify();
-                    return;
-                }
-            };
-            match this.store.get_history(id) {
-                Ok(Some(entry)) => {
-                    log::info!(
-                        target: "restbook_app::ui",
-                        "history pick: restored {} {}",
-                        entry.request.method,
-                        crate::logging::redact_url(&entry.request.url),
-                    );
-                    // The full request goes to the editor, so params, headers,
-                    // body, and auth come back — not just method and URL. The
-                    // stored response is shown without a send.
-                    this.panes.request.update(cx, |panel, cx| {
-                        panel.adopt_request(entry.request.clone(), cx)
-                    });
-                    // The editor only queues the request for its next render, so
-                    // the document has to be told now. Send reads the document,
-                    // and without this the button stays inert until a second
-                    // click re-fires the editor's observer.
-                    this.document.update(cx, |document, cx| {
-                        document.request = entry.request;
-                        document.response = Some(entry.response);
-                        document.error = None;
-                        cx.notify();
-                    });
-                }
-                Ok(None) => {
-                    // The row vanished between the search and the click (for
-                    // example, a store replaced on disk). Nothing to restore.
-                    log::warn!(target: "restbook_app::ui", "history pick: id={id} vanished");
-                }
-                Err(error) => {
-                    log::error!(target: "restbook_app::ui", "history pick: id={id} failed: {error}");
-                    this.document.update(cx, |document, cx| {
-                        document.error = Some(error.failure());
-                        cx.notify();
-                    });
                 }
             }
         })
@@ -1757,6 +1717,71 @@ mod tests {
             });
             assert!(!landed);
             assert!(collections(cx, &workspace).is_empty());
+        }
+    }
+
+    /// Every tab can be closed, and the request pane then draws its empty
+    /// state. A history pick has to revive a tab, or the request it restores is
+    /// written into a document nothing paints.
+    mod history_pick {
+        use gpui_kit::TestAppContext;
+        use restbook_core::{HistoryEntry, Method, RequestDef, ResponseBody, ResponseRecord};
+
+        use super::super::Workspace;
+
+        fn responded() -> ResponseRecord {
+            ResponseRecord {
+                status: 200,
+                headers: Vec::new(),
+                body: ResponseBody::Memory(b"{}".to_vec()),
+                duration_ms: 5,
+                received_at: Default::default(),
+                final_url: None,
+                redirects: Vec::new(),
+            }
+        }
+
+        #[gpui_kit::test]
+        fn a_pick_with_every_tab_closed_reopens_one(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("history-pick-no-tab");
+            let (workspace, cx) = cx.add_window_view(Workspace::new);
+
+            let id = cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    let id = workspace
+                        .store
+                        .append_history(&HistoryEntry {
+                            id: 0,
+                            request: RequestDef::new(Method::Get, "https://api.test/picked"),
+                            response: responded(),
+                            url: "https://api.test/picked".to_owned(),
+                            origin: Default::default(),
+                        })
+                        .expect("the store records the send");
+                    while workspace.tabs.len() > 0 {
+                        let tab = workspace.tabs[0].id;
+                        workspace.close_tab(tab, cx);
+                    }
+                    id
+                })
+            });
+
+            cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| workspace.pick_history(id, cx));
+            });
+            cx.run_until_parked();
+
+            let (tabs, url) = cx.update(|_, cx| {
+                let workspace = workspace.read(cx);
+                (
+                    workspace.tabs.len(),
+                    workspace.panes.request.read(cx).current_request(cx).url,
+                )
+            });
+            assert_eq!(tabs, 1, "the pick must leave a tab open for the request");
+            assert_eq!(url, "https://api.test/picked");
         }
     }
 
