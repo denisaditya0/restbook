@@ -407,6 +407,8 @@ Each stage above is a type in `crates/core`; the stage-to-directory map is in
 
 The command table above is the part most likely to drift. `Command` in
 `panels/command_palette.rs` is guarded by a test that fails if a row is added
-without appearing in this document, mirroring how `actions::bindings()` is
-guarded by `every_binding_parses` (`actions.rs`). See the `mod tests` block in
+without appearing in this document. The **Keybinding** column is not kept by
+hand: a row carries its keys, and `actions::bindings()` turns them into the
+keymap, so this column restates the rows rather than duplicating them (the
+`every_action_row_is_bound` test pins it). See the `mod tests` block in
 `command_palette.rs`.
