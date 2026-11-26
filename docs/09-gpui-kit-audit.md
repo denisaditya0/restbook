@@ -33,10 +33,10 @@ one got, so they read as history, not as a to-do list.
   (the status bar and flash now take `&Metrics`). Dialog widths use the rem
   helpers, and the dock widths multiply by `theme::zoom(cx)` at all five call
   sites — the audit listed four.
-- **Theme reaches the components** — `theme::sync_component_theme` lays the
-  theme file's roles over the live kit `Theme` after `apply_appearance` switches
-  it, so the primitives and the kit components share one palette instead of the
-  panes reading the file and the components reading the kit default.
+- **Theme reaches the controls** — `theme::sync_component_theme` lays the theme
+  file's roles over the live kit `Theme` after `apply_appearance` switches it
+  (and in the `--preview` root), so buttons, inputs, menus, dialogs, scrollbars
+  and the tab bar share the panes' palette instead of the kit defaults.
 - **§2 Stable identity** — done. `kv_table::Row`, `parts_table::PartRow`, and the
   environment `Row` carry an `id` from an atomic counter, and every remove/action
   payload is that id. Request tabs, completions, and crumbs key on `node` /

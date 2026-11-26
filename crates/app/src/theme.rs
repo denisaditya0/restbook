@@ -171,13 +171,13 @@ pub(crate) fn appearance(cx: &App) -> Appearance {
     ThemeRegistry::get(cx).appearance
 }
 
-/// Lay the active theme file's roles over the live component theme.
+/// Push the active theme file's roles onto the live component theme.
 ///
-/// `apply_appearance` first switches the component theme to the built-in
-/// light/dark set, so this must run after it: a mode switch reloads the built-in
-/// colors. Every `gpui-kit` component then draws from the same surfaces, text,
-/// borders, and accents the panes get from [`Palette`]. A role the file does not
-/// set keeps the component theme's value.
+/// `apply_appearance` switches the component theme to the built-in light/dark
+/// set first, so this must run after it: a mode switch reloads the built-in
+/// colors. Every `gpui-kit` control — button, input, menu, dialog, scrollbar,
+/// tab bar — then paints from the same palette the panes get from [`Palette`].
+/// A role the file leaves out keeps the component theme's value.
 pub(crate) fn sync_component_theme(cx: &mut App) {
     let registry = ThemeRegistry::get(cx);
     let Some(colors) = registry.file.colors_for(cx.theme().is_dark()) else {
@@ -186,6 +186,7 @@ pub(crate) fn sync_component_theme(cx: &mut App) {
 
     gpui_kit::component::Theme::update(cx, |theme| {
         let c = &mut theme.colors;
+        // Surfaces and chrome.
         set_role(&colors.background, &mut c.background);
         set_role(&colors.tab_bar, &mut c.tab_bar);
         set_role(&colors.tab_active, &mut c.tab_active);
@@ -193,24 +194,54 @@ pub(crate) fn sync_component_theme(cx: &mut App) {
         set_role(&colors.sidebar_accent, &mut c.sidebar_accent);
         set_role(&colors.title_bar, &mut c.title_bar);
         set_role(&colors.status_bar, &mut c.status_bar);
-        // The chrome hairline is one color; give it to both bar borders so the
-        // kit's TitleBar and StatusBar match the app's own chrome.
+        // One hairline feeds both bar borders.
         set_role(&colors.chrome_border, &mut c.title_bar_border);
         set_role(&colors.chrome_border, &mut c.status_bar_border);
+        // Rows and text.
         set_role(&colors.list_hover, &mut c.list_hover);
         set_role(&colors.list_active, &mut c.list_active);
         set_role(&colors.segmented, &mut c.tab_bar_segmented);
         set_role(&colors.foreground, &mut c.foreground);
         set_role(&colors.muted, &mut c.muted_foreground);
         set_role(&colors.subtle, &mut c.secondary_foreground);
+        set_role(&colors.subtle, &mut c.button_secondary_foreground);
         set_role(&colors.border, &mut c.border);
         set_role(&colors.input_border, &mut c.input);
         set_role(&colors.hover, &mut c.secondary_hover);
+        set_role(&colors.hover, &mut c.button_secondary_hover);
         set_role(&colors.selected, &mut c.secondary_active);
+        set_role(&colors.selected, &mut c.button_secondary_active);
         set_role(&colors.success, &mut c.success);
         set_role(&colors.warning, &mut c.warning);
         set_role(&colors.info, &mut c.info);
         set_role(&colors.danger, &mut c.danger);
+        // Primary fill. A `.primary()` control paints the `button_primary`
+        // token, which is built from its own color, so setting only `primary`
+        // would leave the button on the kit's blue.
+        set_role(&colors.primary, &mut c.primary);
+        set_role(&colors.primary, &mut c.button_primary);
+        set_role(&colors.primary_foreground, &mut c.primary_foreground);
+        set_role(&colors.primary_foreground, &mut c.button_primary_foreground);
+        set_role(&colors.primary_hover, &mut c.primary_hover);
+        set_role(&colors.primary_hover, &mut c.button_primary_hover);
+        set_role(&colors.primary_active, &mut c.primary_active);
+        set_role(&colors.primary_active, &mut c.button_primary_active);
+        set_role(&colors.secondary, &mut c.secondary);
+        set_role(&colors.secondary, &mut c.button_secondary);
+        // Menus, overlays, focus, scroll, tabs.
+        set_role(&colors.accent, &mut c.accent);
+        set_role(&colors.accent_foreground, &mut c.accent_foreground);
+        set_role(&colors.popover, &mut c.popover);
+        set_role(&colors.popover_foreground, &mut c.popover_foreground);
+        set_role(&colors.caret, &mut c.caret);
+        set_role(&colors.selection, &mut c.selection);
+        set_role(&colors.scrollbar, &mut c.scrollbar);
+        set_role(&colors.scrollbar_thumb, &mut c.scrollbar_thumb);
+        set_role(&colors.scrollbar_thumb_hover, &mut c.scrollbar_thumb_hover);
+        set_role(&colors.tab_foreground, &mut c.tab_foreground);
+        set_role(&colors.tab_active_foreground, &mut c.tab_active_foreground);
+        set_role(&colors.overlay, &mut c.overlay);
+        set_role(&colors.ring, &mut c.ring);
     });
 }
 
@@ -455,6 +486,26 @@ pub(crate) struct ColorRoles {
     pub danger: Option<String>,
     pub danger_wash: Option<String>,
     pub danger_border: Option<String>,
+    // Component roles: surfaces and accents the kit components paint with but
+    // a pane never names. See `sync_component_theme` for where they land.
+    pub primary: Option<String>,
+    pub primary_foreground: Option<String>,
+    pub primary_hover: Option<String>,
+    pub primary_active: Option<String>,
+    pub secondary: Option<String>,
+    pub accent: Option<String>,
+    pub accent_foreground: Option<String>,
+    pub popover: Option<String>,
+    pub popover_foreground: Option<String>,
+    pub caret: Option<String>,
+    pub selection: Option<String>,
+    pub scrollbar: Option<String>,
+    pub scrollbar_thumb: Option<String>,
+    pub scrollbar_thumb_hover: Option<String>,
+    pub tab_foreground: Option<String>,
+    pub tab_active_foreground: Option<String>,
+    pub overlay: Option<String>,
+    pub ring: Option<String>,
 }
 
 /// The metric half of a theme file. All numbers, all optional, so a file that
@@ -526,6 +577,24 @@ impl ColorRoles {
             && self.warning.is_none()
             && self.info.is_none()
             && self.danger.is_none()
+            && self.primary.is_none()
+            && self.primary_foreground.is_none()
+            && self.primary_hover.is_none()
+            && self.primary_active.is_none()
+            && self.secondary.is_none()
+            && self.accent.is_none()
+            && self.accent_foreground.is_none()
+            && self.popover.is_none()
+            && self.popover_foreground.is_none()
+            && self.caret.is_none()
+            && self.selection.is_none()
+            && self.scrollbar.is_none()
+            && self.scrollbar_thumb.is_none()
+            && self.scrollbar_thumb_hover.is_none()
+            && self.tab_foreground.is_none()
+            && self.tab_active_foreground.is_none()
+            && self.overlay.is_none()
+            && self.ring.is_none()
     }
 }
 
@@ -704,6 +773,34 @@ mod tests {
     // macro set shadows `#[test]`.
     use super::{parse, strip_comments, Metrics};
 
+    #[gpui_kit::test]
+    fn the_theme_file_colors_reach_the_component_theme(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::component::{ActiveTheme as _, Theme, ThemeMode};
+
+        cx.update(gpui_kit::init);
+        cx.update(|cx| {
+            super::ThemeRegistry::install(cx, super::DEFAULT_THEME, 1.0, super::Appearance::Dark);
+            Theme::change(ThemeMode::Dark, None, cx);
+            super::sync_component_theme(cx);
+
+            let theme = cx.theme();
+            // Panes and controls share the file's charcoal, not the kit default.
+            assert_eq!(theme.background, cb("#1b1d21"));
+            assert_eq!(theme.foreground, cb("#e6e8ec"));
+            // The roles a control needs but a pane never names.
+            assert_eq!(theme.primary, cb("#6cb6e8"));
+            assert_eq!(theme.button_primary, cb("#6cb6e8"));
+            assert_eq!(theme.popover, cb("#202329"));
+            assert_eq!(theme.caret, cb("#6cb6e8"));
+            assert_eq!(theme.tab_foreground, cb("#9aa0aa"));
+            assert_eq!(theme.scrollbar_thumb, cb("#3a3f47"));
+        });
+    }
+
+    fn cb(hex: &str) -> gpui_kit::Hsla {
+        gpui_kit::component::try_parse_color(hex).unwrap()
+    }
+
     #[test]
     fn the_built_in_theme_parses_and_names_the_appearance() {
         let file = parse(super::DEFAULT_THEME);
@@ -715,27 +812,6 @@ mod tests {
         assert!(!file.colors.is_empty(), "the built-in theme sets colors");
         assert_eq!(file.colors.background.as_deref(), Some("#1b1d21"));
         assert_eq!(file.metrics.unwrap().font_body, Some(13.0));
-    }
-
-    #[gpui_kit::test]
-    fn the_theme_file_colors_reach_the_component_theme(cx: &mut gpui_kit::TestAppContext) {
-        use gpui_kit::component::ActiveTheme as _;
-
-        cx.update(gpui_kit::init);
-        cx.update(|cx| {
-            super::ThemeRegistry::install(cx, super::DEFAULT_THEME, 1.0, super::Appearance::Dark);
-            // `apply_appearance` does these two in this order, without a window.
-            gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx);
-            super::sync_component_theme(cx);
-
-            let theme = cx.theme();
-            let needle = |hex: &str| super::try_parse_color(hex).unwrap();
-            assert_eq!(theme.background, needle("#1b1d21"));
-            assert_eq!(theme.foreground, needle("#e6e8ec"));
-            // The one chrome hairline reaches both bar borders a component draws.
-            assert_eq!(theme.title_bar_border, needle("#2a2d33"));
-            assert_eq!(theme.status_bar_border, needle("#2a2d33"));
-        });
     }
 
     #[test]

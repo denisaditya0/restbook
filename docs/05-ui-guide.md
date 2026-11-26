@@ -755,16 +755,17 @@ surface:
 ### Change the look
 
 - Colors come from `Palette` (`src/theme.rs`), built once per pane from the
-  active theme file over the live `gpui-component` theme. Add meaning there
-  (`method()`, `status()`), not inline `Hsla` values.
-- The theme file drives the components too, not just the panes.
+  active `gpui-component` theme. Add meaning there (`method()`, `status()`), not
+  inline `Hsla` values.
+- The theme file drives the controls too, not just the panes.
   `apply_appearance` switches the kit theme, then `theme::sync_component_theme`
-  lays the file's roles over the live `Theme` (surfaces, text, borders,
-  `list_*`, the chrome hairline, and the status accents), so a `Button`,
-  `Input`, `Dialog`, or `TabBar` draws the same charcoal and hairlines the panes
-  do. A role the file does not name — `primary`, `accent`, `popover`, `list` —
-  keeps the kit theme's value; add the role to `ColorRoles` and the mapping in
-  `sync_component_theme` together.
+  lays the file's roles over the live `Theme` — surfaces, text, borders,
+  `list_*`, the chrome hairline, the status accents, the primary fill (both
+  `primary` and the `button_primary` token), `popover`, `caret`/`selection`,
+  `scrollbar*`, and `tab_foreground`, so a `Button`, `Input`, menu, `Dialog`, or
+  `TabBar` draws the same palette the panes do. A role the file omits keeps the
+  kit value; add the role to `ColorRoles`, the file, and the mapping together.
+  The `--preview` root runs the same two calls before it builds its panes.
 - Shared formatting (bytes, duration, cookies, JSON pretty-printing) belongs in
   `src/util.rs` with a unit test; do not test view code through the widget tree.
 - Layout numbers are view-local, and a pane that cannot shrink **scrolls**. Give
