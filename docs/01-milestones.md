@@ -115,6 +115,7 @@ Checked while drawing the lanes up, so nobody re-opens them: history retention a
 | U54 | Per-OS branding: one `icons/restbook.svg` source is rasterized by `scripts/icons.sh` into the `.ico` (embedded in the Windows exe by `build.rs`, with VERSIONINFO and an `AppUserModelID`), the `.icns` for the macOS bundle, and the hicolor PNG set for Linux; `branding::APP_ID` is the identity the installer and the `.desktop` file must both match | done |
 | U55 | Request-panel redesign: engine-supplied default headers (`Accept`, `Accept-Encoding`, `User-Agent`) fill what the user did not override and are listed read-only under **Headers → Default headers** (a collapsed disclosure, so the table stays the user's); Raw bodies choose a language preset (JSON/XML/Text/HTML) instead of a `Content-Type` header, with the mime shown as a hint; Paste cURL moves into the tab strip beside `+` and the titlebar menu, and a successful import opens the Save As dialog when a collection is selected; **Copy as cURL** (`secondary-shift-c`) exports the live request through `curl::to_curl` | done |
 | U59 | History filters: a filter menu beside the search box setting method, status class (`1xx`–`5xx`), and a sent-within preset (24 hours / 7 days / 30 days), with checked items as the state and *Clear filters* to reset; the narrowing lives in `HistoryFilter` and is applied by the store before its row limit, in both scopes and both storage modes | done |
+| U66 | Classic theme pack, and text that follows the theme | A set of built-in palettes — Dracula, Nord, Gruvbox, Tokyo Night, Catppuccin, Solarized — embedded beside `crates/app/themes/default-dark.jsonc` with `include_str!` and listed by name in Settings › General › Theme, instead of only *Built-in* plus whatever a user dropped into `<data dir>/themes/`; a user file of the same name still wins. A built-in theme's `appearance` **pins the switch**: a file declaring `"appearance": "dark"` selects Dark and cannot run under System, because a light OS would fall the dark file's roles through to the component light theme and the palette would read as half-applied — the bug found trying Dracula, where the only way to see it was to pick Dark by hand. The syntax `highlight_theme` joins the overlay: `ColorRoles` gains a syntax block and `sync_component_theme` sets `Theme::highlight_theme`, so JSON keys, strings, numbers, and comments on the request raw body and the response body paint the theme's colours instead of the kit's fixed one — the "stale" text | Every pack theme selects, applies, survives a reopen, and shows its name in the dialog title; choosing a dark theme sets the switch to Dark (a dark theme under System is fixed to Dark, never left half-applied, and switching back to System returns to the built-in); a JSON body's keys, strings, and keywords differ per theme and repaint live on a switch; one `--preview all` capture per theme |
 
 ### UX milestones (behaviour-changing)
 
@@ -388,8 +389,19 @@ Already scheduled or shipped, so no longer a candidate here: `U34` is in `0.2.6`
   needs the `.ico` inside the exe's resource section (`build.rs`, MSVC only — GNU
   `ld` drops the section), macOS the `.icns` in the bundle, Linux the hicolor PNG
   set; `scripts/icons.sh` derives all four from `restbook.svg` so they cannot
-  diverge. `branding::APP_ID` is shared by the installer's `AppUserModelID` and
+  `branding::APP_ID` is shared by the installer's `AppUserModelID` and
   the `.desktop` file, so a shortcut and a running window resolve to one icon.
+- **U66 is a data-file pack plus one overlay line, not a new subsystem.** Every
+  palette is a JSONC file; the pack is embedded and listed by name, so nothing
+  about the loader changes beyond resolving a built-in name as well as a
+  data-dir file. The one code seam is the syntax block: `body_for_display`
+  reads `cx.theme().highlight_theme`, which `sync_component_theme` never set, so
+  a theme recoloured the chrome but left JSON tokens on the kit's default — the
+  stale text. A theme file's `appearance` must **pin** the switch rather than
+  only gate its own `colors` block: a dark file under a light System falls every
+  role through to the light component theme, which is the half-painted result
+  Dracula showed. So the picker sets the switch from the file, and System stops
+  being a way to half-apply a dark palette.
 
 ## Engine milestones
 
