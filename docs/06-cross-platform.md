@@ -128,15 +128,71 @@ dependency for nothing.
 
 ### Windows
 
-See the README's *Windows setup* section. `scripts\setup-windows.ps1` (or the
-`setup-windows.cmd` twin) checks the GNU toolchain, rustfmt and clippy, MinGW and
-the two user PATH entries, installs whatever is missing with `-Install`, and
-runs `dev.ps1 check` with `-Verify`.
+Visual Studio Build Tools are not installed, so Rust uses the GNU toolchain
+rather than MSVC. The prerequisites are one idempotent script:
+
+```powershell
+.\scripts\setup-windows.ps1            # report what is missing; change nothing
+.\scripts\setup-windows.ps1 -Install   # install it, asking before each step
+.\scripts\setup-windows.ps1 -Verify    # then run `dev.ps1 check`
+```
+
+From cmd.exe, `scripts\setup-windows.cmd` takes the same flags; `-Yes` skips the
+prompts. It exits non-zero while anything is still missing, so a wrapper script
+can use it as a pre-flight check, and nothing it does needs an elevated shell.
+
+What it checks, and the manual command when it cannot fix a step:
+
+| Requirement | Manual equivalent |
+|---|---|
+| `rustup` | install from <https://rustup.rs> |
+| `stable-x86_64-pc-windows-gnu` with rustfmt and clippy | `rustup toolchain install stable-x86_64-pc-windows-gnu --component rustfmt --component clippy` |
+| `gcc`, `dlltool`, `as` | `scoop install mingw` |
+| user PATH entries | add `%USERPROFILE%\.cargo\bin` and `%USERPROFILE%\scoop\apps\mingw\current\bin` under System Properties > Environment Variables > User variables > Path |
+
+OpenSSL is not a separate prerequisite: scoop's MinGW carries a dev tree in its
+own `opt` directory, and that is what the `dev` scripts detect.
+
+Once the script reports everything present, `cargo build` works from a normal
+shell with no env vars. TLS uses `native-tls` (SChannel) instead of `rustls`,
+because `ring` needs a C compiler; flip the feature in the workspace
+`Cargo.toml` if MSVC Build Tools get installed.
 
 The `dev` scripts exist mainly for this platform, where `libsqlite3-sys` panics
-with "Missing environment variable OPENSSL_DIR" instead of falling back. `dev.sh`
-is for a POSIX shell (Git Bash, MSYS2); `dev.ps1` and `dev.cmd` are the native
-PowerShell and cmd.exe twins.
+with "Missing environment variable OPENSSL_DIR" instead of falling back.
+`dev.sh` is for a POSIX shell (Git Bash, MSYS2); `dev.ps1` and `dev.cmd` are the
+native PowerShell and cmd.exe twins.
+
+#### Finding OpenSSL on Windows
+
+Detection order: `OPENSSL_DIR`, `pkg-config`, a MinGW `opt` next to `gcc` (or
+`MINGW_PREFIX`, or scoop's `apps/mingw/current/opt`), then the usual
+`/usr/local`, `/mingw64`, Homebrew prefixes. An explicit `OPENSSL_DIR` always
+wins. Nothing machine-specific is stored in the repository, so a toolchain update
+that moves the prefix keeps working.
+
+At *run* time the exe needs the OpenSSL DLL it was linked against. The `dev`
+scripts put the detected prefix's `bin` first on `PATH` for `cargo run`/`cargo
+test`, and `package.sh` reads that DLL's name out of the exe's own import table
+(`libcrypto-3-x64.dll` for OpenSSL 3, `-4-` for OpenSSL 4) and copies it next to
+the exe, which is where the Windows loader looks first. A DLL that does not match
+makes the process die in the loader, before `main` can log anything: Windows
+reports it as *the application was unable to start correctly*. The release build
+avoids the question by linking statically — see
+[How SQLCipher gets its crypto](#how-sqlcipher-gets-its-crypto).
+
+The master key lives in Windows Credential Manager (`restbook` / `master-key`)
+and is created on first launch; losing that entry means `history.db` can no
+longer be read. `keyring` 3 needs its platform backend compiled in — without one
+it silently uses an in-memory store and the key changes every launch. The
+backend per target is in [The keyring](#the-keyring).
+
+`crates/app/rust-toolchain.toml` pins `stable-x86_64-pc-windows-gnu`, matching
+the engine. GPUI compiles and links under GNU, but its build scripts call
+`dlltool.exe`, so the MinGW directory above has to be on `PATH`. If Build Tools
+with the "Desktop development with C++" workload are ever installed, the app can
+be built with MSVC instead by changing the channel in that file to
+`stable-x86_64-pc-windows-msvc`.
 
 Linux and macOS need no equivalent script: the package lists above are the whole
 installation.

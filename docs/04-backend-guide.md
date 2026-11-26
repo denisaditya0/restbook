@@ -434,5 +434,6 @@ plaintext in an export.
   enables `windows-native` / `apple-native` / `sync-secret-service` per target.
   If history suddenly fails to decrypt, check that first — the key lives in
   Windows Credential Manager under service `restbook`, account `master-key`.
-- Windows needs the GNU toolchain and MinGW on `PATH` (README). Native TLS is
-  deliberate; `rustls` would need a C compiler here.
+- Windows needs the GNU toolchain and MinGW on `PATH`
+  ([`06-cross-platform.md`](06-cross-platform.md)). Native TLS is deliberate;
+  `rustls` would need a C compiler here.

@@ -51,8 +51,9 @@ otherwise leave nothing behind after a crash.
 
 `cargo run` on this machine links GPUI through MinGW/GNU: the first build is
 slow, and `dlltool.exe` must be on `PATH` — `scripts\setup-windows.ps1` puts the
-MinGW tree there, and the README has the manual steps. There is no devcli for
-the UI; if a change is not visible, it is not verified.
+MinGW tree there, and [`06-cross-platform.md`](06-cross-platform.md#windows) has
+the manual steps. There is no devcli for the UI; if a change is not visible, it
+is not verified.
 
 ### The fast loop
 
@@ -462,6 +463,39 @@ response in a center `v_split` because there is one request, not a document
 per tab; the split handle is what resizes it. The rule they share is that a
 dock is a *region*, not a tab: tab bars are for several panels in one region,
 and a single-panel region suppresses its title bar entirely.
+
+### What the window does
+
+- Pick a method, type a URL, press **Send** (or **Ctrl+Enter** anywhere in the
+  request pane). `prepare()` runs before any I/O, so an invalid URL or an unknown
+  `{{variable}}` is reported inline and nothing is sent.
+- The editor below the URL bar has **Params**, **Headers**, **Body**, and **Auth**
+  tabs with per-tab counts, all writing into one `RequestDef`:
+  - Params and headers are key/value tables with per-row enable/disable. The
+    Headers tab also has a collapsed **Default headers** section listing what the
+    client adds on every send (`Content-Type`, `Accept`, `Accept-Encoding`,
+    `User-Agent`); a row with the same name overrides one.
+  - Body is none, raw (JSON/XML/text/HTML language presets), or form-urlencoded.
+    The raw language picks the `Content-Type`; it is not a separate header.
+  - Auth is none, basic, bearer, or an API key (header or query string).
+
+  Only what is on screen is sent: the editor state is folded into the
+  `RequestDef` immediately before every send.
+- A second request can be cancelled while it is in flight.
+- **Ctrl+Shift+V** (Cmd+Shift+V on macOS) imports a cURL command from the
+  clipboard, and **Ctrl+Shift+C** copies the current request back out as one.
+  The full table is [`12-keyboard-shortcuts.md`](12-keyboard-shortcuts.md).
+- Successful responses are recorded and appear in the history pane. Clicking a
+  row restores the **whole request** — params, headers, body, and auth — so it
+  can be re-sent as recorded, and shows the stored response.
+- JSON bodies are pretty-printed. The response pane shows status, time, and size
+  over **Body / Headers / Cookies** tabs; the format control names what
+  pretty-printing means for this payload (JSON, HTML, XML, Text) and switches to
+  the raw body. Display is capped at 256 KB; the full bytes stay in the response
+  record.
+- Panes are regions, not tabs: the request editor sits above the response in a
+  resizable split, and the separator widths are saved to `layout.json` next to
+  the history.
 
 ## How a send flows
 

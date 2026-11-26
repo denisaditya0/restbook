@@ -87,6 +87,150 @@ Everything above `app` is the engine and builds with `cargo` at the repository
 root. The shell is its own workspace under `crates/app`, so a root build never
 compiles GPUI and an app build never sees the engine's test targets.
 
+## Storage
+
+Two storage modes sit behind one `Store` trait (`crates/core/src/store.rs`), and
+`crates/app/src/workspace/storage.rs` picks between them once at startup.
+
+### Two storage modes
+
+The choice is made when the window opens and is visible in the status bar as a
+chip: either the workspace path, or `local database`.
+
+- **Workspace** — a directory holding a `restbook.json` marker. It is found by:
+  1. `RESTBOOK_WORKSPACE`, which names a root explicitly and is authoritative
+     (the marker must be present; a named directory without one is refused);
+  2. otherwise the current directory is walked upward, the way `.git` is found,
+     so launching the app from anywhere inside a workspace opens it.
+- **Application data directory** — the per-user SQLCipher database described
+  below. This is what runs when no workspace is found.
+
+Workspace wins when both are available, because a marker file in the tree you
+launched from is an explicit invitation; silently mixing a shared checkout with
+private local data would be the worse failure. Layout (`layout.json`) and
+preferences (`settings.json`) always live in the data directory: they are UI
+preferences, not workspace content.
+
+### Where the files are (data-directory mode)
+
+```
+%APPDATA%\restbook\                        <- Windows
+~/Library/Application Support/restbook/     <- macOS
+$XDG_DATA_HOME/restbook/                    <- Linux
+  history.db            encrypted: SQLite + SQLCipher (history, collections,
+                        environments, globals, drafts)
+  history.jsonl         plaintext fallback, present only when SQLCipher was
+                        unavailable
+  layout.json           dock arrangement (panel names and widths, no secrets)
+  settings.json         app preferences (pretty-print, history search limit,
+                        history retention cap)
+```
+
+Set `RESTBOOK_DATA_DIR` to move that directory — that is how a portable or test
+build gets its own sandbox. The per-OS paths and the keyring backend are in
+[`06-cross-platform.md`](06-cross-platform.md#data-directory).
+
+**Everything above is one file per concern, encrypted as a whole.** Collections,
+environments, globals, and drafts are rows in the same `history.db`, not separate
+files. Sharing in this mode is not possible; that is what a workspace is for.
+
+### How encryption works
+
+- A **256-bit master key** is generated on first launch and written to the OS
+  credential store — Windows Credential Manager, macOS Keychain, or Secret
+  Service — as `restbook` / `master-key`.
+- The connection applies it before touching anything else:
+  `PRAGMA key = "x'...'"`, then `PRAGMA cipher_memory_security = ON`. The
+  blob-literal form is what makes arbitrary key bytes safe to embed.
+- **The key is never written to disk** next to the database. Copying `history.db`
+  to another machine does not make it readable, because the key stayed behind in
+  the keyring.
+- SQLCipher encrypts pages, so the file is opaque — the schema, the request
+  bodies, and the response bodies are all inside the encrypted page set.
+
+### When decryption or the keyring fails
+
+The app **never overwrites a database it cannot read**, and it never silently
+loses history. But it does fall back to plaintext, so the failure is announced on
+stderr rather than passing unnoticed. The paths:
+
+| What fails | What happens |
+|---|---|
+| Keyring has no entry | A new key is generated and stored. A fresh `history.db` is written encrypted. |
+| Keyring is unavailable (no backend, locked, denied) | `SqlcipherStore::open` returns an error. The app prints `restbook: encrypted history unavailable (<error>); using plaintext JSONL` and, in the data directory, uses `history.jsonl`. |
+| `history.db` exists but the key no longer matches | The `PRAGMA key` or the first schema statement fails, so `open` returns an error, and the same plaintext fallback applies in the data directory. The unreadable database is left alone, never rewritten. |
+| `history.db` is corrupt or truncated | Same as above: error, fallback, file preserved for recovery. |
+| SQLCipher compiled out (`--no-default-features`) | No attempt is made; plaintext `history.jsonl` in the same data directory. |
+| The data directory cannot be created | The app starts against an in-memory store, so it opens read-only-ish instead of failing to launch. |
+| A workspace has no encrypted store | There is no plaintext fallback: the session's history stays in memory and the status bar says `Not saved`. |
+
+Two consequences worth stating plainly:
+
+- **Losing the keyring entry loses the history.** There is no recovery path and
+  no backdoor, because there is no copy of the key. Deleting the credential
+  manager entry makes `history.db` permanently unreadable, and the app falls back
+  to a new plaintext `history.jsonl` in the data directory.
+- **The data-directory fallback is plaintext.** A failing keyring means history —
+  including every response body — lands in `history.jsonl` unencrypted. A
+  `history.jsonl` in the data directory is the signal that encryption is not
+  currently protecting you; its absence means `history.db` is in use.
+- **A workspace takes no such fallback.** It is the tree a user shares, so
+  without an encrypted store its history stays in memory for that session and
+  the status bar says `Not saved`. No plaintext history file is ever created
+  under `.restbook/`.
+
+`crates/store/src/sqlcipher.rs` has a roundtrip test that creates the keyring
+entry, applies the key, writes a history entry, and searches it back.
+
+### Sharing a workspace
+
+A workspace is a **directory that is a Git repository**, one file per
+collection, so a team can share requests without sharing history:
+
+```
+api/
+  restbook.json                 marker: "this is a workspace"
+  .gitignore                    written once, never overwritten
+  collections/<slug>/collection.json   tracked: folders, requests
+  environments/<slug>.json            tracked: non-secret vars
+  restbook.local.json           gitignored: active env, globals, drafts
+  .restbook/history.db          gitignored, encrypted: every send with its body
+  .restbook/history.db-wal      gitignored: SQLCipher's encrypted journal
+```
+
+History in a workspace is the same `SqlcipherStore` the data directory uses, so
+it is encrypted with the same key from the OS keyring, and a send leaves no
+readable body under `.restbook/`. A `history.jsonl` written there by an older
+build is imported into the encrypted database once and then removed rather than
+renamed, so no readable copy is left in the shared tree.
+
+The rule is **tracked files hold structure, local files hold secrets**. History
+never leaves the machine — it is the one thing nobody wants in a shared checkout.
+
+A value that must not be shared is written out as `<restbook:redacted>` in the
+tracked file and kept in `restbook.local.json` (which the generated `.gitignore`
+excludes), then spliced back in when the workspace is read on the same machine.
+`Kv` already carries the `secret: bool` that drives this, and the environment
+editor exposes it as a checkbox with a reveal toggle. Today that covers two
+carriers:
+
+- **Environment variables** — a row marked `secret` is redacted in
+  `environments/<slug>.json` and restored on read.
+- **Request auth** — a literal basic password, bearer token, or API key value in
+  a saved request is redacted in `collection.json`, so the file still shows *that*
+  a request is authenticated and *how*, without shipping the credential.
+
+A whole-string `{{variable}}` is left alone in both: it is already indirection,
+and putting the value in a local variable is the intended way to share a request
+that needs a token.
+
+The store is wired in: opening a workspace switches the app onto it, and the
+status bar names the workspace so the mode is never a mystery. One gap remains —
+the request editor's key/value tables (`panels/editor/kv_table.rs`) hardcode
+`secret: false`, so params and headers cannot be marked secret from the UI yet,
+even though the store would honor the flag. Until that lands, treat the *body*
+of a shared request as tracked content.
+
 ## Milestones
 
 The engine milestone table (`B` items) and what is deliberately deferred live in

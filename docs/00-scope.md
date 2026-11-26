@@ -80,9 +80,10 @@ The engine's kept-current milestones are B1..B18, with B19..B29 planned, in
 ## Known gaps in this scaffold
 
 - The app prefers SQLCipher, which is a default feature: `cargo run` needs an
-  OpenSSL dev tree, so `scripts/dev.sh` detects `OPENSSL_DIR` for it (see the
-  README). Without one, `--no-default-features` falls back to plaintext JSONL
-  in the same per-user data directory.
+  OpenSSL dev tree, so `scripts/dev.sh` detects `OPENSSL_DIR` for it (see
+  [`06-cross-platform.md`](06-cross-platform.md)). Without one,
+  `--no-default-features` falls back to plaintext JSONL in the same per-user data
+  directory.
 - No OAuth 2.0 authorization-code browser flow yet: the engine builds the
   authorize URL and exchanges a code, and the app fetches client-credentials
   tokens, but the local redirect listener is not wired.

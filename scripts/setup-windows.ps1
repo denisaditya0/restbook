@@ -1,8 +1,9 @@
 #!/usr/bin/env pwsh
 # Get a Windows machine ready to build restbook.
 #
-# This is the README's *Windows setup* section as one script. It checks for, and
-# with `-Install` puts in place, the four things a GNU-target build needs:
+# This is the Windows setup section of docs/06-cross-platform.md as one script.
+# It checks for, and with `-Install` puts in place, the four things a GNU-target
+# build needs:
 #
 #   rustup      with the toolchain both `rust-toolchain.toml` files pin
 #   rustfmt     and clippy, which `cargo fmt --check` and clippy require

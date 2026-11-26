@@ -54,7 +54,7 @@ runner. Build commands are `cargo` plus the `scripts/dev.*` wrappers.
 ├── Cargo.toml               engine workspace + shared dependency versions
 ├── Cargo.lock               engine lockfile
 ├── rust-toolchain.toml      Windows GNU pin for the engine
-├── README.md                product overview, storage, Windows setup
+├── README.md                product overview and documentation index
 ├── crates/
 │   ├── core/
 │   │   ├── Cargo.toml
@@ -185,7 +185,8 @@ Two rules matter more than the rest:
 ## The development cycle
 
 **Before anything else, the machine.** On Windows that is
-`scripts/setup-windows.ps1` (the README has the full story): it checks the GNU
+`scripts/setup-windows.ps1` (the full story is in
+[`06-cross-platform.md`](06-cross-platform.md#windows)): it checks the GNU
 toolchain, rustfmt and clippy, MinGW and the two user PATH entries, fixes what is
 missing with `-Install`, and `-Verify` finishes by running `dev.ps1 check`.
 Everywhere else the package installs in
@@ -325,7 +326,7 @@ Documentation is part of the change, not a follow-up. Pick the owner:
 | a milestone state, a lane, or a reference-parity row | `01-milestones.md` |
 | an engine recipe, pitfall, or API shape | `04-backend-guide.md` |
 | a pane, action, tab, styling rule | `05-ui-guide.md` |
-| a platform assumption or prerequisite | `06-cross-platform.md`, README |
+| a platform assumption or prerequisite | `06-cross-platform.md` |
 | where a click lands, a command, a POV | `07-flows.md` |
 | an unresolved rough edge | `08-qol-backlog.md` (and remove it when fixed) |
 | a deliberate GPUI Kit deviation | `09-gpui-kit-audit.md` |
