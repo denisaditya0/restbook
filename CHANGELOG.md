@@ -24,6 +24,33 @@ Contributors and pull requests are added to the release page by `release.yml`;
 do not write them here.
 -->
 
+## 0.2.3
+
+- **A new window starts on Collections alone.** A first run opens with your
+  collections in the sidebar and Request over Response in the centre; the tools
+  dock opens when you ask for it. Reset Layout returns to this arrangement.
+- **Empty panes tell you what to do.** The blank sidebar, the idle response, and
+  a history search with no hits each name the next action with its shortcut
+  instead of sitting empty.
+- **Quitting asks before it drops edits.** A close can prompt, always save, or
+  never save, and the answer is remembered. The decision covers a saved tab you
+  edited as well as an unsaved draft.
+- **The centre can sit side by side.** Flip Request and Response from stacked to
+  side by side with the response header's toggle, and the choice survives a
+  restart.
+- **Narrow windows stay usable.** The window has a real minimum width now, and
+  shrinking it drops the tools dock first, then the sidebar, collapsing the
+  status chips to icons before any pane is squeezed.
+- **Long menus and panes scroll instead of clipping.** Every popup that can
+  outgrow the window scrolls, and a pane too small to show everything scrolls
+  rather than cutting content off.
+- **Open a request from a pasted URL.** Paste a URL to start a request from it.
+- **The controls follow your theme.** Buttons, inputs, menus, dialogs,
+  scrollbars, and the tab bar draw from the theme file's colours instead of the
+  library defaults.
+- **A two-finger scroll holds one direction.** A diagonal scroll no longer
+  drifts sideways first when you meant to go down.
+
 ## 0.2.2
 
 - **A big import no longer makes the app crawl.** Importing a large OpenAPI
