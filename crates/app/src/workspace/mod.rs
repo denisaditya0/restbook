@@ -14,6 +14,7 @@ mod import;
 mod layout_policy;
 mod move_dialog;
 mod persistence;
+mod quit;
 mod save_dialog;
 mod send;
 pub(crate) mod settings;
@@ -237,6 +238,9 @@ pub(crate) struct Workspace {
     /// `on_window_should_close` and the quit observers then fire; the second
     /// write would bump `updated_at` and duplicate the work.
     flushed: bool,
+    /// The quit prompt's "remember my choice" tick. Reset every time the prompt
+    /// opens, so a tick from one close cannot change a later one unseen.
+    quit_remember: bool,
 }
 
 /// Nothing: the type is the identity. The kit keys in-app notifications by
@@ -458,6 +462,7 @@ impl Workspace {
             pending_delete: None,
             pending_update: None,
             flushed: false,
+            quit_remember: false,
         };
 
         workspace.listen(window, cx);

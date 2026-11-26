@@ -56,6 +56,10 @@ pub(crate) struct AppSettings {
     /// machine: a path is not useful to a teammate cloning the workspace.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) recent_workspaces: Vec<String>,
+    /// What closing the window does with a collection request that was edited
+    /// but not saved. `Ask` prompts and offers to remember the answer; the other
+    /// two are that remembered answer.
+    pub(crate) save_on_quit: SaveOnQuit,
 }
 
 impl Default for AppSettings {
@@ -70,7 +74,45 @@ impl Default for AppSettings {
             check_updates: true,
             skipped_update: None,
             recent_workspaces: Vec::new(),
+            save_on_quit: SaveOnQuit::Ask,
         }
+    }
+}
+
+/// What a window close does with edits that were never saved to a collection.
+///
+/// A collection-bound tab is the only tab that can lose work here: an unbound
+/// draft is written by the debounce. `Ask` prompts and lets the user remember
+/// the answer; the other two are that remembered answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SaveOnQuit {
+    #[default]
+    Ask,
+    Save,
+    Discard,
+}
+
+impl SaveOnQuit {
+    pub(crate) const ALL: [SaveOnQuit; 3] =
+        [SaveOnQuit::Ask, SaveOnQuit::Save, SaveOnQuit::Discard];
+
+    /// The Settings label for this mode.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            SaveOnQuit::Ask => "Ask every time",
+            SaveOnQuit::Save => "Always save",
+            SaveOnQuit::Discard => "Don't save",
+        }
+    }
+
+    /// The mode a Settings label names. An unknown label keeps the default, so a
+    /// stale dropdown value cannot change the quit behavior by accident.
+    pub(crate) fn from_label(label: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|mode| mode.label() == label)
+            .unwrap_or_default()
     }
 }
 
@@ -280,8 +322,8 @@ mod tests {
     // Named imports: this crate glob-imports `gpui_kit::*` elsewhere, and that
     // macro set shadows `#[test]`.
     use super::{
-        AppSettings, NumberField, HISTORY_LIMIT_MAX, HISTORY_LIMIT_MIN, HISTORY_MAX_ENTRIES_MAX,
-        HISTORY_MAX_ENTRIES_MIN, RECENT_WORKSPACES_MAX,
+        AppSettings, NumberField, SaveOnQuit, HISTORY_LIMIT_MAX, HISTORY_LIMIT_MIN,
+        HISTORY_MAX_ENTRIES_MAX, HISTORY_MAX_ENTRIES_MIN, RECENT_WORKSPACES_MAX,
     };
 
     #[test]
@@ -316,6 +358,9 @@ mod tests {
         assert_eq!(settings.history_max_entries, 1_000);
         // A file written before the field existed still asks for checks.
         assert!(settings.check_updates);
+        // An older file has no quit preference, so it must ask rather than
+        // silently discard or silently overwrite a collection request.
+        assert_eq!(settings.save_on_quit, SaveOnQuit::Ask);
     }
 
     #[test]
@@ -366,6 +411,15 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_quit_choice_round_trips_through_its_label() {
+        for mode in SaveOnQuit::ALL {
+            assert_eq!(SaveOnQuit::from_label(mode.label()), mode);
+        }
+        // A value a build has never heard of keeps the prompt.
+        assert_eq!(SaveOnQuit::from_label("whenever"), SaveOnQuit::Ask);
     }
 
     #[test]

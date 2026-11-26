@@ -102,15 +102,14 @@ impl Workspace {
     ///
     /// `on_window_should_close` runs before the window is destroyed, the last point
     /// where the store can be written without a task being dropped at process exit.
-    /// gpui-pre's teardown on Windows logs target-less errors after this point;
-    /// `flush` marks the process as closing so the log sink drops them.
+    /// Returning `false` cancels the close, which is how the quit prompt keeps the
+    /// window open until the user answers.
     pub(crate) fn save_on_close(&self, window: &mut Window, cx: &mut Context<Self>) {
         let workspace = cx.entity().downgrade();
-        window.on_window_should_close(cx, move |_, cx| {
+        window.on_window_should_close(cx, move |window, cx| {
             workspace
-                .update(cx, |workspace, cx| workspace.flush(cx))
-                .ok();
-            true
+                .update(cx, |workspace, cx| workspace.close_window(window, cx))
+                .unwrap_or(true)
         });
     }
 

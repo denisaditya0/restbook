@@ -17,7 +17,7 @@ use gpui_kit::component::setting::{
 use gpui_kit::component::{h_flex, v_flex, Disableable as _, WindowExt as _};
 use gpui_kit::*;
 
-use super::settings::{AppSettings, NumberField, Settings};
+use super::settings::{AppSettings, NumberField, SaveOnQuit, Settings};
 use super::updates::{self, Updates};
 use super::{storage, Workspace};
 use crate::branding;
@@ -135,6 +135,15 @@ fn general_page(
             SettingGroup::new()
                 .title("Layout")
                 .item(reset_layout_item(workspace.clone())),
+        )
+        .group(
+            SettingGroup::new().title("Quitting").item(
+                SettingItem::new("Unsaved collection requests", save_on_quit_field(settings))
+                    .description(
+                        "What closing the window does with a request you edited but did not \
+                     save. \u{201c}Ask every time\u{201d} offers to remember the answer.",
+                    ),
+            ),
         )
 }
 
@@ -520,6 +529,31 @@ fn theme_field(settings: &Entity<Settings>, themes: Vec<String>) -> SettingField
         },
     )
     .default_value(BUILT_IN_THEME)
+}
+
+/// Save-on-quit behavior. Three named modes rather than a switch: the user has
+/// to be able to change the remembered answer back to the prompt.
+fn save_on_quit_field(settings: &Entity<Settings>) -> SettingField<SharedString> {
+    let reader = settings.clone();
+    let writer = settings.clone();
+    let options = SaveOnQuit::ALL
+        .into_iter()
+        .map(|mode| {
+            (
+                SharedString::from(mode.label()),
+                SharedString::from(mode.label()),
+            )
+        })
+        .collect();
+    SettingField::dropdown(
+        options,
+        move |cx| SharedString::from(reader.read(cx).current().save_on_quit.label()),
+        move |value, cx| {
+            let mode = SaveOnQuit::from_label(value.as_ref());
+            update(&writer, cx, |next| next.save_on_quit = mode);
+        },
+    )
+    .default_value(SharedString::from(SaveOnQuit::default().label()))
 }
 
 /// Zoom as a percentage of the default size. The value is clamped here as well
