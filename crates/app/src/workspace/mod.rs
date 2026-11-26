@@ -1126,9 +1126,8 @@ fn toggle_tooltip(label: &'static str, shortcut: Option<String>) -> SharedString
 }
 
 /// Match the native window chrome to the app appearance: `System` hands it back to
-/// the OS, `Light`/`Dark` pin it. `Theme::change` loads the built-in light/dark
-/// component theme, then `sync_component_theme` lays the active theme file over
-/// it so the kit's components and the panes draw from one palette.
+/// the OS, `Light`/`Dark` pin it. Switching the component theme through
+/// `Theme::change` makes `cx.theme()` and every [`Palette`] fallback follow suit.
 fn apply_appearance(window: &mut Window, cx: &mut App) {
     let appearance = theme::appearance(cx);
     let mode = appearance.mode(Some(window.appearance()));

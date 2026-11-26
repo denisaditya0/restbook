@@ -60,7 +60,34 @@
     "success": "#6fcf97",
     "warning": "#e2c07a",
     "info": "#6cb6e8",
-    "danger": "#ec7a7a"
+    "danger": "#ec7a7a",
+
+    // Component roles: the kit controls draw with these, and a pane does not
+    // name them. The accent is the same blue as `info`, so a primary button and
+    // an info chip read as one family; the foreground is near-black because the
+    // fill is light.
+    "primary": "#6cb6e8",
+    "primary_foreground": "#0f1317",
+    "primary_hover": "#7ec4f2",
+    "primary_active": "#5aa6d6",
+    "secondary": "#23262b",
+    "accent": "#2d3037",
+    "accent_foreground": "#e6e8ec",
+    // Floating surfaces sit a step above the window so a menu reads as raised.
+    "popover": "#202329",
+    "popover_foreground": "#e6e8ec",
+    "overlay": "#00000080",
+    "ring": "#6cb6e8",
+    // Text fields.
+    "caret": "#6cb6e8",
+    "selection": "#2f4a63",
+    // Scrollbars, one step off the surface they ride on.
+    "scrollbar": "#1b1d21",
+    "scrollbar_thumb": "#3a3f47",
+    "scrollbar_thumb_hover": "#4a5059",
+    // Tab labels, matching the pane text roles.
+    "tab_foreground": "#9aa0aa",
+    "tab_active_foreground": "#e6e8ec"
   },
 
   // Spacing and type. Sizes are in logical pixels, the unit the rest of the app
