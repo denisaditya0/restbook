@@ -20,7 +20,7 @@ use crate::theme;
 use super::delete::Deleted;
 use super::layout_policy;
 use super::persistence::{HISTORY_WIDTH, TOOL_WIDTH};
-use super::{chrome, CenterOrientation, PanelName, Workspace, WorkspaceNotice};
+use super::{chrome, wrap_index, CenterOrientation, PanelName, Workspace, WorkspaceNotice};
 
 /// The usable width of the display the window sits on, for capping a grow.
 fn display_width(window: &Window, cx: &App) -> Option<f32> {
@@ -365,14 +365,46 @@ impl Workspace {
     /// change. The workspace is the only thing that holds every pane, so it is
     /// the only thing that can redraw them together.
     pub(crate) fn focus_panel(&self, name: PanelName, window: &mut Window, cx: &mut App) {
-        let handle = match name {
+        self.pane_focus_handle(name, cx).focus(window, cx);
+    }
+
+    /// The focus handle a pane's root carries. Kept in one place so focusing and
+    /// asking which pane is focused cannot disagree.
+    pub(crate) fn pane_focus_handle(&self, name: PanelName, cx: &App) -> FocusHandle {
+        match name {
             PanelName::History => self.panes.history.read(cx).focus_handle(cx),
             PanelName::Environment => self.panes.environment.read(cx).focus_handle(cx),
             PanelName::Collections => self.panes.collections.read(cx).focus_handle(cx),
             PanelName::Request => self.panes.request.read(cx).focus_handle(cx),
             PanelName::Response => self.panes.response.read(cx).focus_handle(cx),
+        }
+    }
+
+    /// Move focus `step` panes along [`PanelName::all`], wrapping at both ends.
+    ///
+    /// A pane no dock is showing is revealed before it takes focus, the same
+    /// rule `FocusPanel` follows: History and Environment are closed by default,
+    /// and focusing one that is not painted would aim at nothing.
+    pub(crate) fn focus_relative_pane(
+        &mut self,
+        step: isize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let order = PanelName::all();
+        let current = order
+            .iter()
+            .position(|name| self.pane_focus_handle(*name, cx).is_focused(window));
+        let index = match current {
+            Some(index) => wrap_index(index, order.len(), step),
+            // Nothing focused yet: forward starts at the first pane, backward at
+            // the last, so the first press always lands somewhere visible.
+            None if step >= 0 => 0,
+            None => order.len() - 1,
         };
-        handle.focus(window, cx);
+        let name = order[index];
+        self.reveal_panel(name, window, cx);
+        self.focus_panel(name, window, cx);
     }
 
     /// Close a pane wherever it is docked.

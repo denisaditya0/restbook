@@ -42,6 +42,11 @@ actions!(
         RenameSelected,
         /// Focus the URL field of the request pane (`secondary-l`).
         FocusUrl,
+        /// Move focus to the next pane in the View order, wrapping at the end
+        /// (`f6`).
+        FocusNextPane,
+        /// Move focus to the previous pane, wrapping at the start (`shift-f6`).
+        FocusPreviousPane,
         /// Open find in the response body (`secondary-f`).
         FindInResponse,
         /// Show or hide the command palette (`secondary-shift-p`).
