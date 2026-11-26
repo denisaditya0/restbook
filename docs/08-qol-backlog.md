@@ -425,7 +425,7 @@ is already computed for display.
 
 **Fix:** index the formatted shortcut alongside the label and match both.
 
-Refs: `panels/command_palette.rs` (`commands`, `command_hint`).
+Refs: `panels/command_palette.rs` (`rows`, `Row::action`).
 
 ### 5.2 Settings has no keybinding — **P3**
 
