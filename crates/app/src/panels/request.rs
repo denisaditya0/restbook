@@ -62,6 +62,10 @@ pub(crate) enum Event {
     /// workspace opens the picker from its next render, the same way it defers
     /// a save.
     Import,
+    /// The empty-state button asked to open a new request from the URL on the
+    /// clipboard. The workspace owns the clipboard and the tab list, so the pane
+    /// only asks.
+    PasteUrl,
     /// The editor menu asked to copy the live request as a cURL command. The
     /// workspace owns the clipboard, so the pane only asks.
     CopyCurl,
@@ -90,6 +94,7 @@ impl Event {
             // to the flash; logging it twice would just repeat the message.
             Event::Notice(_) => None,
             Event::Import => Some("event: import file".to_owned()),
+            Event::PasteUrl => Some("event: paste url".to_owned()),
             Event::CopyCurl => Some("event: copy as curl".to_owned()),
             Event::FetchToken(_) => Some("event: fetch oauth token".to_owned()),
         }
@@ -972,11 +977,22 @@ impl RequestPanel {
             .child(
                 h_flex()
                     .gap(px(self.metrics.space_sm))
+                    // Three labelled buttons outrun a 340 px centre; wrapping
+                    // keeps every label whole instead of clipping the last.
+                    .flex_wrap()
+                    .justify_center()
                     .child(
                         Button::new("new-request-empty")
                             .label("New request")
                             .icon(IconName::Plus)
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::NewTab))),
+                    )
+                    .child(
+                        Button::new("paste-url-empty")
+                            .label("Paste URL")
+                            .icon(IconName::Globe)
+                            .tooltip("Open a request from a URL on the clipboard")
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::PasteUrl))),
                     )
                     .child(
                         Button::new("import-file-empty")
