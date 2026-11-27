@@ -674,9 +674,10 @@ impl Workspace {
     }
 
     /// Restore a stored send into the editor, its response included, without
-    /// sending. The pick lands in the active tab; with every tab closed it
-    /// revives one first, because the request pane would otherwise keep drawing
-    /// its empty state over the restored document.
+    /// sending. The pick takes the active tab only while it is pristine, else
+    /// opens a new one, and binds it to the row's owner when that still exists;
+    /// with every tab closed it revives one first, because the request pane would
+    /// otherwise keep drawing its empty state over the restored document.
     pub(crate) fn pick_history(&mut self, id: i64, cx: &mut Context<Self>) {
         let entry = match self.store.get_history(id) {
             Ok(Some(entry)) => entry,
@@ -750,9 +751,13 @@ impl Workspace {
 
         let index = self.place_for_pick(cx);
         let id = self.tabs[index].id;
+        // A pick bound to a live node is not an edit: take the node's request as
+        // the saved baseline so closing it does not ask to discard changes.
+        let saved = node.as_ref().map(|_| RequestStamp::of(&entry.request));
         {
             let tab = &mut self.tabs[index];
             tab.request = entry.request.clone();
+            tab.saved = saved;
             tab.node = node;
             tab.draft = draft;
         }

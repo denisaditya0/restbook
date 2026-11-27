@@ -1094,9 +1094,9 @@ impl Workspace {
         }
         self.snapshot_active(cx);
         // Every tab is written, not only the one on screen: a background tab's
-        // last edits are in its snapshot, and a draft that was never given a
-        // row would otherwise be lost with the process. Only the active tab can
-        // have edits the store has not seen, so it alone carries `dirty`.
+        // last edits are in its snapshot. Only a tab with a draft row is written;
+        // an unfiled request was never persisted. Only the active tab can have
+        // edits the store has not seen, so it alone carries `dirty`.
         let active = self.tabs.active();
         for index in 0..self.tabs.len() {
             self.persist_tab_draft(index, index == active && dirty, cx);
@@ -2471,14 +2471,19 @@ mod tests {
                 workspace.update(cx, |workspace, cx| workspace.drop_ownerless_tabs(cx))
             });
 
-            let (node, origin) = cx.update(|_, cx| {
+            let (node, saved, origin) = cx.update(|_, cx| {
                 let workspace = workspace.read(cx);
                 (
                     workspace.tabs[0].node.clone(),
+                    workspace.tabs[0].saved.clone(),
                     workspace.document.read(cx).origin.clone(),
                 )
             });
             assert!(node.is_none(), "the tab loses its dead owner");
+            assert!(
+                saved.is_none(),
+                "the saved baseline goes with the dead node"
+            );
             assert!(matches!(origin, Origin::Standalone));
         }
     }

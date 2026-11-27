@@ -369,9 +369,9 @@ impl Workspace {
     /// Write the active tab to the drafts table, or clear its row once filed into a
     /// collection. A blank URL is not worth restoring.
     ///
-    /// Runs only at the end of a quiet debounce, never on a keystroke. A new draft's
-    /// first insert is synchronous because it assigns the row id every later write
-    /// needs; once bound, updates stay on the background executor.
+    /// Runs only at the end of a quiet debounce, never on a keystroke. It is an
+    /// update: Send mints a draft's row in `save_draft`, so a tab with no row writes
+    /// nothing and the update itself stays on the background executor.
     fn persist_draft(&mut self, cx: &mut Context<Self>) {
         // Nothing to persist when the last tab was closed.
         if self.tabs.is_empty() {
