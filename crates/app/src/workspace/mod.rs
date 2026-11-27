@@ -1047,10 +1047,18 @@ impl Workspace {
 
         // Nobody is left to show a response to, and the exit would abandon the
         // socket anyway; cancelling lets the transport close it deliberately.
-        if self.document.read(cx).is_pending() {
-            let url = self.document.read(cx).last_url.clone().unwrap_or_default();
+        // The send may be on a background tab, so cancel the document `sending`
+        // names rather than only the active one.
+        let tracked = self.sending.and_then(|id| self.documents.get(&id).cloned());
+        let in_flight = match tracked {
+            Some(document) if document.read(cx).is_pending() => Some(document),
+            _ if self.document.read(cx).is_pending() => Some(self.document.clone()),
+            _ => None,
+        };
+        if let Some(document) = in_flight {
+            let url = document.read(cx).last_url.clone().unwrap_or_default();
             log::debug!(target: "restbook_app::ui", "closing with a request in flight: {url}");
-            self.document.update(cx, |document, cx| document.cancel(cx));
+            document.update(cx, |document, cx| document.cancel(cx));
         }
 
         // No timer has a window to paint into any more. The draft's last edit
@@ -1912,7 +1920,9 @@ mod tests {
     /// second tab showing the first tab's raw body.
     mod tab_bodies {
         use gpui_kit::{Entity, TestAppContext, VisualTestContext};
-        use restbook_core::{Auth, Body, Method, OAuthConfig, RequestDef, TokenResponse};
+        use restbook_core::{
+            Auth, Body, CancelToken, Method, OAuthConfig, RequestDef, TokenResponse,
+        };
 
         use super::super::Workspace;
 
@@ -2109,6 +2119,43 @@ mod tests {
                 "the tab on screen must not take the other tab's token"
             );
             assert_eq!(origin_token.as_deref(), Some("fetched-for-b"));
+        }
+
+        /// A quit cancels the request still on the wire even when the user has
+        /// switched to another tab, so the socket closes deliberately instead of
+        /// dying with the process.
+        #[gpui_kit::test]
+        fn quitting_cancels_a_send_on_a_background_tab(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("quit-background-send");
+            let (workspace, cx) = cx.add_window_view(Workspace::new);
+
+            open(cx, &workspace, "node-a", plain("https://api.test/a"));
+            cx.run_until_parked();
+            open(cx, &workspace, "node-b", plain("https://api.test/b"));
+            cx.run_until_parked();
+
+            // Tab b is on screen; tab a is in the background and owns the send.
+            let token = CancelToken::new();
+            cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    let active = workspace.active_tab_id().expect("a tab is open");
+                    let background = workspace
+                        .tabs
+                        .iter()
+                        .find(|tab| tab.id != active)
+                        .expect("two tabs are open")
+                        .id;
+                    let document = workspace.documents[&background].clone();
+                    document.update(cx, |document, _| document.pending = Some(token.clone()));
+                    workspace.sending = Some(background);
+                });
+            });
+
+            cx.update(|_, cx| workspace.update(cx, |workspace, cx| workspace.flush(cx)));
+
+            assert!(token.is_cancelled(), "quit must cancel a background send");
         }
     }
 
