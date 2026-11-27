@@ -29,6 +29,12 @@ pub struct SecretSlot<'a> {
 /// file that gets renamed and copied, so its id is the stable handle.
 pub fn visit_collection_secrets(collection: &mut Collection, f: &mut impl FnMut(SecretSlot<'_>)) {
     let owner = collection.id.clone();
+    // The collection's own rows use their own `kind`, so a collection header
+    // and a request header with the same name do not share one local-secret
+    // entry under the same owner id.
+    visit_auth(&mut collection.auth, "collection", &owner, f);
+    visit_kvs(&mut collection.variables, "var", &owner, f);
+    visit_kvs(&mut collection.headers, "collection-header", &owner, f);
     visit_items(&mut collection.items, &owner, f);
 }
 
@@ -60,7 +66,7 @@ fn visit_items(items: &mut [CollectionItem], owner: &str, f: &mut impl FnMut(Sec
 }
 
 fn visit_request(request: &mut RequestDef, owner: &str, f: &mut impl FnMut(SecretSlot<'_>)) {
-    visit_auth(&mut request.auth, owner, f);
+    visit_auth(&mut request.auth, "req", owner, f);
     visit_kvs(&mut request.headers, "header", owner, f);
     visit_kvs(&mut request.params, "param", owner, f);
     if let Body::Form(rows) = &mut request.body {
@@ -68,7 +74,12 @@ fn visit_request(request: &mut RequestDef, owner: &str, f: &mut impl FnMut(Secre
     }
 }
 
-fn visit_auth(auth: &mut Auth, owner: &str, f: &mut impl FnMut(SecretSlot<'_>)) {
+fn visit_auth(
+    auth: &mut Auth,
+    kind: &'static str,
+    owner: &str,
+    f: &mut impl FnMut(SecretSlot<'_>),
+) {
     let value = match auth {
         Auth::Basic { password, .. } => password,
         Auth::Bearer { token } => token,
@@ -80,7 +91,7 @@ fn visit_auth(auth: &mut Auth, owner: &str, f: &mut impl FnMut(SecretSlot<'_>)) 
         return;
     }
     f(SecretSlot {
-        kind: "req",
+        kind,
         owner,
         row: "auth",
         value,
@@ -228,5 +239,37 @@ mod tests {
             rows.push(slot.row.to_owned());
         });
         assert!(rows.is_empty());
+    }
+
+    /// A collection's own variables, headers, and auth are credentials too, and
+    /// they use their own `kind` so they cannot collide with a request row.
+    #[test]
+    fn a_collection_carries_its_own_slots() {
+        let request = RequestDef::new(Method::Get, "https://example.com");
+        let mut collection = collection_with(request);
+        collection.auth = Auth::Bearer {
+            token: "collection-token".to_owned(),
+        };
+        collection.variables = vec![
+            secret("BASE", "collection-secret"),
+            Kv::new("HOST", "https://example.com"),
+        ];
+        collection.headers = vec![
+            secret("X-Client", "collection-header"),
+            Kv::new("Accept", "json"),
+        ];
+
+        assert_eq!(
+            slot_rows(&mut collection),
+            ["collection:auth", "var:BASE", "collection-header:X-Client"]
+        );
+
+        redact_collection(&mut collection);
+        assert_eq!(collection.variables[0].value, REDACTED);
+        assert_eq!(collection.headers[0].value, REDACTED);
+        let Auth::Bearer { token } = &collection.auth else {
+            unreachable!();
+        };
+        assert_eq!(token, REDACTED);
     }
 }

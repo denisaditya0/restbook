@@ -28,6 +28,8 @@ pub fn parse(text: &str, fallback_name: &str) -> crate::Result<BulkImport> {
         .to_owned();
 
     let mut collection = Collection::new(new_id(), name);
+    collection.variables = rows_of(document.get("variable"));
+    collection.auth = auth_of(document.get("auth"));
 
     if let Some(items) = document.get("item").and_then(Value::as_array) {
         let path = collection.name.clone();
@@ -309,14 +311,36 @@ fn new_id() -> String {
 /// output is the same shape [`parse`] reads, so the round trip is tested rather
 /// than assumed.
 pub fn export(collection: &Collection) -> crate::Result<String> {
-    let document = json!({
+    let mut document = json!({
         "info": {
             "name": collection.name,
             "schema": POSTMAN_SCHEMA,
         },
         "item": items_of(&collection.items),
     });
+    if !collection.variables.is_empty() {
+        document["variable"] = kv_rows_json(&collection.variables);
+    }
+    if let Some(auth) = auth_json(&collection.auth) {
+        document["auth"] = auth;
+    }
+    // A Postman collection has no root-level headers, so `collection.headers`
+    // has nowhere to go and is dropped, like OAuth.
     Ok(serde_json::to_string_pretty(&document)?)
+}
+
+fn kv_rows_json(rows: &[Kv]) -> Value {
+    Value::Array(
+        rows.iter()
+            .map(|row| {
+                let mut object = json!({ "key": row.key, "value": row.value });
+                if !row.enabled {
+                    object["disabled"] = json!(true);
+                }
+                object
+            })
+            .collect(),
+    )
 }
 
 const POSTMAN_SCHEMA: &str = "https://schema.getpostman.com/json/collection/v2.1.0/collection.json";
@@ -653,6 +677,31 @@ mod tests {
             &after.request.body,
             Body::Raw { mime, text } if mime == "application/json" && text == "{\"user\":\"me\"}"
         ));
+    }
+
+    #[test]
+    fn a_collections_own_variables_and_auth_are_read_and_written() {
+        let import = parse(
+            r#"{
+              "info": { "name": "Acme" },
+              "variable": [ { "key": "BASE", "value": "https://api.acme.com" },
+                            { "key": "TOKEN", "value": "tkn" } ],
+              "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{TOKEN}}" } ] },
+              "item": [ { "name": "Ping", "request": "https://api.acme.com/ping" } ]
+            }"#,
+            "fallback",
+        )
+        .unwrap();
+        let collection = &import.collections[0];
+        assert_eq!(collection.variables.len(), 2);
+        assert_eq!(collection.variables[0].key, "BASE");
+        assert!(matches!(collection.auth, Auth::Bearer { ref token } if token == "{{TOKEN}}"));
+
+        let text = export(collection).unwrap();
+        let reread = parse(&text, "fallback").unwrap();
+        let copy = &reread.collections[0];
+        assert_eq!(copy.variables, collection.variables);
+        assert!(matches!(copy.auth, Auth::Bearer { ref token } if token == "{{TOKEN}}"));
     }
 
     #[test]

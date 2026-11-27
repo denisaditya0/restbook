@@ -732,7 +732,7 @@ fn temp_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use restbook_core::{CollectionItem, Folder, Method, RequestDef, SavedRequest};
+    use restbook_core::{Auth, CollectionItem, Folder, Method, RequestDef, SavedRequest};
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("restbook-folder-{name}"));
@@ -761,9 +761,16 @@ mod tests {
         let dir = temp_dir("roundtrip");
         {
             let store = FolderStore::open(&dir).unwrap();
-            store
-                .save_collection(&sample_collection("col-1", "Example"))
-                .unwrap();
+            let mut collection = sample_collection("col-1", "Example");
+            collection.variables = vec![Kv::new("BASE", "https://example.com")];
+            collection.headers = vec![Kv::new("X-Client", "restbook")];
+            let mut token = Kv::new("TOKEN", "s3cret");
+            token.secret = true;
+            collection.variables.push(token);
+            collection.auth = Auth::Bearer {
+                token: "{{TOKEN}}".to_owned(),
+            };
+            store.save_collection(&collection).unwrap();
         }
 
         // The file is where a human would look for it.
@@ -777,6 +784,19 @@ mod tests {
         let collections = reopened.collections().unwrap();
         assert_eq!(collections.len(), 1);
         assert_eq!(collections[0].name, "Example");
+        assert_eq!(
+            collections[0].variables,
+            [Kv::new("BASE", "https://example.com"), {
+                let mut token = Kv::new("TOKEN", "s3cret");
+                token.secret = true;
+                token
+            }]
+        );
+        assert_eq!(collections[0].headers, [Kv::new("X-Client", "restbook")]);
+        assert!(matches!(
+            collections[0].auth,
+            Auth::Bearer { ref token } if token == "{{TOKEN}}"
+        ));
         let CollectionItem::Folder(folder) = &collections[0].items[0] else {
             panic!("expected a folder");
         };

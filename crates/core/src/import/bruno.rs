@@ -2,12 +2,12 @@
 //!
 //! Bruno writes one YAML file per request: `info` names it, `http` holds method,
 //! URL, headers, query rows, auth, and body, and `settings` the timeout and
-//! redirect choice. `auth: inherit` becomes a note rather than a silent no-op.
+//! redirect choice. `auth: inherit` imports as the `Inherit` state.
 
 use serde_json::Value;
 
 use super::{BulkImport, Skip};
-use crate::model::{Body, Collection, CollectionItem, Kv, Method, RequestDef, SavedRequest};
+use crate::model::{Auth, Body, Collection, CollectionItem, Kv, Method, RequestDef, SavedRequest};
 
 /// Read one Bruno request file into a one-request collection.
 ///
@@ -88,12 +88,7 @@ pub fn parse(text: &str, fallback_name: &str) -> crate::Result<BulkImport> {
             .as_str()
             .is_some_and(|mode| mode.eq_ignore_ascii_case("inherit"))
         {
-            result.notes.push(Skip {
-                at: name.clone(),
-                reason: "auth: inherit has no collection to inherit from; set this \
-                         request's auth after import"
-                    .to_owned(),
-            });
+            request.auth = Auth::Inherit;
         }
     }
 
@@ -280,14 +275,13 @@ settings:
     }
 
     #[test]
-    fn inherited_auth_is_reported_not_invented() {
+    fn inherited_auth_imports_as_an_inherit_state() {
         let import = parse(REQUEST, "file.yml").unwrap();
         let CollectionItem::Request(saved) = &import.collections[0].items[0] else {
             panic!("the collection holds the request");
         };
-        assert!(matches!(saved.request.auth, crate::model::Auth::None));
-        assert_eq!(import.notes.len(), 1);
-        assert!(import.notes[0].reason.contains("auth: inherit"));
+        assert!(matches!(saved.request.auth, Auth::Inherit));
+        assert!(import.notes.is_empty());
     }
 
     #[test]
