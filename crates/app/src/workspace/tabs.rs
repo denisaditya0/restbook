@@ -622,12 +622,10 @@ impl Workspace {
                 .store
                 .reassign_history_origin(&Origin::Draft { draft }, &origin);
             let _ = self.store.delete_draft(draft);
+            self.remove_draft(draft, cx);
         }
         let saved = Some(RequestStamp::of(&request));
         self.bind_tab(active, request, Some(node), None, saved, DocState::Keep, cx);
-        if stale.is_some() {
-            self.refresh_drafts(cx);
-        }
         true
     }
 
@@ -689,6 +687,7 @@ impl Workspace {
                 .store
                 .reassign_history_origin(&Origin::Draft { draft }, &origin);
             let _ = self.store.delete_draft(draft);
+            self.remove_draft(draft, cx);
         }
         let saved = Some(RequestStamp::of(&request));
         self.bind_tab(
@@ -700,9 +699,6 @@ impl Workspace {
             DocState::Replace,
             cx,
         );
-        if stale.is_some() {
-            self.refresh_drafts(cx);
-        }
     }
 
     /// Restore a stored send into the editor, its response included, without
@@ -1103,6 +1099,7 @@ impl Workspace {
         let stale = self.tabs[index].draft;
         if let Some(id) = stale {
             let _ = self.store.delete_draft(id);
+            self.remove_draft(id, cx);
         }
         if self.sending == Some(id) {
             // Closing the sending tab cancels its transfer before the document
@@ -1145,9 +1142,6 @@ impl Workspace {
             self.push_tabs(cx);
         }
 
-        if stale.is_some() {
-            self.refresh_drafts(cx);
-        }
         log::info!(
             target: "restbook_app::ui",
             "closed tab: {} open, active {}",

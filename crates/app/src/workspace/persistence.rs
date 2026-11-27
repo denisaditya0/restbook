@@ -356,7 +356,7 @@ impl Workspace {
                     started.elapsed().as_millis(),
                 );
                 self.tabs[index].draft = Some(id);
-                self.refresh_drafts(cx);
+                self.upsert_draft(Draft { id, ..draft }, cx);
                 Some(id)
             }
             Err(error) => {
@@ -399,7 +399,7 @@ impl Workspace {
                             {
                                 workspace.tabs[index].draft = None;
                             }
-                            workspace.refresh_drafts(cx);
+                            workspace.remove_draft(id, cx);
                         })
                         .ok();
                     }
@@ -428,6 +428,7 @@ impl Workspace {
         };
 
         let store = self.store.clone();
+        let row = draft.clone();
         cx.spawn(async move |this, cx| {
             let id = cx
                 .background_spawn(async move { store.save_draft(&draft).ok() })
@@ -445,7 +446,7 @@ impl Workspace {
                 {
                     workspace.tabs[index].draft = Some(id);
                 }
-                workspace.refresh_drafts(cx);
+                workspace.upsert_draft(Draft { id, ..row }, cx);
             })
             .ok();
         })
@@ -475,7 +476,7 @@ impl Workspace {
                     );
                 }
                 self.tabs[index].draft = None;
-                self.refresh_drafts(cx);
+                self.remove_draft(id, cx);
             }
             return;
         }
@@ -501,7 +502,7 @@ impl Workspace {
         match self.store.save_draft(&draft) {
             Ok(id) => {
                 self.tabs[index].draft = Some(id);
-                self.refresh_drafts(cx);
+                self.upsert_draft(Draft { id, ..draft }, cx);
             }
             Err(error) => log::error!(
                 target: "restbook_app::ui",
@@ -510,12 +511,19 @@ impl Workspace {
         }
     }
 
-    /// Re-read the stored drafts so the sidebar's Unsaved list follows a write
-    /// or delete made here.
-    pub(crate) fn refresh_drafts(&mut self, cx: &mut Context<Self>) {
+    /// Upsert one draft row on the sidebar's Unsaved list. The caller holds the
+    /// row it just wrote, so the list is updated in place rather than re-read.
+    pub(crate) fn upsert_draft(&mut self, draft: Draft, cx: &mut Context<Self>) {
         self.panes
             .collections
-            .update(cx, |panel, cx| panel.refresh_drafts(cx));
+            .update(cx, |panel, cx| panel.upsert_draft(draft, cx));
+    }
+
+    /// Drop one draft row by id, without re-reading the store.
+    pub(crate) fn remove_draft(&mut self, id: i64, cx: &mut Context<Self>) {
+        self.panes
+            .collections
+            .update(cx, |panel, cx| panel.remove_draft(id, cx));
     }
 
     /// The open tabs as the layout file records them. A tab bound to neither a node
