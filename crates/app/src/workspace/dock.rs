@@ -103,6 +103,7 @@ impl Workspace {
             self.dock
                 .update(cx, |dock, cx| dock.set_center(layout, window, cx));
         }
+        self.layout_cache = None;
         self.persist_tabs(cx);
         self.push_center_orientation(cx);
         // The flip changes how much centre room the docks leave, so the fit is
