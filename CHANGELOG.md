@@ -24,6 +24,14 @@ Contributors and pull requests are added to the release page by `release.yml`;
 do not write them here.
 -->
 
+## 0.2.7
+
+- **Switching tabs writes less to disk.** A tab switch now saves only the open
+  tabs; the window layout is written when it actually changes, so moving between
+  tabs no longer re-serializes the whole layout each time.
+- **A large history no longer stalls the response pane.** Earlier sends are read
+  in the background, so a big encrypted history loads without freezing the pane.
+
 ## 0.2.6
 
 - **A collection can share variables, auth, and headers with its requests.**
