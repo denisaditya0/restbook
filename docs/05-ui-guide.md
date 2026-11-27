@@ -435,6 +435,13 @@ Dependencies point downward: `main` -> `workspace` -> `panels` -> `editor` ->
    workspace subscribes and is the only code that calls the transport. Panes
    share state only through `Document`.
 
+**Drafts are sent-but-unsaved requests.** The Drafts list under Collections holds
+only requests whose **Send** minted a row; a request typed or pasted but never
+sent is in memory only and never appears there. Paste cURL (and a History pick)
+routes through the canvas (`Workspace::imported`): it fills the active tab only
+when that tab is an untouched page, otherwise it opens a new one, so an import
+never overwrites edits or a collection binding.
+
 ## Window layout
 
 The window is a dock area with three regions, wrapped in two lines of app-drawn

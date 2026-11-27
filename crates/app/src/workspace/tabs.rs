@@ -419,11 +419,36 @@ impl Workspace {
         }
     }
 
-    /// A pasted cURL command replaced the active request. Confirm the import,
-    /// then offer the first-save dialog so the request gets a name and a home
-    /// instead of silently becoming another unsaved tab. The dialog can create
-    /// its destination, so even an empty workspace is offered the save.
-    pub(crate) fn imported(&mut self, cx: &mut Context<Self>) {
+    /// A pasted cURL command becomes a request in its own tab, replacing the
+    /// active one only when it is an untouched page. Confirm the import, then
+    /// offer the first-save dialog so the request gets a name and a home; the
+    /// dialog can create its destination, so an empty workspace is offered it.
+    pub(crate) fn imported(&mut self, request: RequestDef, cx: &mut Context<Self>) {
+        let index = self.place_for_pick(cx);
+        let id = self.tabs[index].id;
+        {
+            let tab = &mut self.tabs[index];
+            tab.request = request.clone();
+            tab.node = None;
+            tab.draft = None;
+        }
+        self.panes
+            .request
+            .update(cx, |panel, cx| panel.adopt_request(request.clone(), cx));
+        if let Some(document) = self.documents.get(&id).cloned() {
+            document.update(cx, |document, cx| {
+                document.request = request;
+                document.response = None;
+                document.error = None;
+                document.last_url = None;
+                document.origin = Origin::Standalone;
+                document.forget_cancel();
+                cx.notify();
+            });
+        }
+        self.point_at(id, cx);
+        self.push_tabs(cx);
+        self.persist_tabs(cx);
         self.notice(
             &Notice::Done("Imported a request from the clipboard.".into()),
             cx,
@@ -677,8 +702,61 @@ impl Workspace {
             entry.request.method,
             crate::logging::redact_url(&entry.request.url),
         );
-        let index = self.ensure_active_tab(cx);
+        // A pick keeps its owner: a saved or draft request lands in a tab bound
+        // to that node or row, and never replaces a tab that already holds one.
+        let (node, draft) = match &entry.origin {
+            Origin::Saved { node } => {
+                if self
+                    .panes
+                    .collections
+                    .read(cx)
+                    .saved_request(node)
+                    .is_none()
+                {
+                    // The node was deleted since the send; only the response is
+                    // left, so the pick is an ordinary unsent request.
+                    (None, None)
+                } else if let Some(index) = self
+                    .tabs
+                    .iter()
+                    .position(|tab| tab.node.as_deref() == Some(node.as_str()))
+                {
+                    self.select_tab(index, cx);
+                    return;
+                } else {
+                    (Some(node.clone()), None)
+                }
+            }
+            Origin::Draft { draft } => {
+                let alive = self
+                    .store
+                    .drafts()
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|row| row.id == *draft);
+                if !alive {
+                    (None, None)
+                } else if let Some(index) =
+                    self.tabs.iter().position(|tab| tab.draft == Some(*draft))
+                {
+                    self.select_tab(index, cx);
+                    return;
+                } else {
+                    (None, Some(*draft))
+                }
+            }
+            Origin::Standalone => (None, None),
+        };
+
+        let index = self.place_for_pick(cx);
         let id = self.tabs[index].id;
+        {
+            let tab = &mut self.tabs[index];
+            tab.request = entry.request.clone();
+            tab.node = node;
+            tab.draft = draft;
+        }
+        let origin = self.tabs[index].origin();
         // The editor queues the request for its next render; the document has
         // to be told on the same tick or Send reads the previous URL.
         self.panes.request.update(cx, |panel, cx| {
@@ -686,20 +764,36 @@ impl Workspace {
         });
         if let Some(document) = self.documents.get(&id).cloned() {
             document.update(cx, |document, cx| {
-                document.request = entry.request.clone();
-                document.response = Some(entry.response.clone());
+                document.request = entry.request;
+                document.response = Some(entry.response);
                 document.error = None;
                 // `url()` drives the cookie jar and the history scope, so it has
-                // to name the picked request, not the one the tab sent last.
-                document.last_url = Some(entry.request.url.clone());
+                // to name the request that was recorded, not the tab's last send.
+                document.last_url = Some(entry.url);
+                document.origin = origin;
+                document.forget_cancel();
                 cx.notify();
             });
         }
-        // A switch back adopts the tab's request from the document, so the tab
-        // snapshot carries the pick rather than the request it replaced.
-        self.tabs[index].request = entry.request;
         self.point_at(id, cx);
         self.push_tabs(cx);
+        self.persist_tabs(cx);
+    }
+
+    /// The tab a pick or a paste may take over: the active one only while it is
+    /// an untouched page, otherwise a new tab. A tab with content or an owner is
+    /// never replaced, so an import cannot destroy edits or a binding.
+    pub(crate) fn place_for_pick(&mut self, cx: &mut Context<Self>) -> usize {
+        if self.tabs.is_empty() {
+            return self.ensure_active_tab(cx);
+        }
+        let active = self.tabs.active();
+        if self.tabs.get(active).is_some_and(|tab| tab.is_pristine()) {
+            return active;
+        }
+        let index = self.push_tab(Tab::blank(), cx);
+        self.select_tab(index, cx);
+        index
     }
 
     /// Open a new request tab whose URL is the text on the clipboard.
@@ -991,10 +1085,13 @@ impl Workspace {
         if let Some(id) = stale {
             let _ = self.store.delete_draft(id);
         }
-        if self.sending == Some(self.tabs[index].id) {
-            // The tab that owned the send is gone. The transfer still resolves
-            // in the background, but nothing will take its result, so the send
-            // slot is free again.
+        if self.sending == Some(id) {
+            // Closing the sending tab cancels its transfer before the document
+            // is dropped: an orphaned send would close the socket only at
+            // process exit, and the freed slot could start a second on the wire.
+            if let Some(document) = self.documents.get(&id).cloned() {
+                document.update(cx, |document, cx| document.cancel(cx));
+            }
             self.sending = None;
         }
         // Keep the content for Reopen Closed Tab. The draft row is gone, so a

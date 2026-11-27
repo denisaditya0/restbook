@@ -55,10 +55,11 @@ repo is two people meaning different things by one of them.
   `Memory(Vec<u8>)` or `File(FileBody)`; `File` has no producer yet (B18 step 1).
 - **`Store`** — history trait in `core`; `MemoryStore`, `JsonlStore`,
   `FolderStore`, `SqlcipherStore` implement it.
-- **draft** — an unsaved request the app persists for you. Has a store row id, no
-  collection node.
+- **draft** — a sent-but-unsaved request. Send mints its store row; it has a row
+  id and no collection node. A request typed or pasted but never sent is in
+  memory only and is not persisted.
 - **`Origin`** — whether a history row came from `Standalone`, `Saved { node }`, or
-  `Draft { draft }`.
+  `Draft { draft }`. The app writes `Saved` or `Draft`; `Standalone` is legacy only.
 - **hit** — a `HistoryHit`: the columns a search row needs, not the whole entry.
 - **`Command`** — a palette entry in `panels/command_palette.rs`. Distinct from
   **action** — a typed keybinding target in `actions.rs`. They are two vocabularies.

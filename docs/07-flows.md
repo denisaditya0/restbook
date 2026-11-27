@@ -43,10 +43,11 @@ sent. A saved `layout.json` restores the user's own arrangement by name.
 
 The same file records the open tabs and which one was active
 (`Workspace::restore_tabs`): a restart reopens them in the same order, on the
-same tab. A pristine blank page is not recorded, so a window left on an
-untouched tab opens on one. A tab whose collection node was deleted while the
-app was closed — or a draft whose row is gone — is dropped rather than reopened
-against nothing, and one message names how many were dropped.
+same tab. Only a tab with an owner is recorded — a bound request, or a draft
+whose row exists — so a request typed or pasted and never sent is not restored.
+A tab whose collection node was deleted while the app was closed, or a draft
+whose row is gone, is dropped rather than reopened against nothing, and one
+message names how many were dropped.
 
 Switching tabs swaps the whole `Document`, not a snapshot of one: each tab owns
 its request and its response, and `select_tab` hands the new entity to every pane
@@ -65,15 +66,17 @@ reopens the tabs without their responses — History is the durable copy. One se
 runs at a time (`Workspace::sending`); while it is on the wire, its own tab shows
 a spinner in the strip's status slot and every other tab's **Send** is disabled
 with a tooltip naming the reason, so a second send is refused rather than
-silently dropped. Closing the sending tab frees the send slot before the
-transfer ends: the detached send runs on and still writes its history row, so a
-new send can overlap it (A4).
+silently dropped. Closing the sending tab cancels its transfer
+(`document.cancel`) before the slot frees, so an abandoned send cannot keep the
+wire while a new one starts.
 
-A history pick loads the stored request and response into the active tab, so it
-keeps that tab's collection binding and replaces its content without asking.
-`last_url` follows the picked request, so the cookie jar and the history scope
-name what is on screen. Opening a pick in its own tab, and detaching a bound tab
-from a request a pick replaced, are recorded as open in `01-milestones.md`.
+A history pick opens the stored request and response in its own tab, reusing the
+active tab only while it is an untouched page, so a pick never replaces edits or
+a binding. It also resolves the row's owner: a saved send jumps to the tab
+holding that node (or opens one bound to it), a draft jumps to its tab, and an
+orphan or a legacy `Standalone` row opens as an unfiled request. `last_url`
+follows the picked request, so the cookie jar and the history scope name what is
+on screen.
 
 A request that skips certificate verification says so on the center surface, in
 `palette.danger`: a `TLS off` chip beside the URL field (glyph only in a narrow
@@ -122,6 +125,35 @@ intent, and the fit is re-derived on the next launch. The kit's 100 px split
 floor is unchanged: the handle can still narrow a pane to 100 px by hand, and
 the panes stay responsive below their breakpoints.
 
+## When a request is kept
+
+A request is kept only once it is **sent**. Typing or pasting fills a tab in
+memory; pressing **Send** on a tab with a URL mints a draft row before `prepare`,
+so the click — not a successful response — is what persists it. The **Drafts**
+pane lists those sent-but-unsaved requests, and every write (debounce, switch,
+quit) is update-only: it never inserts a row for a tab that has no owner.
+
+States: **P** pristine (blank page) · **U** unfiled (typed or pasted, never sent)
+· **D** draft · **S** saved to a collection node.
+
+| Interaction | P | U | D | S |
+|---|---|---|---|---|
+| Type / edit | → U, not persisted | stays U, not persisted | updates the row, same id | in memory only; the node is untouched until Save |
+| Paste cURL | fill → U | new tab U | new tab U | new tab U |
+| History pick | fill; state ← row owner | new tab; ← owner | new tab; ← owner | new tab; ← owner |
+| Send | nothing (empty URL) | mint → D, then history `Draft{id}` | history `Draft{id}` | history `Saved{node}` |
+| Save | → S, new node | → S, new node | → S: reassign history to the new node, delete the row | same node id |
+| Save As | → S, new node | → S, new node | → S, new node, reassign | → S, new node; the old node keeps its history |
+| Close tab | gone | gone | row deleted; its history keeps `Draft{id}` and surfaces under *All* only | node stays |
+| Switch | — | in-memory snapshot | snapshot + row | snapshot; node unchanged |
+| Quit | gone | gone | row flushed | prompt if edited |
+| Restart | not restored | not restored | restored from the row | restored from the node |
+
+An edit never changes the id; **U → D** mints one at Send; **D → S** replaces the
+draft id with the node id (`reassign_history_origin`), so a draft's sends follow
+it into the collection. Deleting an open draft or node drops its tab to **U**, so
+it cannot save back to a dead id.
+
 ## Quitting the window
 
 Closing the window is the only user-reachable quit; the app binds no Quit
@@ -139,8 +171,9 @@ registers `on_window_should_close`, and `Workspace::close_window` returns
 The prompt lists the dirty bound tabs and offers *Save and quit*, *Discard and
 quit*, and *Cancel*. A *Remember my choice* tick writes *Always save* or *Don't
 save* to Settings (`Settings › General › Quitting`), where it can be set back to
-*Ask every time*. An unbound draft is never in the prompt: the debounce already
-wrote its row, so closing loses nothing.
+*Ask every time*. An unfiled request is never in the prompt: a request that was
+never sent has no row and is not restored, and a draft was written when Send
+minted it, so closing loses nothing the user kept.
 
 Quitting cancels the request in flight on whichever tab owns it: `flush` cancels
 the document `Workspace::sending` names, so a send on a background tab closes
@@ -206,7 +239,7 @@ the shortcuts sheet lists the rows with a binding.
 | Focus next pane | `f6` | move focus to the next pane in `PanelName::all` order, revealing a closed dock before it takes focus, and wrapping at the end | Window (any pane) | `Workspace::focus_relative_pane` |
 | Focus previous pane | `shift-f6` | the same step backwards, wrapping at the start | Window (any pane) | `Workspace::focus_relative_pane` |
 | Find in response | `secondary-f` | open the find row and focus it; Enter steps forward, Shift+Enter back, Escape closes | Center (Response) | `ResponsePanel::open_find` |
-| Paste cURL | `secondary-shift-v` | clipboard → `RequestDef`, adopt it, then offer to save it | Center | `RequestPanel::paste_curl` |
+| Paste cURL | `secondary-shift-v` | clipboard → `RequestDef`, fill the tab if pristine else open a new one, then offer to save it | Center | `RequestPanel::paste_curl` → `Workspace::imported` |
 | Import… | `secondary-shift-i` | file picker → a busy notification naming the file (read, guess, parse; closing it cancels before the parse) → destination dialog (new collections, the default, or an existing collection or folder) → save, busy again under the same notification → result dialog | Overlay (dialog) + Chrome (notification) + Left dock | `Workspace::import_file` |
 | Export… | `secondary-shift-e` | picker → `import::export` → save prompt → write the file | Overlay (dialog) + Chrome (notification) | `Workspace::open_export_dialog` |
 | Copy as cURL | `secondary-shift-c` | live `RequestDef` → `curl::to_curl` → clipboard | Window (any pane) | `Workspace::copy_curl` |
@@ -265,7 +298,7 @@ This is the "intent as event" rule in action.
 | Editor tab click | `Event::SelectTab(i)` | switch tabs | Center (tab strip) | `Workspace::select_tab` |
 | New-tab button | `Event::NewTab` | push a tab | Center | `Workspace::new_tab` |
 | Tab close button / `secondary-w` | `Event::CloseTab(i)` | close that tab; a tab with unsaved edits asks through the close alert dialog first | Center, or Overlay (alert dialog) | `Workspace::confirm_close_tab` |
-| Paste-curl imported | `Event::Imported` | report a notification, then open the Save As dialog when a collection is selected | Overlay (notification, optionally a dialog) | `Workspace::imported` |
+| Paste-curl imported | `Event::Imported` | fill the tab if pristine else open a new one, report a notification, then open the Save As dialog when a collection is selected | Overlay (notification, optionally a dialog) | `Workspace::imported` |
 | Paste-curl failed | `Event::Notice(_)` | report a notification with the parse error | Overlay (notification) | `Workspace::notice` |
 | Empty-state Import… button | `Event::Import` | open the file picker, choose a destination, land the file, show the result | Overlay (dialog) + Left dock | `Workspace::import_file` |
 | Empty-state Paste URL button | `Event::PasteUrl` | clipboard text (first line) → a new tab whose URL is that text | Center | `Workspace::paste_url` |
@@ -338,7 +371,7 @@ should not disappear when the user switches to Headers or Cookies.
 | `All` / `This request` | scope the list to every send, or to the owner of the request on screen (URL fallback for a `Standalone` one); the request scope follows a tab switch | Right dock |
 | Search box | filter the scoped list by URL text | Right dock |
 | Filter button | one menu with method, status class, and a sent-within preset; checked items are the state, and *Clear filters* resets all three | Right dock |
-| Row click | `HistoryEvent::Picked { id }`: load the full entry, adopt the request **and** show the stored response in the active tab; with every tab closed the pick revives one first | Right dock → Center |
+| Row click | `HistoryEvent::Picked { id }`: load the full entry, open the request and show the stored response in its own tab (reusing the active one only when pristine), bound to the row's owner when it still exists | Right dock → Center |
 | Row trash | `HistoryEvent::Delete { id }`: delete the send (alert dialog) | Right dock |
 
 ### Request editor tabs (in-pane)
@@ -428,6 +461,7 @@ Send button (or secondary-enter)
   RequestPanel emits Event::Send
     Workspace::listen → Workspace::send
       ├─ read the LIVE editor (current_request), not a possibly-stale copy
+      ├─ mint a draft when the tab has no owner (Send is the checkpoint)
       ├─ prepare(&request, scopes)          // pure; Generators::now() for {{$…}}
       │    └─ Err → document.fail_without_sending, no network
       ├─ document.begin_send(cancel, progress, url)
@@ -439,6 +473,9 @@ Send button (or secondary-enter)
 
 The editor is read live at send time: raw-body and auth inputs notify their own
 `InputState`, so a previously-stored copy can be one keystroke stale.
+
+Send is the checkpoint: a tab with no owner mints a draft row before `prepare`,
+so a send that fails to prepare still keeps the request the user asked to send.
 
 Each stage above is a type in `crates/core`; the stage-to-directory map is in
 [`03-backend-plan.md`](03-backend-plan.md#where-each-stage-lives).

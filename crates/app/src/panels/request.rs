@@ -56,8 +56,8 @@ pub(crate) enum Event {
     /// An import finished and wants to say so. Routed to the workspace for the
     /// same reason the collections tree routes its confirmations there: one
     /// toast, drawn in one place, with one lifetime. The workspace also offers
-    /// to name and save the imported request.
-    Imported,
+    /// to name and save the imported request, and decides which tab holds it.
+    Imported(Box<RequestDef>),
     /// An import failed and wants to say why.
     Notice(Notice),
     /// The empty-state button asked for a file. The pane holds no window, so the
@@ -91,7 +91,7 @@ impl Event {
             Event::CloseTab(id) => Some(format!("event: close tab {id}")),
             Event::TabAction(action) => Some(format!("event: tab {action:?}")),
             // The workspace logs the import and the save prompt it opens.
-            Event::Imported => None,
+            Event::Imported(_) => None,
             // A notice is logged by `Workspace::notice`, which also routes it
             // to the flash; logging it twice would just repeat the message.
             Event::Notice(_) => None,
@@ -1385,8 +1385,9 @@ impl RequestPanel {
 
         match restbook_core::import::curl::parse(&text) {
             Ok(request) => {
-                self.adopt_request(request, cx);
-                cx.emit(Event::Imported);
+                // Placement belongs to the canvas: the pane only reports what
+                // it parsed, and the workspace reuses a blank tab or opens one.
+                cx.emit(Event::Imported(Box::new(request)));
             }
             Err(message) => {
                 cx.emit(Event::Notice(Notice::Failed(message.into())));

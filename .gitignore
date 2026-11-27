@@ -6,3 +6,6 @@
 dist/
 # Reference checkouts (e.g. read-only clones of projects we borrow ideas from).
 .refs/
+# Per-machine cargo config (e.g. a Windows lld speedup that needs a linker
+# on PATH); the build must not depend on one developer's toolchain.
+crates/app/.cargo/
