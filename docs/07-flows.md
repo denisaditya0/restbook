@@ -142,9 +142,9 @@ save* to Settings (`Settings › General › Quitting`), where it can be set bac
 *Ask every time*. An unbound draft is never in the prompt: the debounce already
 wrote its row, so closing loses nothing.
 
-A background tab's send is not cancelled on quit: flush cancels only the active
-tab's request, so a transfer on another tab ends with the process and its
-pending history row is lost (A6).
+Quitting cancels the request in flight on whichever tab owns it: `flush` cancels
+the document `Workspace::sending` names, so a send on a background tab closes
+deliberately instead of dying with the process.
 
 **Cancel means cancel here.** Every other alert in the app performs the action
 when its Cancel/confirm pair is dismissed the other way; this dialog's Cancel
