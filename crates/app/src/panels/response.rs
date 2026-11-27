@@ -1015,6 +1015,10 @@ impl ResponsePanel {
         self.history_origin = Origin::default();
         self.history_stamp = None;
         self.history_revision = 0;
+        // The rows belong to the document being left. Clearing the key alone
+        // is not enough: the empty document reports exactly these defaults, so
+        // `sync_history` would see no change and keep the old tab's sends.
+        self.history.clear();
         self.painted = (ResponseState::Idle, None);
         let view = self
             .view
@@ -3813,6 +3817,37 @@ mod render_tests {
         assert!(
             cx.debug_bounds("response-history-idle-control").is_some(),
             "the idle pane should offer the earlier sends"
+        );
+
+        cx.quit();
+    }
+
+    /// Closing the last tab re-points every pane at an empty document. The rows
+    /// cached for the closed tab must not survive that: otherwise the idle pane
+    /// offers "Earlier sends" for a request that is no longer open, and the
+    /// history scope that control asks for has nothing to show.
+    #[test]
+    fn a_closed_request_keeps_no_earlier_sends() {
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+
+        let store = Arc::new(MemoryStore::new());
+        seed_history(&store, "http://sample/one-line", 403);
+
+        let (view, cx) = open_with(&mut cx, None, store, None);
+        let before = view.update(cx, |panel, _| panel.history.len());
+        assert_eq!(before, 1, "the tab starts with the rows for its URL");
+
+        let empty = cx.update(|_, cx| cx.new(|_| Document::new()));
+        view.update(cx, |panel, cx| panel.set_document(empty, cx));
+
+        let after = view.update(cx, |panel, _| panel.history.len());
+        assert_eq!(after, 0, "a closed request has no earlier sends to offer");
+
+        draw(cx);
+        assert!(
+            cx.debug_bounds("response-history-idle-control").is_none(),
+            "the idle pane must not offer history for a request that is not open"
         );
 
         cx.quit();
