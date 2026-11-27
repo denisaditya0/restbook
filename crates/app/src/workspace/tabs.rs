@@ -1207,7 +1207,7 @@ impl Workspace {
             .request
             .update(cx, |panel, cx| panel.adopt_request(blank, cx));
         self.set_active_document(document, cx);
-        self.refresh_variable_scope(cx);
+        self.refresh_collection_scope(cx);
         self.push_tabs(cx);
     }
 
@@ -1238,7 +1238,7 @@ impl Workspace {
         if let Some(document) = self.documents.get(&id).cloned() {
             self.set_active_document(document, cx);
         }
-        self.refresh_variable_scope(cx);
+        self.refresh_collection_scope(cx);
     }
 
     /// Make `document` the one the panes observe. Re-subscribes the draft writer
@@ -1278,20 +1278,30 @@ impl Workspace {
             .update(cx, |panel, cx| panel.set_tabs(tabs, active, cx));
     }
 
-    /// Hand the active tab's collection variables to `Variables`, so a send,
-    /// the inspector, and completion all see the Collection tier. A draft, an
-    /// orphan, or the empty window has no owner and so carries no rows.
-    pub(crate) fn refresh_variable_scope(&mut self, cx: &mut Context<Self>) {
+    /// Hand the active tab's collection scope down: its variables to
+    /// `Variables`, and its auth and headers to the request pane's read-only
+    /// displays. A draft, an orphan, or the empty window has no owner, so it
+    /// carries none.
+    pub(crate) fn refresh_collection_scope(&mut self, cx: &mut Context<Self>) {
         let node = self
             .tabs
             .get(self.tabs.active())
             .and_then(|tab| tab.node.clone());
-        let vars = match node {
-            Some(node) => self.panes.collections.read(cx).variables_for(&node),
-            None => Vec::new(),
+        let (vars, inherited) = match node {
+            Some(node) => {
+                let collections = self.panes.collections.read(cx);
+                (
+                    collections.variables_for(&node),
+                    collections.inherited_defaults(&node),
+                )
+            }
+            None => (Vec::new(), None),
         };
         self.variables
             .update(cx, |variables, cx| variables.set_collection(vars, cx));
+        self.panes
+            .request
+            .update(cx, |panel, cx| panel.set_inherited(inherited, cx));
     }
 }
 

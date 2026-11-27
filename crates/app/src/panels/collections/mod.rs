@@ -37,6 +37,7 @@ use crate::actions::{shortcut, ImportFile, PasteCurl, RenameSelected};
 use crate::document::Document;
 use crate::icons::{self, IconName};
 use crate::notice::Notice;
+use crate::panels::editor::InheritedDefaults;
 use crate::theme::{Metrics, Palette};
 
 use super::empty::{self, Action};
@@ -868,6 +869,18 @@ impl CollectionsPanel {
         tree::owner(&self.collections, node)
             .map(|collection| collection.variables.clone())
             .unwrap_or_default()
+    }
+
+    /// The collection a saved request belongs to, in the shape the editor's
+    /// read-only displays need: its name, auth, and headers. `None` for a draft
+    /// or an orphan, which inherits nothing.
+    pub(crate) fn inherited_defaults(&self, node: &str) -> Option<InheritedDefaults> {
+        let collection = tree::owner(&self.collections, node)?;
+        Some(InheritedDefaults {
+            collection: collection.name.clone(),
+            auth: collection.auth.clone(),
+            headers: collection.headers.clone(),
+        })
     }
 
     /// Every place a save can land, for the first-save dialog's picker.

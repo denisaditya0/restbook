@@ -20,7 +20,7 @@ pub(crate) use self::auth::{auth_fields, auth_from};
 use gpui_kit::component::input::{EditorState, InputState};
 use gpui_kit::*;
 
-use restbook_core::{Auth, Body, Method, OAuthGrant, RequestDef};
+use restbook_core::{Auth, Body, Kv, Method, OAuthGrant, RequestDef};
 
 use crate::completion::{accept_body_completion, VariableCompletions};
 use crate::theme::{Metrics, Palette};
@@ -38,7 +38,8 @@ const METHODS: [Method; 7] = [
     Method::Options,
 ];
 
-pub(crate) const AUTH_LABELS: [&str; 5] = ["None", "Basic", "Bearer", "API key", "OAuth 2.0"];
+pub(crate) const AUTH_LABELS: [&str; 6] =
+    ["None", "Inherit", "Basic", "Bearer", "API key", "OAuth 2.0"];
 
 /// Which editor tab is showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,13 +98,24 @@ pub(crate) enum AuthKind {
 }
 
 /// Same order as [`AUTH_LABELS`].
-pub(crate) const ALL_AUTH_KINDS: [AuthKind; 5] = [
+pub(crate) const ALL_AUTH_KINDS: [AuthKind; 6] = [
     AuthKind::None,
+    AuthKind::Inherit,
     AuthKind::Basic,
     AuthKind::Bearer,
     AuthKind::ApiKey,
     AuthKind::OAuth2,
 ];
+
+/// The collection a saved request belongs to, as the canvas resolved it. The
+/// Auth and Headers tabs only display these; editing happens once, in the
+/// Collections pane's settings disclosure.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct InheritedDefaults {
+    pub(crate) collection: String,
+    pub(crate) auth: Auth,
+    pub(crate) headers: Vec<Kv>,
+}
 
 /// A request from the Editor to its pane that is not just "a field changed".
 #[derive(Debug, Clone)]
@@ -135,6 +147,8 @@ pub(crate) struct RequestEditor {
     /// by default, like a web client's "hidden headers": they are not part of
     /// the request, so they should not compete with the rows the user wrote.
     pub(crate) show_default_headers: bool,
+    /// The same switch for the collection's inherited headers.
+    pub(crate) show_collection_headers: bool,
     pub(crate) body_kind: BodyKind,
     pub(crate) raw_mime: String,
     /// A code editor rather than a plain textarea: the raw body is the one
@@ -146,6 +160,9 @@ pub(crate) struct RequestEditor {
     parts: parts_table::PartRows,
     pub(crate) binary_path: Entity<InputState>,
     pub(crate) auth_kind: AuthKind,
+    /// What the active tab's collection contributes, or `None` for a draft, an
+    /// orphan, or a request outside a collection.
+    pub(crate) inherited: Option<InheritedDefaults>,
     pub(crate) auth_a: Entity<InputState>,
     pub(crate) auth_b: Entity<InputState>,
     pub(crate) api_key_in_query: bool,
@@ -261,6 +278,7 @@ impl RequestEditor {
             params_raw: None,
             headers: kv_table::Rows::default(),
             show_default_headers: false,
+            show_collection_headers: false,
             body_kind: BodyKind::None,
             raw_mime: MIME_TYPES[0].to_owned(),
             raw_text,
@@ -269,6 +287,7 @@ impl RequestEditor {
             parts: parts_table::PartRows::default(),
             binary_path,
             auth_kind: AuthKind::None,
+            inherited: None,
             auth_a,
             auth_b,
             api_key_in_query: false,
@@ -304,6 +323,20 @@ impl RequestEditor {
 
     pub(crate) fn set_method(&mut self, method: Method) {
         self.method = method;
+    }
+
+    /// Replace the collection context the Auth and Headers tabs display. The
+    /// canvas resolves it on a tab switch and after the disclosure saves.
+    pub(crate) fn set_inherited(
+        &mut self,
+        inherited: Option<InheritedDefaults>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.inherited == inherited {
+            return;
+        }
+        self.inherited = inherited;
+        cx.notify();
     }
 
     /// The URL as currently shown in the input.
