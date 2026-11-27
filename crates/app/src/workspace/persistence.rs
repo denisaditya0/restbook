@@ -336,6 +336,36 @@ impl Workspace {
         }));
     }
 
+    /// Mint a draft row for an otherwise unfiled tab and bind its id.
+    ///
+    /// The insert is synchronous: every later write and the history origin need
+    /// the id now, and a background insert could hand the same tab two rows.
+    pub(crate) fn save_draft(&mut self, index: usize, cx: &mut Context<Self>) -> Option<i64> {
+        self.tabs.get(index)?;
+        let draft = Draft {
+            id: 0,
+            request: self.tabs[index].request.clone(),
+            updated_at: SystemTime::now().into(),
+        };
+        let started = std::time::Instant::now();
+        match self.store.save_draft(&draft) {
+            Ok(id) => {
+                log::debug!(
+                    target: "restbook_app::perf",
+                    "first draft save took {}ms",
+                    started.elapsed().as_millis(),
+                );
+                self.tabs[index].draft = Some(id);
+                self.refresh_drafts(cx);
+                Some(id)
+            }
+            Err(error) => {
+                log::error!(target: "restbook_app::ui", "failed to save the draft: {error}");
+                None
+            }
+        }
+    }
+
     /// Write the active tab to the drafts table, or clear its row once filed into a
     /// collection. A blank URL is not worth restoring.
     ///
@@ -379,6 +409,12 @@ impl Workspace {
             return;
         }
 
+        // An unfiled tab has no owner: a request is kept only once Send mints
+        // its row, so there is nothing to write until then.
+        let Some(id) = existing else {
+            return;
+        };
+
         if self.tabs[index].request.url.trim().is_empty() {
             return;
         }
@@ -386,34 +422,10 @@ impl Workspace {
         // `SystemTime` converts straight into the store's timestamp type, so
         // the app never needs to name it.
         let draft = Draft {
-            id: existing.unwrap_or(0),
+            id,
             request: self.tabs[index].request.clone(),
             updated_at: SystemTime::now().into(),
         };
-
-        // The first write allocates the id, so it stays on the foreground. A
-        // close before the background had bound it would otherwise insert the
-        // same draft a second time.
-        if existing.is_none() {
-            let started = std::time::Instant::now();
-            let result = self.store.save_draft(&draft);
-            log::debug!(
-                target: "restbook_app::perf",
-                "first draft save took {}ms",
-                started.elapsed().as_millis(),
-            );
-            match result {
-                Ok(id) => {
-                    self.tabs[index].draft = Some(id);
-                    self.refresh_drafts(cx);
-                }
-                Err(error) => log::error!(
-                    target: "restbook_app::ui",
-                    "failed to save the draft: {error}"
-                ),
-            }
-            return;
-        }
 
         let store = self.store.clone();
         cx.spawn(async move |this, cx| {
@@ -468,7 +480,12 @@ impl Workspace {
             return;
         }
 
-        if !dirty && existing.is_some() {
+        // An unfiled tab has no owner: only Send mints a row, so a switch or a
+        // quit writes nothing for a request the user never sent.
+        let Some(id) = existing else {
+            return;
+        };
+        if !dirty {
             return;
         }
         // A blank tab is not worth restoring, the same rule the debounce uses.
@@ -477,7 +494,7 @@ impl Workspace {
         }
 
         let draft = Draft {
-            id: existing.unwrap_or(0),
+            id,
             request: self.tabs[index].request.clone(),
             updated_at: SystemTime::now().into(),
         };

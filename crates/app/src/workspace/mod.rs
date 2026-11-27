@@ -566,7 +566,7 @@ impl Workspace {
                 RequestEvent::TabAction(action) => this.handle_tab_action(*action, cx),
                 RequestEvent::Save => this.save_active(cx),
                 RequestEvent::SaveAs => this.save_active_as(cx),
-                RequestEvent::Imported => this.imported(cx),
+                RequestEvent::Imported(request) => this.imported((**request).clone(), cx),
                 RequestEvent::Notice(notice) => this.notice(notice, cx),
                 RequestEvent::Import => {
                     this.pending_import = true;
@@ -1047,10 +1047,18 @@ impl Workspace {
 
         // Nobody is left to show a response to, and the exit would abandon the
         // socket anyway; cancelling lets the transport close it deliberately.
-        if self.document.read(cx).is_pending() {
-            let url = self.document.read(cx).last_url.clone().unwrap_or_default();
+        // The send may be on a background tab, so cancel the document `sending`
+        // names rather than only the active one.
+        let tracked = self.sending.and_then(|id| self.documents.get(&id).cloned());
+        let in_flight = match tracked {
+            Some(document) if document.read(cx).is_pending() => Some(document),
+            _ if self.document.read(cx).is_pending() => Some(self.document.clone()),
+            _ => None,
+        };
+        if let Some(document) = in_flight {
+            let url = document.read(cx).last_url.clone().unwrap_or_default();
             log::debug!(target: "restbook_app::ui", "closing with a request in flight: {url}");
-            self.document.update(cx, |document, cx| document.cancel(cx));
+            document.update(cx, |document, cx| document.cancel(cx));
         }
 
         // No timer has a window to paint into any more. The draft's last edit
@@ -1802,7 +1810,9 @@ mod tests {
     /// written into a document nothing paints.
     mod history_pick {
         use gpui_kit::TestAppContext;
-        use restbook_core::{HistoryEntry, Method, RequestDef, ResponseBody, ResponseRecord};
+        use restbook_core::{
+            HistoryEntry, Method, Origin, RequestDef, ResponseBody, ResponseRecord,
+        };
 
         use super::super::Workspace;
 
@@ -1902,6 +1912,100 @@ mod tests {
             let after = cx.update(|_, cx| workspace.read(cx).document.read(cx).url());
             assert_eq!(after, "https://api.test/picked");
         }
+
+        /// A pick whose node was deleted is an ordinary unsent request: the
+        /// response is all that survived, so the tab keeps no owner.
+        #[gpui_kit::test]
+        fn a_pick_of_an_orphan_opens_an_ephemeral_tab(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("history-pick-orphan");
+            let (workspace, cx) = cx.add_window_view(Workspace::new);
+
+            let id = cx.update(|_, cx| {
+                workspace.update(cx, |workspace, _| {
+                    workspace
+                        .store
+                        .append_history(&HistoryEntry {
+                            id: 0,
+                            request: RequestDef::new(Method::Get, "https://api.test/gone"),
+                            response: responded(),
+                            url: "https://api.test/gone".to_owned(),
+                            origin: Origin::Saved {
+                                node: "deleted-node".to_owned(),
+                            },
+                        })
+                        .expect("the store records the send")
+                })
+            });
+
+            cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| workspace.pick_history(id, cx));
+            });
+            cx.run_until_parked();
+
+            let (node, draft, origin) = cx.update(|_, cx| {
+                let workspace = workspace.read(cx);
+                (
+                    workspace.tabs[0].node.clone(),
+                    workspace.tabs[0].draft,
+                    workspace.document.read(cx).origin.clone(),
+                )
+            });
+            assert!(node.is_none() && draft.is_none(), "an orphan has no owner");
+            assert!(matches!(origin, Origin::Standalone));
+        }
+
+        /// The pick opens its own tab when the active one already holds a
+        /// request, so a bound tab is never replaced.
+        #[gpui_kit::test]
+        fn a_pick_does_not_replace_a_bound_tab(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("history-pick-bound");
+            let (workspace, cx) = cx.add_window_view(Workspace::new);
+
+            cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.open_saved(
+                        "node-a".to_owned(),
+                        RequestDef::new(Method::Get, "https://api.test/a"),
+                        cx,
+                    )
+                });
+            });
+            cx.run_until_parked();
+
+            let id = cx.update(|_, cx| {
+                workspace.update(cx, |workspace, _| {
+                    workspace
+                        .store
+                        .append_history(&HistoryEntry {
+                            id: 0,
+                            request: RequestDef::new(Method::Get, "https://api.test/picked"),
+                            response: responded(),
+                            url: "https://api.test/picked".to_owned(),
+                            origin: Origin::Standalone,
+                        })
+                        .expect("the store records the send")
+                })
+            });
+            cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| workspace.pick_history(id, cx));
+            });
+            cx.run_until_parked();
+
+            let (len, node) = cx.update(|_, cx| {
+                let workspace = workspace.read(cx);
+                (workspace.tabs.len(), workspace.tabs[0].node.clone())
+            });
+            assert_eq!(len, 2, "the pick must get its own tab");
+            assert_eq!(
+                node.as_deref(),
+                Some("node-a"),
+                "the bound tab keeps its node"
+            );
+        }
     }
 
     /// A tab keeps its own request, body included.
@@ -1911,9 +2015,12 @@ mod tests {
     /// still see back into the tab it is leaving. That fold is what left the
     /// second tab showing the first tab's raw body.
     mod tab_bodies {
-        use gpui_kit::{Entity, TestAppContext, VisualTestContext};
-        use restbook_core::{Auth, Body, Method, OAuthConfig, RequestDef, TokenResponse};
+        use gpui_kit::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+        use restbook_core::{
+            Auth, Body, CancelToken, Method, OAuthConfig, Origin, RequestDef, TokenResponse,
+        };
 
+        use super::super::persistence::SavedTab;
         use super::super::Workspace;
 
         fn with_body(url: &str, text: &str) -> RequestDef {
@@ -2109,6 +2216,270 @@ mod tests {
                 "the tab on screen must not take the other tab's token"
             );
             assert_eq!(origin_token.as_deref(), Some("fetched-for-b"));
+        }
+
+        /// A quit cancels the request still on the wire even when the user has
+        /// switched to another tab, so the socket closes deliberately instead of
+        /// dying with the process.
+        #[gpui_kit::test]
+        fn quitting_cancels_a_send_on_a_background_tab(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("quit-background-send");
+            let (workspace, cx) = cx.add_window_view(Workspace::new);
+
+            open(cx, &workspace, "node-a", plain("https://api.test/a"));
+            cx.run_until_parked();
+            open(cx, &workspace, "node-b", plain("https://api.test/b"));
+            cx.run_until_parked();
+
+            // Tab b is on screen; tab a is in the background and owns the send.
+            let token = CancelToken::new();
+            cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    let active = workspace.active_tab_id().expect("a tab is open");
+                    let background = workspace
+                        .tabs
+                        .iter()
+                        .find(|tab| tab.id != active)
+                        .expect("two tabs are open")
+                        .id;
+                    let document = workspace.documents[&background].clone();
+                    document.update(cx, |document, _| document.pending = Some(token.clone()));
+                    workspace.sending = Some(background);
+                });
+            });
+
+            cx.update(|_, cx| workspace.update(cx, |workspace, cx| workspace.flush(cx)));
+
+            assert!(token.is_cancelled(), "quit must cancel a background send");
+        }
+
+        /// Closing the tab that owns the send cancels its transfer instead of
+        /// leaving it on the wire while the freed slot starts another.
+        #[gpui_kit::test]
+        fn closing_the_sending_tab_cancels_the_transfer(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("close-sending-tab");
+            let (workspace, cx) = cx.add_window_view(Workspace::new);
+
+            open(cx, &workspace, "node-a", plain("https://api.test/a"));
+            cx.run_until_parked();
+            open(cx, &workspace, "node-b", plain("https://api.test/b"));
+            cx.run_until_parked();
+
+            let token = CancelToken::new();
+            let background = cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    let active = workspace.active_tab_id().expect("a tab is open");
+                    let background = workspace
+                        .tabs
+                        .iter()
+                        .find(|tab| tab.id != active)
+                        .expect("two tabs are open")
+                        .id;
+                    let document = workspace.documents[&background].clone();
+                    document.update(cx, |document, _| document.pending = Some(token.clone()));
+                    workspace.sending = Some(background);
+                    background
+                })
+            });
+
+            cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| workspace.close_tab(background, cx))
+            });
+
+            assert!(
+                token.is_cancelled(),
+                "closing the sending tab must cancel its transfer"
+            );
+        }
+
+        /// Adopt a request into the live editor, the way a paste or an edit does,
+        /// so `send` reads it and the tab stays unfiled.
+        fn load_editor(
+            cx: &mut VisualTestContext,
+            workspace: &Entity<Workspace>,
+            request: RequestDef,
+        ) {
+            cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace
+                        .panes
+                        .request
+                        .update(cx, |panel, cx| panel.adopt_request(request, cx));
+                });
+            });
+            cx.run_until_parked();
+        }
+
+        /// Send is the checkpoint: an unfiled tab with a URL becomes a draft the
+        /// moment Send is pressed, and an unknown variable fails `prepare` so the
+        /// assertion needs no network.
+        #[gpui_kit::test]
+        fn pressing_send_on_an_unfiled_tab_mints_a_draft_that_reopens_next_launch(
+            cx: &mut TestAppContext,
+        ) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("send-mints-draft");
+            let (workspace, cx) = cx.add_window_view(Workspace::new);
+
+            load_editor(cx, &workspace, plain("https://api.test/{{missing}}"));
+            cx.update(|_, cx| workspace.update(cx, |workspace, cx| workspace.send(cx)));
+
+            let (has_draft, drafts, entries) = cx.update(|_, cx| {
+                let workspace = workspace.read(cx);
+                (
+                    workspace.tabs[0].draft.is_some(),
+                    workspace.store.drafts().unwrap_or_default(),
+                    workspace.tabs_snapshot().entries,
+                )
+            });
+            assert!(has_draft, "Send must mint a draft for an unfiled tab");
+            assert_eq!(drafts.len(), 1, "the draft is the kept request");
+            assert!(
+                matches!(entries.as_slice(), [SavedTab::Draft { .. }]),
+                "the kept request must be restored from its row"
+            );
+        }
+
+        /// A request typed but never sent has no owner, so a switch or a quit
+        /// writes nothing for it.
+        #[gpui_kit::test]
+        fn an_unsent_tab_is_not_written_to_the_store(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("unsent-not-stored");
+            let (workspace, cx) = cx.add_window_view(Workspace::new);
+
+            load_editor(cx, &workspace, plain("https://api.test/unsent"));
+            cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    // The writes a switch or a quit would make.
+                    workspace.snapshot_active(cx);
+                    workspace.persist_tab_draft(0, true, cx);
+                });
+            });
+
+            let (drafts, entries) = cx.update(|_, cx| {
+                let workspace = workspace.read(cx);
+                (
+                    workspace.store.drafts().unwrap_or_default(),
+                    workspace.tabs_snapshot().entries,
+                )
+            });
+            assert!(
+                drafts.is_empty(),
+                "an unsent tab must not create a draft row"
+            );
+            assert!(entries.is_empty(), "an unsent tab must not be restored");
+        }
+
+        /// The real window root: component state (notifications, dialogs) lives
+        /// on `base::Root`, which a bare `add_window_view` does not install.
+        fn open_with_root(cx: &mut TestAppContext) -> (Entity<Workspace>, &mut VisualTestContext) {
+            let mut built = None;
+            let (_root, cx) = cx.add_window_view(|window, cx| {
+                let workspace = cx.new(|cx| Workspace::new(window, cx));
+                built = Some(workspace.clone());
+                gpui_kit::base::Root::new(workspace, window, cx)
+            });
+            (built.expect("the view built the workspace"), cx)
+        }
+
+        /// A paste fills the blank page, then opens a tab of its own rather
+        /// than replacing whatever the previous paste left on screen.
+        #[gpui_kit::test]
+        fn paste_curl_reuses_a_blank_tab_and_otherwise_opens_a_new_one(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("paste-curl-tabs");
+            let (workspace, cx) = open_with_root(cx);
+
+            cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.imported(plain("https://api.test/one"), cx);
+                    // Placement is the question here, not the save dialog.
+                    workspace.pending_save = false;
+                })
+            });
+            cx.run_until_parked();
+            let first = cx.update(|_, cx| workspace.read(cx).tabs.len());
+            assert_eq!(first, 1, "a paste fills the untouched page");
+
+            cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.imported(plain("https://api.test/two"), cx);
+                    workspace.pending_save = false;
+                })
+            });
+            cx.run_until_parked();
+            let second = cx.update(|_, cx| {
+                let workspace = workspace.read(cx);
+                (workspace.tabs.len(), workspace.tabs[1].request.url.clone())
+            });
+            assert_eq!(second.0, 2, "a second paste opens its own tab");
+            assert_eq!(second.1, "https://api.test/two");
+        }
+
+        /// A bound tab keeps its node when a paste arrives, so the import gets
+        /// a tab of its own instead of overwriting a saved request.
+        #[gpui_kit::test]
+        fn paste_curl_does_not_replace_a_bound_tab(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("paste-curl-bound");
+            let (workspace, cx) = open_with_root(cx);
+
+            open(cx, &workspace, "node-a", plain("https://api.test/a"));
+            cx.run_until_parked();
+            cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.imported(plain("https://api.test/pasted"), cx);
+                    workspace.pending_save = false;
+                })
+            });
+            cx.run_until_parked();
+
+            let (len, node) = cx.update(|_, cx| {
+                let workspace = workspace.read(cx);
+                (workspace.tabs.len(), workspace.tabs[0].node.clone())
+            });
+            assert_eq!(len, 2, "the paste must get its own tab");
+            assert_eq!(node.as_deref(), Some("node-a"));
+        }
+
+        /// A tab bound to a node that no longer exists drops to an unsent
+        /// request, so Save cannot write it back to a dead id.
+        #[gpui_kit::test]
+        fn deleting_an_open_node_drops_its_tab_to_unfiled(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("delete-open-node");
+            let (workspace, cx) = cx.add_window_view(Workspace::new);
+
+            cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.open_saved("gone".to_owned(), plain("https://api.test/gone"), cx)
+                })
+            });
+            cx.run_until_parked();
+
+            cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| workspace.drop_ownerless_tabs(cx))
+            });
+
+            let (node, origin) = cx.update(|_, cx| {
+                let workspace = workspace.read(cx);
+                (
+                    workspace.tabs[0].node.clone(),
+                    workspace.document.read(cx).origin.clone(),
+                )
+            });
+            assert!(node.is_none(), "the tab loses its dead owner");
+            assert!(matches!(origin, Origin::Standalone));
         }
     }
 

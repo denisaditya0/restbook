@@ -11,7 +11,7 @@ use gpui_kit::*;
 
 use restbook_core::{
     prepare, Auth, CancelToken, Error, Failure, HistoryEntry, OAuthConfig, OAuthGrant,
-    OAuthTransport, Progress, Store, Transport,
+    OAuthTransport, Origin, Progress, Store, Transport,
 };
 
 use crate::workspace::{TabId, Workspace};
@@ -135,6 +135,26 @@ impl Workspace {
         // Read the editor live: a body or auth keystroke notifies its own
         // input, not the editor, so the document's copy can lag by one keystroke.
         let request = self.panes.request.read(cx).current_request(cx);
+
+        // Pressing Send is the checkpoint: an unfiled tab with a URL becomes a
+        // draft now, before `prepare`, so the click — not a successful response —
+        // is what keeps the request. A failed send keeps this row.
+        if let Some(index) = self.tabs.position(send_id) {
+            let unfiled = self.tabs[index].node.is_none() && self.tabs[index].draft.is_none();
+            if unfiled && !request.url.trim().is_empty() {
+                self.tabs[index].request = request.clone();
+                if let Some(draft) = self.save_draft(index, cx) {
+                    let origin = Origin::Draft { draft };
+                    // Mirror the owner into the active document now, or the
+                    // response pane's "This request" scope lags until a switch.
+                    document.update(cx, |document, cx| {
+                        document.origin = origin;
+                        cx.notify();
+                    });
+                    self.persist_tabs(cx);
+                }
+            }
+        }
 
         // Resolve `{{variables}}` against the active environment and globals.
         // The request pane has already refused to send while a name has no

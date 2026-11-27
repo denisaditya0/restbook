@@ -38,9 +38,17 @@ do not write them here.
 - **The tab strip shows which tab is sending.** While a request is on the wire
   its tab shows a spinner, and every other tab's Send is disabled with a reason
   instead of doing nothing.
+- **Quitting cancels a request still on the wire.** Close the window while a send
+  is running, even from a tab you switched away from, and its transfer is
+  cancelled instead of being left to die with the process.
 - **Picking a request from history names it.** The cookie jar and the history
   scope follow the restored request rather than the one the tab sent before, and
   a cookie you started editing is dropped when you switch tabs.
+- **A request is kept once you send it.** Typing or pasting into a tab no longer
+  stores anything for a request you have not sent; pressing Send is what keeps
+  it, and a send that fails before it leaves still keeps it. A pasted cURL
+  command or a pick from History opens its own tab instead of overwriting the
+  request you were working on.
 - **A request that skips certificate checks says so.** Turning off TLS
   verification marks the URL row and the tab, so a request that can be
   intercepted is visible without opening its Settings tab.

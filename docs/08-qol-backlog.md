@@ -7,11 +7,13 @@ this click land", and this file owns "what still feels unfinished".
 Every item names the code that makes it true, so an item that gets fixed can be
 checked off without re-deriving it. Items are ordered by user pain, not by size.
 
-**Status:** the items still open are **3.6** (a tab does not reveal its row),
-**5.4** (collection verbs live in the window menu), **6.3** (the `restbook-ui`
-crate split) and **6.6** (two type scales that disagree). Open work, including
-those, is tracked in [`01-milestones.md`](01-milestones.md). The per-item text
-below is the record of what was wrong and what fixed it.
+**Status:** the items still open are **1.13** (a duplicate tab can inherit the
+source's history origin), **3.6** (a tab does not reveal its row), **3.13**
+(per-tab view state is never pruned), **5.4** (collection verbs live in the
+window menu), **6.3** (the `restbook-ui` crate split) and **6.6** (two type
+scales that disagree). Open work, including those, is tracked in
+[`01-milestones.md`](01-milestones.md). The per-item text below is the record of
+what was wrong and what fixed it.
 
 Priority:
 
@@ -66,16 +68,14 @@ Priority:
 
 ### 1.1 Closing an unsaved draft destroys it with no prompt — **P1**
 
-`Workspace::close_tab` calls `store.delete_draft(id)` and removes the tab. There
-is no dialog, so `Ctrl+W` or a future context-menu Close can silently throw away
-a draft the user was working in.
+Closed by design. A request is kept only once it is sent: typing or pasting fills
+a tab in memory, so closing an unsent tab loses nothing that was ever persisted.
+A tab whose Send minted a draft is recorded in History against `Draft{id}`;
+closing it deletes the draft row, but that send still lists under *All* and can
+be picked back. No prompt is needed because a kept request is recoverable and an
+unkept one was never stored.
 
-**Fix:** reuse the `PendingDelete` pattern: add `pending_close`, let `close_tab`
-park when the tab would lose content, and have `render` raise the dialog via
-`window.defer`. The perform half stays the current body.
-
-Refs: `crates/app/src/workspace/mod.rs` (`close_tab`, `pending_delete`,
-`open_delete_dialog`), `02-ui-plan.md` U47.
+Refs: `Workspace::close_tab`, `Workspace::send` (`save_draft`).
 
 ### 1.2 The close button disappears on the tabs that most need it — **P1**
 
@@ -93,18 +93,13 @@ U14.
 
 ### 1.3 Draft persistence only covers the active tab — **P1**
 
-`persist_draft` snapshots `self.active_tab` and writes only that row. Switching
-tabs (`select_tab`) snapshots the leaving tab in memory but does not flush its
-draft. If the user edits and switches within `SAVE_DEBOUNCE` (400 ms), the
-leaving tab's last edits are kept in memory but not in the store; a restart
-restores the older draft.
+Closed. A draft row exists only after Send mints it, and every write — the
+debounce, a tab switch, and quit — is update-only: it updates the tab's existing
+row and never inserts for a tab with no owner. `select_tab` flushes the leaving
+tab, and quit flushes every draft tab.
 
-**Fix:** flush the leaving tab's draft on `select_tab`, and flush every draft
-tab on quit instead of only the active one (`flush_draft`). A per-tab `dirty`
-flag makes both cheap.
-
-Refs: `crates/app/src/workspace/mod.rs` (`persist_draft`, `schedule_draft_save`,
-`select_tab`, `flush_draft`, `SAVE_DEBOUNCE`).
+Refs: `crates/app/src/workspace/persistence.rs` (`save_draft`, `persist_draft`,
+`persist_tab_draft`), `Workspace::select_tab`, `Workspace::flush_draft`.
 
 ### 1.4 No Close Others / Close to Right / Close All — **P1**
 
@@ -205,6 +200,18 @@ or mouse user who does not want to hunt sideways.
 same select event.
 
 Refs: `RequestPanel::render_tab_strip`.
+
+### 1.13 A duplicated tab inherits its source's history origin — **P3**
+
+`Tab::copy_of` clears `node` and `draft`, so the copy is unbound, but
+`Workspace::duplicate_tab` also copies the source document's `origin`. A send
+from the copy before any tab switch therefore records history against the
+source's `Draft{id}` (or its node), and the source and copy share one owner.
+
+**Fix:** reset the copy's `document.origin` to `Origin::Standalone` (the
+`tab.origin()` the next switch would adopt anyway) when the document is built.
+
+Refs: `crates/app/src/workspace/tabs.rs` (`Tab::copy_of`, `duplicate_tab`).
 
 ## 2. Dirty / unsaved semantics
 
@@ -378,6 +385,19 @@ looks wrong here.
 Refs: `core/src/prepare.rs` (`prepare_with` query folding),
 `panels/editor/kv_table.rs`, `panels/editor/mod.rs` (Params tab),
 `core/src/import/bruno.rs` (`query_rows`).
+
+### 3.13 Per-tab view state is never pruned — **P3**
+
+`RequestPanel.view_tabs` and `ResponsePanel.view` are keyed by the document's
+`EntityId` and are never removed when a tab closes, so the maps grow with every
+tab opened in a session. Bounded by the number of tabs opened, never read for a
+closed tab, so it costs memory rather than correctness.
+
+**Fix:** drop the entry in each pane's `set_document` when the leaving document
+is no longer in `Workspace::documents`, or prune on `close_tab`.
+
+Refs: `crates/app/src/panels/request.rs` (`view_tabs`),
+`crates/app/src/panels/response.rs` (`view`).
 
 ## 4. Dialogs and destructive actions
 

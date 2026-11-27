@@ -9,7 +9,7 @@ use gpui_kit::component::button::*;
 use gpui_kit::component::*;
 use gpui_kit::*;
 
-use restbook_core::{Collection, CollectionItem, Environment, Store};
+use restbook_core::{Collection, CollectionItem, Environment, Origin, Store};
 
 use crate::notice::Notice;
 use crate::panels::collections as collections_panel;
@@ -416,6 +416,7 @@ impl Workspace {
         // Retire the previous offer before the new act, including a delete
         // that has no undo of its own (history, tabs).
         self.dismiss_flash();
+        let node_deleted = matches!(&target, PendingDelete::Node(_));
         let deleted = snapshot_delete(&target, self.store.as_ref());
 
         match target {
@@ -468,6 +469,11 @@ impl Workspace {
             }
         }
 
+        // A deleted node leaves any tab opened from it without an owner.
+        if node_deleted {
+            self.drop_ownerless_tabs(cx);
+        }
+
         // The panes report a failed write themselves, so only offer an undo
         // once the store actually lost the value.
         if let Some(deleted) = deleted {
@@ -475,5 +481,39 @@ impl Workspace {
                 self.flash_undo(deleted, cx);
             }
         }
+    }
+
+    /// Drop every tab whose collection node no longer exists to an unsent
+    /// request, so it cannot save back to a dead id or claim a stale owner.
+    pub(crate) fn drop_ownerless_tabs(&mut self, cx: &mut Context<Self>) {
+        let dead: Vec<usize> = {
+            let collections = self.panes.collections.read(cx);
+            self.tabs
+                .iter()
+                .enumerate()
+                .filter(|(_, tab)| {
+                    tab.node
+                        .as_deref()
+                        .is_some_and(|node| collections.saved_request(node).is_none())
+                })
+                .map(|(index, _)| index)
+                .collect()
+        };
+        if dead.is_empty() {
+            return;
+        }
+        let active = self.tabs.active();
+        for index in dead {
+            self.tabs[index].node = None;
+            if index == active {
+                let document = self.document.clone();
+                document.update(cx, |document, cx| {
+                    document.origin = Origin::Standalone;
+                    cx.notify();
+                });
+            }
+        }
+        self.push_tabs(cx);
+        self.persist_tabs(cx);
     }
 }

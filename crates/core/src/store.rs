@@ -33,7 +33,9 @@ pub struct HistoryEntry {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Origin {
-    /// A request that was never saved, or a row from before origins existed.
+    /// A row from before origins existed. The app never writes it: a request
+    /// is recorded only once it is sent, and a send names a saved node or the
+    /// draft row it minted.
     #[default]
     Standalone,
     /// A request saved in a collection: `node` is its `SavedRequest` id.
