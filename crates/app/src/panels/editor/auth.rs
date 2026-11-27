@@ -1,4 +1,4 @@
-//! The Auth tab: none, basic, bearer, or an API key.
+//! The Auth tab: none, an inherited scheme, basic, bearer, or an API key.
 
 use gpui_kit::component::button::*;
 use gpui_kit::component::checkbox::Checkbox;
@@ -16,27 +16,26 @@ impl RequestEditor {
         let strip = h_flex()
             .gap(px(metrics.space_xs))
             .pb(px(metrics.space_sm))
-            .children(
-                AUTH_LABELS
-                    .into_iter()
-                    .zip(ALL_AUTH_KINDS)
-                    .map(|(label, kind)| {
-                        let current = kind == self.auth_kind;
-                        // Keyed on the variant, not its label, so a relabel
-                        // cannot re-key the control.
-                        Button::new(format!("auth-kind-{kind:?}"))
-                            .label(label)
-                            .compact()
-                            .ghost()
-                            .selected(current)
-                            .toggled(current)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.auth_kind = kind;
-                                cx.notify();
-                            }))
-                            .into_any_element()
-                    }),
-            );
+            .children(auth_choices(self.inherited.is_some(), self.auth_kind).map(
+                |(label, kind)| {
+                    let current = kind == self.auth_kind;
+                    // Keyed on the variant, not its label, so a relabel
+                    // cannot re-key the control.
+                    Button::new(format!("auth-kind-{kind:?}"))
+                        .label(label)
+                        .compact()
+                        .ghost()
+                        .selected(current)
+                        .toggled(current)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.auth_kind = kind;
+                            cx.notify();
+                        }))
+                        .into_any_element()
+                },
+            ));
+
+        let inherited = (self.auth_kind == AuthKind::Inherit).then(|| self.render_inherited_auth());
 
         let fields: Vec<AnyElement> = match self.auth_kind {
             AuthKind::None | AuthKind::Inherit => Vec::new(),
@@ -106,10 +105,31 @@ impl RequestEditor {
         v_flex()
             .gap(px(metrics.space_sm))
             .child(strip)
+            .children(inherited)
             .child(h_flex().gap(px(metrics.space_sm)).children(fields))
             .children(key_location)
             .children(oauth)
             .children(hint.map(|hint| div().text_xs().text_color(self.palette.muted).child(hint)))
+            .into_any_element()
+    }
+
+    /// What `Inherit` resolves to, named rather than shown: the collection's
+    /// scheme, never the credential stored with it.
+    fn render_inherited_auth(&self) -> AnyElement {
+        let line = match &self.inherited {
+            Some(inherited) => format!(
+                "Inherits from {}, which uses {}.",
+                inherited.collection,
+                inherited_scheme(&inherited.auth)
+            ),
+            None => "This request is not in a collection, so it inherits no auth.".to_owned(),
+        };
+        div()
+            .debug_selector(|| "auth-inherited".to_owned())
+            .pb(px(self.metrics.space_sm))
+            .text_xs()
+            .text_color(self.palette.muted)
+            .child(line)
             .into_any_element()
     }
 
@@ -281,6 +301,33 @@ pub(crate) fn auth_from(kind: AuthKind, api_key_in_query: bool, first: &str, sec
     }
 }
 
+/// The schemes the strip offers. `Inherit` is a choice only where there is a
+/// collection to take auth from, or where the request already stores it and so
+/// has to keep showing that state.
+fn auth_choices(
+    has_collection: bool,
+    current: AuthKind,
+) -> impl Iterator<Item = (&'static str, AuthKind)> {
+    AUTH_LABELS
+        .into_iter()
+        .zip(ALL_AUTH_KINDS)
+        .filter(move |(_, kind)| {
+            *kind != AuthKind::Inherit || has_collection || current == AuthKind::Inherit
+        })
+}
+
+/// How a collection's stored auth reads in the Auth tab. Only the scheme is
+/// named: a token, password, or key value stays out of the sentence.
+pub(crate) fn inherited_scheme(auth: &Auth) -> &'static str {
+    match auth {
+        Auth::None | Auth::Inherit => "no auth",
+        Auth::Basic { .. } => "Basic auth",
+        Auth::Bearer { .. } => "a Bearer token",
+        Auth::ApiKey { .. } => "an API key",
+        Auth::OAuth2 { .. } => "OAuth 2.0",
+    }
+}
+
 /// The widget state for a stored `Auth`: the scheme plus the two shared fields
 /// and the API-key location flag. The inverse of [`auth_from`].
 pub(crate) fn auth_fields(auth: &Auth) -> (AuthKind, String, String, bool) {
@@ -309,9 +356,46 @@ pub(crate) fn auth_fields(auth: &Auth) -> (AuthKind, String, String, bool) {
 mod tests {
     // Named imports, not `super::*`: the supermodule glob-imports gpui-kit,
     // which would bring its `#[test]` macro into scope and shadow the builtin.
-    use super::{auth_fields, auth_from, AuthKind};
-    // `Auth` has no `PartialEq`, so the tests destructure rather than compare.
+    use super::{auth_choices, auth_fields, auth_from, inherited_scheme, AuthKind};
     use restbook_core::{ApiKeyLocation, Auth};
+
+    /// A request outside a collection has nothing to take auth from, so the
+    /// strip omits Inherit; inside one it is the default choice.
+    #[test]
+    fn inherit_is_offered_only_where_there_is_a_collection() {
+        let kinds = |has_collection, current| {
+            auth_choices(has_collection, current)
+                .map(|(_, kind)| kind)
+                .collect::<Vec<_>>()
+        };
+
+        assert!(!kinds(false, AuthKind::None).contains(&AuthKind::Inherit));
+        assert!(kinds(true, AuthKind::None).contains(&AuthKind::Inherit));
+        // A stored Inherit that lost its collection still has to be visible, or
+        // the strip would show no selection at all.
+        assert!(kinds(false, AuthKind::Inherit).contains(&AuthKind::Inherit));
+    }
+
+    /// The Auth tab names the scheme a request inherits; the credential must not
+    /// leak into a line that is painted whether or not the row was secret.
+    #[test]
+    fn an_inherited_scheme_is_named_without_its_credential() {
+        assert_eq!(inherited_scheme(&Auth::None), "no auth");
+        assert_eq!(
+            inherited_scheme(&Auth::Bearer {
+                token: "sk-live".to_owned()
+            }),
+            "a Bearer token"
+        );
+        assert_eq!(
+            inherited_scheme(&auth_from(AuthKind::Basic, false, "u", "p")),
+            "Basic auth"
+        );
+        assert_eq!(
+            inherited_scheme(&auth_from(AuthKind::ApiKey, false, "X-Key", "v")),
+            "an API key"
+        );
+    }
 
     #[test]
     fn none_sends_nothing() {
