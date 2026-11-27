@@ -1906,4 +1906,43 @@ mod render_tests {
             "a request with no collection has no inherited headers to list"
         );
     }
+
+    /// Each tab remembers the editor tab it was left on, so a switch back shows
+    /// that tab rather than whatever the tab just left was showing.
+    #[gpui_kit::test]
+    fn a_switch_back_restores_the_editor_tab_it_was_left_on(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let first = cx.update(|cx| cx.new(|_| Document::new()));
+        let second = cx.update(|cx| cx.new(|_| Document::new()));
+        let variables =
+            cx.update(|cx| cx.new(|cx| Variables::new(Arc::new(MemoryStore::new()), cx)));
+
+        let (panel, cx) = cx.add_window_view({
+            let first = first.clone();
+            move |window, cx| RequestPanel::new(first, variables, window, cx)
+        });
+
+        panel.update(cx, |panel, cx| {
+            panel.set_tabs(vec![entry()], 0, cx);
+            // Leave the first tab on Auth, the second on Body, then return to the
+            // first: a restored tab is Auth, not the Body of the tab just left.
+            panel.editor.update(cx, |editor, cx| {
+                editor.tab = EditorTab::Auth;
+                cx.notify();
+            });
+            panel.set_document(second, cx);
+            panel.editor.update(cx, |editor, cx| {
+                editor.tab = EditorTab::Body;
+                cx.notify();
+            });
+            panel.set_document(first, cx);
+        });
+
+        let tab = cx.update(|_, cx| panel.read(cx).editor.read(cx).tab);
+        assert_eq!(
+            tab,
+            EditorTab::Auth,
+            "switching back must restore the editor tab it was left on"
+        );
+    }
 }

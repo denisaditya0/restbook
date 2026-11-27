@@ -3374,6 +3374,64 @@ mod render_tests {
         cx.quit();
     }
 
+    /// Each tab keeps its selected response tab, so a switch back shows what was
+    /// left instead of resetting to Body. The scroll rides along in the same
+    /// `ViewState`; the tab is the deterministic half to pin.
+    #[test]
+    fn switching_tabs_restores_the_selected_response_tab() {
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+
+        let first = cx.update(|cx| cx.new(|_| Document::new()));
+        let second = cx.update(|cx| cx.new(|_| Document::new()));
+        let (view, cx) = cx.add_window_view({
+            let first = first.clone();
+            move |window, cx| {
+                let settings =
+                    cx.new(|_| Settings::new(PathBuf::from("restbook-render-test.json")));
+                ResponsePanel::new(
+                    first,
+                    Arc::new(MemoryStore::new()),
+                    FakeTransport::always(Reply::Status(200)),
+                    settings,
+                    window,
+                    cx,
+                )
+            }
+        });
+
+        // Leave the first tab on Headers.
+        cx.update(|_, cx| {
+            view.update(cx, |panel, _| panel.tab = ResponseTab::Headers);
+        });
+
+        // A tab never visited starts on the body.
+        cx.update(|_, cx| {
+            view.update(cx, |panel, cx| panel.set_document(second.clone(), cx));
+        });
+        let on_second = cx.update(|_, cx| view.read(cx).tab);
+        assert_eq!(
+            on_second,
+            ResponseTab::Body,
+            "a fresh tab starts on the body"
+        );
+
+        // Leave the second on Cookies, then switch back to the first.
+        cx.update(|_, cx| {
+            view.update(cx, |panel, _| panel.tab = ResponseTab::Cookies);
+        });
+        cx.update(|_, cx| {
+            view.update(cx, |panel, cx| panel.set_document(first.clone(), cx));
+        });
+        let back = cx.update(|_, cx| view.read(cx).tab);
+        assert_eq!(
+            back,
+            ResponseTab::Headers,
+            "switching back must restore the response tab it was left on"
+        );
+        cx.quit();
+    }
+
     /// Selectors the response pane records for the element-tree dump. The body
     /// shapes are alternatives (numbered rows, or the plain block), so a tree
     /// simply leaves out whichever one the current view did not lay out.
