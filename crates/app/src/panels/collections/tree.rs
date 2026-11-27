@@ -760,8 +760,6 @@ mod tests {
 
     fn sample() -> Vec<Collection> {
         vec![Collection {
-            id: "col-1".to_owned(),
-            name: "Sample".to_owned(),
             items: vec![
                 folder(
                     "fold-1",
@@ -781,6 +779,7 @@ mod tests {
                 ),
                 CollectionItem::Request(saved("req-3", Method::Get, "https://example.com/top")),
             ],
+            ..Collection::new("col-1", "Sample")
         }]
     }
 
@@ -819,9 +818,8 @@ mod tests {
             })
             .collect();
         vec![Collection {
-            id: "col-large".to_owned(),
-            name: "Large".to_owned(),
             items,
+            ..Collection::new("col-large", "Large")
         }]
     }
 
@@ -1099,12 +1097,11 @@ mod tests {
         // Two matching siblings, stored "two" then "one", so a name sort flips
         // them: the filter must order rows, not just pick them.
         let tree = vec![Collection {
-            id: "c".to_owned(),
-            name: "C".to_owned(),
             items: vec![
                 CollectionItem::Request(saved("r-two", Method::Get, "https://x/two")),
                 CollectionItem::Request(saved("r-one", Method::Get, "https://x/one")),
             ],
+            ..Collection::new("c", "C")
         }];
         assert_eq!(
             filter_paths(&tree, "x/", SortOrder::Manual),
@@ -1217,9 +1214,8 @@ mod tests {
     fn two_collections() -> Vec<Collection> {
         let mut tree = sample();
         tree.push(Collection {
-            id: "col-2".to_owned(),
-            name: "Other".to_owned(),
             items: vec![folder("fold-2", "Elsewhere", Vec::new())],
+            ..Collection::new("col-2", "Other")
         });
         tree
     }

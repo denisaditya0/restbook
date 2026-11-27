@@ -27,11 +27,7 @@ pub fn parse(text: &str, fallback_name: &str) -> crate::Result<BulkImport> {
         .unwrap_or(fallback_name)
         .to_owned();
 
-    let mut collection = Collection {
-        id: new_id(),
-        name,
-        items: Vec::new(),
-    };
+    let mut collection = Collection::new(new_id(), name);
 
     if let Some(items) = document.get("item").and_then(Value::as_array) {
         let path = collection.name.clone();
@@ -459,7 +455,7 @@ fn language_of(mime: &str) -> &'static str {
 
 fn auth_json(auth: &Auth) -> Option<Value> {
     match auth {
-        Auth::None => None,
+        Auth::None | Auth::Inherit => None,
         Auth::Basic { username, password } => Some(json!({
             "type": "basic",
             "basic": [

@@ -663,11 +663,7 @@ impl CollectionsPanel {
         cx: &mut Context<Self>,
     ) -> Option<String> {
         let id = new_id();
-        self.collections.push(Collection {
-            id: id.clone(),
-            name: name.to_owned(),
-            items: Vec::new(),
-        });
+        self.collections.push(Collection::new(id.clone(), name));
         self.revision += 1;
         self.selection = Selection::collection(&id);
         self.persist(&id, window, cx).then_some(id)
@@ -2076,13 +2072,12 @@ mod tests {
         let store = Arc::new(MemoryStore::new());
         store
             .save_collection(&Collection {
-                id: "col-a".to_owned(),
-                name: "A".to_owned(),
                 items: vec![CollectionItem::Folder(Folder {
                     id: "fold-a".to_owned(),
                     name: "Inner".to_owned(),
                     items: Vec::new(),
                 })],
+                ..Collection::new("col-a", "A")
             })
             .unwrap();
 
@@ -2123,15 +2118,10 @@ mod tests {
         };
         (
             Collection {
-                id: "col-a".to_owned(),
-                name: "A".to_owned(),
                 items: vec![CollectionItem::Request(request)],
+                ..Collection::new("col-a", "A")
             },
-            Collection {
-                id: "col-b".to_owned(),
-                name: "B".to_owned(),
-                items: Vec::new(),
-            },
+            Collection::new("col-b", "B"),
         )
     }
 
@@ -2185,11 +2175,7 @@ mod tests {
 
         let store = Arc::new(MemoryStore::new());
         store
-            .save_collection(&Collection {
-                id: "col-a".to_owned(),
-                name: "A".to_owned(),
-                items: Vec::new(),
-            })
+            .save_collection(&Collection::new("col-a", "A"))
             .unwrap();
         let (panel, cx) = open(cx, store);
 
@@ -2355,13 +2341,12 @@ mod tests {
         };
         store
             .save_collection(&Collection {
-                id: "col-a".to_owned(),
-                name: "A".to_owned(),
                 items: vec![CollectionItem::Folder(Folder {
                     id: "fold-a".to_owned(),
                     name: "Inner".to_owned(),
                     items: vec![request("r1"), request("r2")],
                 })],
+                ..Collection::new("col-a", "A")
             })
             .unwrap();
 

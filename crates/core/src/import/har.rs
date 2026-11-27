@@ -133,9 +133,8 @@ pub fn parse(text: &str, fallback_name: &str, limit: usize) -> crate::Result<Bul
     let collections = buckets
         .into_iter()
         .map(|(host, requests)| Collection {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: host,
             items: requests.into_iter().map(CollectionItem::Request).collect(),
+            ..Collection::new(uuid::Uuid::new_v4().to_string(), host)
         })
         .collect();
 
@@ -486,13 +485,12 @@ mod tests {
         request.params = vec![Kv::new("page", "2"), Kv::new("off", "1")];
         request.params[1].enabled = false;
         let collection = Collection {
-            id: "c".into(),
-            name: "c".into(),
             items: vec![CollectionItem::Request(SavedRequest {
                 id: "r".into(),
                 name: "r".into(),
                 request,
             })],
+            ..Collection::new("c", "c")
         };
 
         let text = export(&[collection]).unwrap();

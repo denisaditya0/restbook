@@ -39,7 +39,7 @@ impl RequestEditor {
             );
 
         let fields: Vec<AnyElement> = match self.auth_kind {
-            AuthKind::None => Vec::new(),
+            AuthKind::None | AuthKind::Inherit => Vec::new(),
             AuthKind::Basic => vec![
                 Input::new(&self.auth_a)
                     .id("auth-username")
@@ -98,7 +98,7 @@ impl RequestEditor {
                 "Header name and key value, sent as a header unless \"query string\" is checked.",
             ),
             AuthKind::OAuth2 => None,
-            AuthKind::None => None,
+            AuthKind::None | AuthKind::Inherit => None,
         };
 
         let oauth = (self.auth_kind == AuthKind::OAuth2).then(|| self.render_oauth_fields(cx));
@@ -255,6 +255,7 @@ impl RequestEditor {
 pub(crate) fn auth_from(kind: AuthKind, api_key_in_query: bool, first: &str, second: &str) -> Auth {
     match kind {
         AuthKind::None => Auth::None,
+        AuthKind::Inherit => Auth::Inherit,
         AuthKind::Basic => Auth::Basic {
             username: first.to_owned(),
             password: second.to_owned(),
@@ -285,6 +286,7 @@ pub(crate) fn auth_from(kind: AuthKind, api_key_in_query: bool, first: &str, sec
 pub(crate) fn auth_fields(auth: &Auth) -> (AuthKind, String, String, bool) {
     match auth {
         Auth::None => (AuthKind::None, String::new(), String::new(), false),
+        Auth::Inherit => (AuthKind::Inherit, String::new(), String::new(), false),
         Auth::Basic { username, password } => {
             (AuthKind::Basic, username.clone(), password.clone(), false)
         }

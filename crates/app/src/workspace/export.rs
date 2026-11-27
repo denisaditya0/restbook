@@ -408,13 +408,12 @@ mod tests {
             token: "bearer-token".to_owned(),
         };
         Collection {
-            id: id.to_owned(),
-            name: name.to_owned(),
             items: vec![CollectionItem::Request(SavedRequest {
                 id: "r1".to_owned(),
                 name: "Login".to_owned(),
                 request,
             })],
+            ..Collection::new(id, name)
         }
     }
 

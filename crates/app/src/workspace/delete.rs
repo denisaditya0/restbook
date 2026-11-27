@@ -42,7 +42,9 @@ pub(crate) enum PendingDelete {
 /// act replaces the offer, and letting the toast expire drops the snapshot.
 #[derive(Clone)]
 pub(crate) enum Deleted {
-    Collection(Collection),
+    /// Boxed for the same reason as `Item` below: the snapshot lives only as
+    /// long as its toast, so it should not widen every other variant.
+    Collection(Box<Collection>),
     /// A folder or request, plus where it lived so it returns to the same
     /// sibling position. The subtree rides inside `item`, and every id is the
     /// one it had before, so open tabs keep their `node` binding.
@@ -193,7 +195,7 @@ pub(super) fn snapshot_delete(target: &PendingDelete, store: &dyn Store) -> Opti
             .ok()?
             .into_iter()
             .find(|collection| &collection.id == id)
-            .map(Deleted::Collection),
+            .map(|collection| Deleted::Collection(Box::new(collection))),
         PendingDelete::Node(collections_panel::RowTarget::Item(id)) => {
             for collection in store.collections().ok()? {
                 let mut parent = Vec::new();

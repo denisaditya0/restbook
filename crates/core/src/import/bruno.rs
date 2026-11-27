@@ -106,13 +106,12 @@ pub fn parse(text: &str, fallback_name: &str) -> crate::Result<BulkImport> {
     }
 
     result.collections.push(Collection {
-        id: uuid::Uuid::new_v4().to_string(),
-        name: name.clone(),
         items: vec![CollectionItem::Request(SavedRequest {
             id: uuid::Uuid::new_v4().to_string(),
-            name,
+            name: name.clone(),
             request,
         })],
+        ..Collection::new(uuid::Uuid::new_v4().to_string(), name)
     });
     Ok(result)
 }
