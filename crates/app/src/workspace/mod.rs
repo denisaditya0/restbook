@@ -36,7 +36,7 @@ use std::sync::Arc;
 
 use gpui_kit::component::button::*;
 use gpui_kit::component::dialog::DialogFooter;
-use gpui_kit::component::dock::{DockArea, DockEvent, DockSkin};
+use gpui_kit::component::dock::{DockArea, DockAreaState, DockEvent, DockSkin};
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
@@ -169,6 +169,13 @@ pub(crate) struct Workspace {
     suppress_layout_save: bool,
     dock: Entity<DockArea>,
     layout_path: PathBuf,
+    /// The dock state last written, kept so a tab-only write reuses it instead of
+    /// re-dumping the whole tree. A dock change clears it (see `schedule_save`).
+    layout_cache: Option<DockAreaState>,
+    /// Counts dumps of the dock state, so a test can prove a tab-only write
+    /// reuses the cache rather than re-dumping.
+    #[cfg(test)]
+    layout_dumps: std::cell::Cell<usize>,
     save_task: Option<Task<()>>,
     /// The debounced draft write, separate from the layout's so typing and a
     /// drag do not cancel each other.
@@ -457,6 +464,9 @@ impl Workspace {
             suppress_layout_save: false,
             dock,
             layout_path: state_dir.join(LAYOUT_FILE),
+            layout_cache: None,
+            #[cfg(test)]
+            layout_dumps: std::cell::Cell::new(0),
             save_task: None,
             draft_task: None,
             draft_gen: 0,
@@ -761,6 +771,8 @@ impl Workspace {
     }
 
     fn schedule_save(&mut self, cx: &mut Context<Self>) {
+        // A changed dock is the cue to re-dump; a tab-only write reuses the cache.
+        self.layout_cache = None;
         // A new edit replaces the pending write, so a drag costs one save.
         self.save_task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor()
@@ -768,11 +780,9 @@ impl Workspace {
                 .await;
             this.update(cx, |workspace, cx| {
                 workspace.save_task = None;
-                persistence::save(
-                    &workspace.layout_path,
-                    &workspace.layout_state(cx),
-                    &workspace.tabs_snapshot(),
-                );
+                let state = workspace.cached_layout_state(cx);
+                let tabs = workspace.tabs_snapshot();
+                persistence::save(&workspace.layout_path, &state, &tabs);
             })
             .ok();
         }));
@@ -1803,6 +1813,72 @@ mod tests {
             });
             assert!(!landed);
             assert!(collections(cx, &workspace).is_empty());
+        }
+    }
+
+    /// A tab-only write must reuse the persisted dock state; a real dock change
+    /// must not. Otherwise every switch re-dumps the whole dock tree on the UI
+    /// thread.
+    mod layout_cache {
+        use gpui_kit::{AppContext as _, TestAppContext};
+
+        use super::super::Workspace;
+
+        /// Wrap in the real window root: `toggle_center_orientation` raises a
+        /// notification, which needs the component window state `base::Root`
+        /// installs and a bare `add_window_view` does not.
+        fn open(
+            cx: &mut TestAppContext,
+        ) -> (
+            gpui_kit::Entity<Workspace>,
+            &mut gpui_kit::VisualTestContext,
+        ) {
+            let mut built = None;
+            let (_root, cx) = cx.add_window_view(|window, cx| {
+                let workspace = cx.new(|cx| Workspace::new(window, cx));
+                built = Some(workspace.clone());
+                gpui_kit::base::Root::new(workspace, window, cx)
+            });
+            (built.expect("the view built the workspace"), cx)
+        }
+
+        #[gpui_kit::test]
+        fn a_tab_switch_reuses_the_dock_state_and_a_dock_change_re_dumps(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("layout-cache-tab-switch");
+            let (workspace, cx) = open(cx);
+
+            // Prime the cache with one dock dump.
+            cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| workspace.persist_tabs(cx));
+            });
+            let primed = cx.update(|_, cx| workspace.read(cx).layout_dumps.get());
+            assert!(primed >= 1, "the first write dumps the dock once");
+
+            // A tab switch changes only the tabs; the dock state is reused.
+            cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.new_tab(cx);
+                    workspace.new_tab(cx);
+                });
+            });
+            assert_eq!(
+                cx.update(|_, cx| workspace.read(cx).layout_dumps.get()),
+                primed,
+                "a tab-only write must not re-dump the dock"
+            );
+
+            // A dock change invalidates the cache, so the next write dumps again.
+            cx.update(|window, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.toggle_center_orientation(window, cx);
+                });
+            });
+            assert!(
+                cx.update(|_, cx| workspace.read(cx).layout_dumps.get()) > primed,
+                "a dock change re-dumps the state"
+            );
         }
     }
 

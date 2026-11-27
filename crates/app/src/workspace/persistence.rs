@@ -203,6 +203,7 @@ impl Workspace {
     pub(crate) fn reset_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         log::debug!(target: "restbook_app::ui", "reset layout");
         self.default_layout(window, cx);
+        self.layout_cache = None;
         self::save(
             &self.layout_path,
             &self.layout_state(cx),
@@ -217,6 +218,8 @@ impl Workspace {
     /// back as a closed dock on the next launch.
     pub(crate) fn layout_state(&self, cx: &App) -> DockAreaState {
         let mut state = self.dock.read(cx).dump(cx);
+        #[cfg(test)]
+        self.layout_dumps.set(self.layout_dumps.get() + 1);
         if let Some(dock) = &state.left_dock {
             state.left_dock = Some(DockState::new(
                 dock.panel().clone(),
@@ -544,14 +547,24 @@ impl Workspace {
         }
     }
 
+    /// The persisted dock state, dumped once and reused by a tab-only write. A
+    /// tab switch does not change the docks, so re-dumping the tree for one is
+    /// wasted work; a dock change clears the cache (see `schedule_save`).
+    pub(crate) fn cached_layout_state(&mut self, cx: &App) -> DockAreaState {
+        if let Some(state) = &self.layout_cache {
+            return state.clone();
+        }
+        let state = self.layout_state(cx);
+        self.layout_cache = Some(state.clone());
+        state
+    }
+
     /// Write the layout and the open tabs together, synchronously. Tab changes
     /// are discrete, unlike a drag, so there is no burst to debounce away.
     pub(crate) fn persist_tabs(&mut self, cx: &App) {
-        save(
-            &self.layout_path,
-            &self.layout_state(cx),
-            &self.tabs_snapshot(),
-        );
+        let state = self.cached_layout_state(cx);
+        let tabs = self.tabs_snapshot();
+        save(&self.layout_path, &state, &tabs);
     }
 }
 
