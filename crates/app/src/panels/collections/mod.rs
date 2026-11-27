@@ -845,6 +845,15 @@ impl CollectionsPanel {
         Some((collection.auth.clone(), collection.headers.clone()))
     }
 
+    /// The variable rows a saved request inherits from its collection, keyed by
+    /// the request's node id. Empty for an orphan or a draft: it has no
+    /// collection to inherit from.
+    pub(crate) fn variables_for(&self, node: &str) -> Vec<Kv> {
+        tree::owner(&self.collections, node)
+            .map(|collection| collection.variables.clone())
+            .unwrap_or_default()
+    }
+
     /// Every place a save can land, for the first-save dialog's picker.
     pub(crate) fn destinations(&self) -> Vec<DestinationRow> {
         tree::destination_rows(&self.collections)

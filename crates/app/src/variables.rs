@@ -19,6 +19,9 @@ pub(crate) struct Variables {
     store: Arc<dyn Store>,
     environments: Vec<Environment>,
     globals: Vec<Kv>,
+    /// The variable rows of the collection the active tab belongs to. The
+    /// canvas resolves the owner and sets this; a draft or an orphan has none.
+    collection: Vec<Kv>,
     /// The name of the environment the send path resolves against, if any.
     active: Option<String>,
 }
@@ -36,6 +39,7 @@ impl Variables {
             store,
             environments: Vec::new(),
             globals: Vec::new(),
+            collection: Vec::new(),
             active: None,
         };
         variables.load();
@@ -74,6 +78,17 @@ impl Variables {
 
     pub(crate) fn active(&self) -> Option<&str> {
         self.active.as_deref()
+    }
+
+    /// Replace the collection-scope rows, which the canvas resolved from the
+    /// active tab's node. Called on a tab switch and after a collection edit,
+    /// so a send and the inspector agree on what the Collection tier holds.
+    pub(crate) fn set_collection(&mut self, vars: Vec<Kv>, cx: &mut Context<Self>) {
+        if self.collection == vars {
+            return;
+        }
+        self.collection = vars;
+        cx.notify();
     }
 
     pub(crate) fn set_active(&mut self, name: Option<String>, cx: &mut Context<Self>) {
@@ -131,18 +146,18 @@ impl Variables {
         cx.notify();
     }
 
-    /// The scopes a request resolves against. `_request` is where the request-
-    /// and live-scoped layers will be pushed once something produces them; the
-    /// inspector only needs globals and the active environment today.
+    /// The scopes a request resolves against. `_request` has no producer yet: a
+    /// `RequestDef` carries no variables, so only Globals, the active
+    /// collection, and the active environment are filled.
     pub(crate) fn scoped(&self, _request: &RequestDef) -> ScopedVars {
-        resolve_scopes(&self.globals, self.active_environment())
+        resolve_scopes(&self.globals, &self.collection, self.active_environment())
     }
 
     /// The names a `{{name}}` can resolve to right now, winner per name, for
-    /// the completion popup. Collection- and request-scoped names are still
-    /// absent: nothing produces those layers yet.
+    /// the completion popup. The collection tier is included because the canvas
+    /// sets it for the active tab; the request tier has no producer.
     pub(crate) fn scoped_names(&self) -> Vec<ResolvedVar> {
-        resolve_scopes(&self.globals, self.active_environment()).names()
+        resolve_scopes(&self.globals, &self.collection, self.active_environment()).names()
     }
 
     fn active_environment(&self) -> Option<&Environment> {
@@ -151,11 +166,16 @@ impl Variables {
     }
 }
 
-/// Globals, then the active environment. The higher-precedence scopes are left
-/// empty on purpose: nothing this milestone produces belongs in them.
-fn resolve_scopes(globals: &[Kv], environment: Option<&Environment>) -> ScopedVars {
+/// Globals, the active collection, then the active environment. Precedence is
+/// decided by `vars.rs`; this only fills each tier the canvas can name.
+fn resolve_scopes(
+    globals: &[Kv],
+    collection: &[Kv],
+    environment: Option<&Environment>,
+) -> ScopedVars {
     let mut scoped = ScopedVars::new();
     scoped.set_scope(VarScope::Global, globals.iter().cloned());
+    scoped.set_scope(VarScope::Collection, collection.iter().cloned());
     if let Some(environment) = environment {
         scoped.set_scope(VarScope::Environment, environment.vars.iter().cloned());
     }
@@ -181,6 +201,10 @@ pub(crate) fn secret_of(variables: &Variables, name: &str, scope: Option<VarScop
                     .iter()
                     .find(|kv| kv.enabled && kv.key == name)
             }),
+        Some(VarScope::Collection) => variables
+            .collection
+            .iter()
+            .find(|kv| kv.enabled && kv.key == name),
         Some(VarScope::Global) => variables
             .globals()
             .iter()
@@ -270,11 +294,50 @@ pub(crate) fn references(request: &RequestDef) -> Vec<String> {
 mod tests {
     // Named imports, not `super::*`: the supermodule imports gpui-kit, whose
     // `#[test]` macro would otherwise shadow the builtin.
-    use super::{reference_fields, references, resolve_scopes};
+    use super::{reference_fields, references, resolve_scopes, secret_of, Variables};
     use restbook_core::{Auth, Body, Environment, Kv, Method, RequestDef, VarScope};
 
     fn var(key: &str, value: &str) -> Kv {
         Kv::new(key, value)
+    }
+
+    /// An empty window: no globals, no environments, no active collection. Tests
+    /// fill only the tier they exercise.
+    fn variables() -> Variables {
+        Variables {
+            store: std::sync::Arc::new(restbook_store::MemoryStore::new()),
+            environments: Vec::new(),
+            globals: Vec::new(),
+            collection: Vec::new(),
+            active: None,
+        }
+    }
+
+    /// The Collection tier is the producer this lane adds: a name only the
+    /// collection holds resolves there, and a secret row masks instead of
+    /// printing its value.
+    #[test]
+    fn a_collection_variable_resolves_and_a_secret_masks() {
+        let mut vars = variables();
+        let mut secret_row = var("token", "t0k");
+        secret_row.secret = true;
+        vars.collection = vec![var("base", "https://collection.test"), secret_row];
+
+        let request = RequestDef::new(Method::Get, "https://{{base}}/things");
+        let resolved = vars
+            .scoped(&request)
+            .lookup("base")
+            .expect("the collection answers for base");
+        assert_eq!(resolved.value, "https://collection.test");
+        assert_eq!(resolved.scope, VarScope::Collection);
+
+        let names = vars.scoped_names();
+        assert!(names
+            .iter()
+            .any(|each| each.name == "base" && each.scope == VarScope::Collection));
+
+        assert!(secret_of(&vars, "token", Some(VarScope::Collection)));
+        assert!(!secret_of(&vars, "base", Some(VarScope::Collection)));
     }
 
     #[test]
@@ -285,7 +348,7 @@ mod tests {
             vars: vec![var("host", "env")],
         };
 
-        let resolved = resolve_scopes(&globals, Some(&environment))
+        let resolved = resolve_scopes(&globals, &[], Some(&environment))
             .lookup("host")
             .expect("host should resolve");
 
@@ -294,10 +357,38 @@ mod tests {
     }
 
     #[test]
+    fn environment_beats_collection_beats_global() {
+        let globals = [var("host", "global"), var("only_global", "g")];
+        let collection = [var("host", "collection"), var("only_collection", "c")];
+        let environment = Environment {
+            name: "dev".to_owned(),
+            vars: vec![var("host", "env")],
+        };
+
+        let scoped = resolve_scopes(&globals, &collection, Some(&environment));
+        assert_eq!(
+            scoped.lookup("host").map(|each| (each.value, each.scope)),
+            Some(("env".to_owned(), VarScope::Environment))
+        );
+        assert_eq!(
+            scoped
+                .lookup("only_collection")
+                .map(|each| (each.value, each.scope)),
+            Some(("c".to_owned(), VarScope::Collection))
+        );
+        assert_eq!(
+            scoped
+                .lookup("only_global")
+                .map(|each| (each.value, each.scope)),
+            Some(("g".to_owned(), VarScope::Global))
+        );
+    }
+
+    #[test]
     fn with_no_active_environment_only_globals_answer() {
         let globals = [var("token", "abc")];
 
-        let scoped = resolve_scopes(&globals, None);
+        let scoped = resolve_scopes(&globals, &[], None);
         assert_eq!(
             scoped.lookup("token").map(|each| each.value),
             Some("abc".into())

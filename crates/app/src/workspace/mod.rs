@@ -2008,6 +2008,65 @@ mod tests {
         }
     }
 
+    /// A saved tab inherits its collection's variables for a send and for the
+    /// inspector. The canvas resolves the owner and hands the rows to
+    /// `Variables`, so a request whose URL is `{{base}}` resolves at the
+    /// Collection tier once it is opened from that collection.
+    mod collection_variables {
+        use gpui_kit::TestAppContext;
+        use restbook_core::{
+            Collection, CollectionItem, Kv, Method, RequestDef, SavedRequest, VarScope,
+        };
+
+        use super::super::Workspace;
+
+        #[gpui_kit::test]
+        fn a_bound_tab_resolves_its_collections_variables(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("collection-variable-scope");
+            let (workspace, cx) = cx.add_window_view(Workspace::new);
+
+            let request = RequestDef::new(Method::Get, "https://{{base}}/things");
+            cx.update(|window, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    let collection = Collection {
+                        variables: vec![Kv::new("base", "https://collection.test")],
+                        items: vec![CollectionItem::Request(SavedRequest {
+                            id: "req-1".to_owned(),
+                            name: "Things".to_owned(),
+                            request: request.clone(),
+                        })],
+                        ..Collection::new("col-1", "Coll")
+                    };
+                    workspace.store.save_collection(&collection).unwrap();
+                    workspace
+                        .panes
+                        .collections
+                        .update(cx, |panel, cx| panel.reload(Some(window), cx));
+                    workspace.open_saved("req-1".to_owned(), request, cx);
+                });
+            });
+            cx.run_until_parked();
+
+            let (scope, value) = cx.update(|_, cx| {
+                let workspace = workspace.read(cx);
+                let live = workspace.panes.request.read(cx).current_request(cx);
+                let resolved = workspace.variables.read(cx).scoped(&live).lookup("base");
+                (
+                    resolved.as_ref().map(|each| each.scope),
+                    resolved.map(|each| each.value),
+                )
+            });
+            assert_eq!(
+                scope,
+                Some(VarScope::Collection),
+                "the opened collection answers for base"
+            );
+            assert_eq!(value.as_deref(), Some("https://collection.test"));
+        }
+    }
+
     /// A tab keeps its own request, body included.
     ///
     /// The editor applies an adopted request on its next frame, so a switch that

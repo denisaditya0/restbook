@@ -616,6 +616,7 @@ impl Workspace {
         self.panes
             .collections
             .update(cx, |panel, cx| panel.reload(Some(window), cx));
+        self.refresh_variable_scope(cx);
         if !report.environments.is_empty() {
             self.variables
                 .update(cx, |variables, cx| variables.reload(cx));
