@@ -641,9 +641,20 @@ mod tests {
             vars: vec![secret("env-value", "TOKEN")],
         }];
 
+        let mut collection = request_with(login);
+        collection.auth = crate::Auth::Bearer {
+            token: "collection-token".to_owned(),
+        };
+        collection
+            .variables
+            .push(secret("collection-var", "COLLECTION_TOKEN"));
+        collection
+            .headers
+            .push(secret("collection-header", "X-Client"));
+
         let bundle = export(
             ExportFormat::Bundle,
-            &[request_with(login)],
+            &[collection],
             &environments,
             ExportOptions::default(),
         )
@@ -654,6 +665,9 @@ mod tests {
             "param-value",
             "form-value",
             "env-value",
+            "collection-token",
+            "collection-var",
+            "collection-header",
         ] {
             assert!(!bundle.contains(leaked), "`{leaked}` leaked:\n{bundle}");
         }
@@ -661,6 +675,8 @@ mod tests {
         // The shape survives: a reviewer still sees which row and which auth.
         assert!(bundle.contains("bearer"));
         assert!(bundle.contains("X-Api-Key"));
+        assert!(bundle.contains("COLLECTION_TOKEN"));
+        assert!(bundle.contains("X-Client"));
     }
 
     #[test]
