@@ -348,6 +348,10 @@ pub(crate) struct CollectionsPanel {
     /// The drafts the workspace persists, newest first. Read back from the store
     /// so the Unsaved list follows what is actually on disk.
     drafts: Vec<Draft>,
+    /// Counts full draft reads, so a test can prove a row update does not re-read
+    /// every draft and its body.
+    #[cfg(test)]
+    draft_reads: std::cell::Cell<usize>,
     /// The one filter state in the pane, shared by the header input and the
     /// tree walk below.
     query: Entity<InputState>,
@@ -543,6 +547,8 @@ impl CollectionsPanel {
             document_sub,
             collections,
             drafts,
+            #[cfg(test)]
+            draft_reads: std::cell::Cell::new(0),
             query,
             new_collection,
             rename_input,
@@ -594,20 +600,40 @@ impl CollectionsPanel {
                 }
             }
         }
-        self.drafts = self.store.drafts().unwrap_or_default();
+        self.drafts = self.read_drafts();
         cx.notify();
     }
 
-    /// Re-read the drafts without touching the tree. Called by the workspace
-    /// when it writes or clears a draft, since the tabs live there, not here.
-    pub(crate) fn refresh_drafts(&mut self, cx: &mut Context<Self>) {
+    /// The drafts, read back from the store. A test counts this so a row update
+    /// can prove it no longer re-reads every draft and its body.
+    fn read_drafts(&self) -> Vec<Draft> {
         let started = std::time::Instant::now();
-        self.drafts = self.store.drafts().unwrap_or_default();
+        #[cfg(test)]
+        self.draft_reads.set(self.draft_reads.get() + 1);
+        let drafts = self.store.drafts().unwrap_or_default();
         log::debug!(
             target: "restbook_app::perf",
             "drafts reload took {}ms",
             started.elapsed().as_millis(),
         );
+        drafts
+    }
+
+    /// Replace or insert one draft row, newest first, without re-reading the
+    /// store. The caller holds the row it just wrote.
+    pub(crate) fn upsert_draft(&mut self, draft: Draft, cx: &mut Context<Self>) {
+        match self.drafts.iter_mut().find(|row| row.id == draft.id) {
+            Some(row) => *row = draft,
+            None => self.drafts.push(draft),
+        }
+        self.drafts
+            .sort_by_key(|row| std::cmp::Reverse(row.updated_at));
+        cx.notify();
+    }
+
+    /// Drop one draft row by id, without re-reading the store.
+    pub(crate) fn remove_draft(&mut self, id: i64, cx: &mut Context<Self>) {
+        self.drafts.retain(|row| row.id != id);
         cx.notify();
     }
 
@@ -2301,6 +2327,58 @@ mod tests {
     ) {
         let document = cx.update(|cx| cx.new(|_| Document::new()));
         cx.add_window_view(|window, cx| CollectionsPanel::new(store, document, window, cx))
+    }
+
+    /// A row the workspace just wrote updates the Unsaved list in place; only a
+    /// full reload reads every draft back. This is what keeps a send, a save, and
+    /// a close off `Store::drafts()`.
+    #[gpui_kit::test]
+    fn a_draft_row_updates_without_re_reading_the_store(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        crate::test_support::init_ui(cx);
+
+        let store = Arc::new(MemoryStore::new());
+        let (panel, cx) = open(cx, store);
+        let base = cx.update(|_, cx| panel.read(cx).draft_reads.get());
+
+        let draft = restbook_core::Draft {
+            id: 7,
+            request: restbook_core::RequestDef::new(restbook_core::Method::Get, "https://a"),
+            updated_at: Default::default(),
+        };
+        cx.update(|_, cx| {
+            panel.update(cx, |panel, cx| panel.upsert_draft(draft.clone(), cx));
+        });
+        assert_eq!(
+            cx.update(|_, cx| panel.read(cx).draft_reads.get()),
+            base,
+            "upserting a row must not read the store"
+        );
+        assert_eq!(
+            cx.update(|_, cx| panel.read(cx).drafts.len()),
+            1,
+            "the row is now on the list"
+        );
+
+        cx.update(|_, cx| {
+            panel.update(cx, |panel, cx| panel.remove_draft(7, cx));
+        });
+        assert_eq!(
+            cx.update(|_, cx| panel.read(cx).draft_reads.get()),
+            base,
+            "removing a row must not read the store"
+        );
+        assert!(cx.update(|_, cx| panel.read(cx).drafts.is_empty()));
+
+        // The full-read path still reads, which is what makes the count meaningful.
+        cx.update(|_, cx| {
+            panel.update(cx, |panel, cx| panel.reload(None, cx));
+        });
+        assert_eq!(
+            cx.update(|_, cx| panel.read(cx).draft_reads.get()),
+            base + 1,
+            "a full reload reads the drafts once"
+        );
     }
 
     /// Dispatch a key through the real keymap, after a paint, the way the
