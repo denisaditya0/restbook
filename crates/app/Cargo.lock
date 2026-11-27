@@ -6400,7 +6400,7 @@ dependencies = [
 
 [[package]]
 name = "restbook-app"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6425,7 +6425,7 @@ dependencies = [
 
 [[package]]
 name = "restbook-core"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -6442,7 +6442,7 @@ dependencies = [
 
 [[package]]
 name = "restbook-store"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -6457,7 +6457,7 @@ dependencies = [
 
 [[package]]
 name = "restbook-transport"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "async-trait",
  "chrono",
