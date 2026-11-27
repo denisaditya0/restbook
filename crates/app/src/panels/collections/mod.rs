@@ -898,6 +898,36 @@ impl CollectionsPanel {
         tree::destination_of(&self.collections, id)
     }
 
+    /// Select `node` and expand every ancestor so its row is on screen. A node
+    /// the tree no longer holds leaves the selection alone: the tab still
+    /// carries it, but there is no row to show.
+    pub(crate) fn reveal_node(&mut self, node: &str, cx: &mut Context<Self>) {
+        let Some(destination) = self.destination_of(node) else {
+            return;
+        };
+        let mut expanded = self.collapsed.remove(&destination.collection);
+        for folder in &destination.folders {
+            expanded |= self.collapsed.remove(folder);
+        }
+        self.selection = Selection {
+            collection: Some(destination.collection),
+            folders: destination.folders,
+            request: Some(node.to_owned()),
+        };
+        if expanded {
+            // The collapsed set changed, so the flattened row cache is stale.
+            self.revision += 1;
+        }
+        cx.notify();
+    }
+
+    /// The request row the tree has selected, so a test can tell whether a tab
+    /// switch revealed its owner.
+    #[cfg(test)]
+    pub(crate) fn selected_node(&self) -> Option<&str> {
+        self.selection.request.as_deref()
+    }
+
     /// Whether `id` names a saved request rather than a folder. Only a request
     /// moves between collections: a folder would take its children with it,
     /// which is a different feature.
@@ -2494,5 +2524,62 @@ mod tests {
         panel.update(cx, |panel, cx| panel.toggle_collapse("col-a", cx));
         let collapsed = cx.update(|_, cx| panel.read(cx).flatten("").len());
         assert_eq!(collapsed, 1, "only the collection row survives");
+    }
+
+    /// 0.2.7 / backlog 3.6: switching to a tab names where the request on screen
+    /// lives, so the sidebar selects its row and expands its ancestors instead
+    /// of leaving the selection wherever it was clicked last.
+    #[gpui_kit::test]
+    fn revealing_a_request_selects_it_and_expands_its_ancestors(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        crate::test_support::init_ui(cx);
+
+        let store = Arc::new(MemoryStore::new());
+        store
+            .save_collection(&Collection {
+                items: vec![CollectionItem::Folder(Folder {
+                    id: "fold-a".to_owned(),
+                    name: "Inner".to_owned(),
+                    items: vec![CollectionItem::Request(restbook_core::SavedRequest {
+                        id: "req-a".to_owned(),
+                        name: "A".to_owned(),
+                        request: restbook_core::RequestDef::new(
+                            restbook_core::Method::Get,
+                            "https://a",
+                        ),
+                    })],
+                })],
+                ..Collection::new("col-a", "A")
+            })
+            .unwrap();
+
+        let (panel, cx) = open(cx, store);
+
+        // Both ancestors start collapsed, so the reveal is what expands them.
+        panel.update(cx, |panel, cx| {
+            panel.toggle_collapse("col-a", cx);
+            panel.toggle_collapse("fold-a", cx);
+        });
+        assert_eq!(cx.update(|_, cx| panel.read(cx).flatten("").len()), 1);
+
+        panel.update(cx, |panel, cx| panel.reveal_node("req-a", cx));
+
+        assert_eq!(
+            cx.update(|_, cx| panel.read(cx).flatten("").len()),
+            3,
+            "revealing expands the collection and the folder"
+        );
+        assert_eq!(
+            cx.update(|_, cx| panel.read(cx).selected_node().map(str::to_owned)),
+            Some("req-a".to_owned())
+        );
+
+        // A node the tree no longer holds cannot be shown, so the selection is
+        // left alone rather than cleared.
+        panel.update(cx, |panel, cx| panel.reveal_node("gone", cx));
+        assert_eq!(
+            cx.update(|_, cx| panel.read(cx).selected_node().map(str::to_owned)),
+            Some("req-a".to_owned())
+        );
     }
 }
