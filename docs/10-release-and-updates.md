@@ -56,7 +56,7 @@ Versions are chosen by what an upgrade can cost, not by how much code moved:
 | Change | Version |
 |---|---|
 | A lane: a fix, a test, an internal split, or new surface that leaves persisted state and habits intact | patch — `0.1.4`, `0.1.9` |
-| Anything that changes what is on disk (a layout or settings schema, the workspace file layout, a new field in committed files) or a habit the user must relearn | minor — `0.2.0`, `0.4.0` |
+| Anything that changes what is on disk (a layout or settings schema, the workspace file layout, a new field in committed files) or a habit the user must relearn | minor — `0.2.0`, `0.3.1` |
 | The 1.0 compatibility promise, or a break after it | major — `1.0.0` |
 
 A patch can carry a whole feature — most of this app shipped in `0.1.x`. What a

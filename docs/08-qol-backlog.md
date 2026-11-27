@@ -343,7 +343,7 @@ not the 0.2.2 case.
 **Fix:** flatten each table to a row list and paint it with `uniform_list` as the
 tree does (`Rows`/`PartRows` already own the row entities, so the list captures
 them by `Rc`). The rows are fixed-height, so no variable-height model is needed.
-Its natural home is the `0.4.1` request panel redesign, which rewrites this
+Its natural home is the `0.5.0` request panel redesign, which rewrites this
 editor's layout anyway; until then it is an unassigned P3.
 
 Refs: `panels/editor/kv_table.rs` (`render`), `panels/editor/parts_table.rs`
