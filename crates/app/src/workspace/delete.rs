@@ -505,6 +505,10 @@ impl Workspace {
         let active = self.tabs.active();
         for index in dead {
             self.tabs[index].node = None;
+            // The baseline went with the node: the tab is now unfiled, and a
+            // stale baseline would read it as clean against a request nothing
+            // saved.
+            self.tabs[index].saved = None;
             if index == active {
                 let document = self.document.clone();
                 document.update(cx, |document, cx| {
