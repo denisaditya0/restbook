@@ -743,8 +743,6 @@ mod tests {
 
     fn sample_collection(id: &str, name: &str) -> Collection {
         Collection {
-            id: id.to_owned(),
-            name: name.to_owned(),
             items: vec![CollectionItem::Folder(Folder {
                 id: "folder-1".to_owned(),
                 name: "Group".to_owned(),
@@ -754,6 +752,7 @@ mod tests {
                     request: RequestDef::new(Method::Get, "https://example.com/things"),
                 })],
             })],
+            ..Collection::new(id, name)
         }
     }
 

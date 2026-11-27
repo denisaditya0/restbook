@@ -55,13 +55,12 @@ fn one_curl(request: crate::RequestDef) -> BulkImport {
     let name = url_host(&request.url).unwrap_or_else(|| "curl".to_owned());
     BulkImport {
         collections: vec![Collection {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: name.clone(),
             items: vec![crate::CollectionItem::Request(crate::SavedRequest {
                 id: uuid::Uuid::new_v4().to_string(),
                 name: request.url.clone(),
                 request,
             })],
+            ..Collection::new(uuid::Uuid::new_v4().to_string(), name)
         }],
         ..BulkImport::default()
     }
@@ -470,9 +469,8 @@ mod tests {
             })
             .collect();
         Collection {
-            id: name.to_owned(),
-            name: name.to_owned(),
             items,
+            ..Collection::new(name, name)
         }
     }
 
@@ -616,13 +614,12 @@ mod tests {
 
     fn request_with(request: RequestDef) -> Collection {
         Collection {
-            id: "col-1".to_owned(),
-            name: "Acme".to_owned(),
             items: vec![CollectionItem::Request(SavedRequest {
                 id: "r1".to_owned(),
                 name: "Login".to_owned(),
                 request,
             })],
+            ..Collection::new("col-1", "Acme")
         }
     }
 

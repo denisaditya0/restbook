@@ -856,11 +856,7 @@ mod tests {
         // One empty collection, and a file that parses into two: both merge
         // into the destination instead of making two new collections.
         store
-            .save_collection(&Collection {
-                id: "target".to_owned(),
-                name: "Target".to_owned(),
-                items: Vec::new(),
-            })
+            .save_collection(&Collection::new("target", "Target"))
             .unwrap();
         let target = destination(&store, "Target");
 

@@ -558,13 +558,12 @@ mod tests {
             request: RequestDef::new(Method::Get, "https://example.com/things"),
         };
         let collection = Collection {
-            id: "col-1".to_owned(),
-            name: "Example".to_owned(),
             items: vec![CollectionItem::Folder(restbook_core::Folder {
                 id: "folder-1".to_owned(),
                 name: "Group".to_owned(),
                 items: vec![CollectionItem::Request(saved)],
             })],
+            ..Collection::new("col-1", "Example")
         };
         store.save_collection(&collection).unwrap();
 
@@ -583,11 +582,7 @@ mod tests {
     #[test]
     fn saving_a_collection_again_upserts_by_id() {
         let store = MemoryStore::new();
-        let mut collection = Collection {
-            id: "col-1".to_owned(),
-            name: "First".to_owned(),
-            items: Vec::new(),
-        };
+        let mut collection = Collection::new("col-1", "First");
         store.save_collection(&collection).unwrap();
         collection.name = "Renamed".to_owned();
         store.save_collection(&collection).unwrap();

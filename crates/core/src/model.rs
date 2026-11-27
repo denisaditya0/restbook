@@ -174,6 +174,8 @@ pub enum ApiKeyLocation {
 pub enum Auth {
     #[default]
     None,
+    /// Take the auth of the collection the saved request lives in.
+    Inherit,
     Basic {
         username: String,
         password: String,
@@ -397,12 +399,78 @@ pub struct Collection {
     pub name: String,
     #[serde(default)]
     pub items: Vec<CollectionItem>,
+    /// Variables a saved request resolves after its own and before the environment.
+    #[serde(default)]
+    pub variables: Vec<Kv>,
+    /// Auth for a request that inherits it.
+    #[serde(default)]
+    pub auth: Auth,
+    /// Headers a request adds to unless it defines the same name.
+    #[serde(default)]
+    pub headers: Vec<Kv>,
+}
+
+impl Collection {
+    pub fn new(id: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            items: Vec::new(),
+            variables: Vec::new(),
+            auth: Auth::None,
+            headers: Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::oauth::{OAuthConfig, OAuthGrant};
+
+    #[test]
+    fn a_collection_written_before_the_inherited_fields_still_parses() {
+        // Every workspace file and export written before collection inheritance
+        // lacks these keys, so a missing one must mean "nothing inherited".
+        let collection: Collection =
+            serde_json::from_str(r#"{"id":"c-1","name":"API","items":[]}"#).unwrap();
+
+        assert!(collection.variables.is_empty());
+        assert!(collection.headers.is_empty());
+        assert!(matches!(collection.auth, Auth::None));
+    }
+
+    #[test]
+    fn the_inherited_fields_survive_a_round_trip() {
+        // Both stores persist a collection as JSON, so a field the serializer
+        // drops is a field the user set and then lost.
+        let collection = Collection {
+            variables: vec![Kv::new("baseUrl", "https://api.test")],
+            auth: Auth::Bearer {
+                token: "token".to_owned(),
+            },
+            headers: vec![Kv::new("X-Client", "restbook")],
+            ..Collection::new("c-1", "API")
+        };
+
+        let json = serde_json::to_value(&collection).unwrap();
+        let back: Collection = serde_json::from_value(json.clone()).unwrap();
+
+        assert_eq!(serde_json::to_value(&back).unwrap(), json);
+    }
+
+    #[test]
+    fn inherit_is_a_new_auth_state_not_a_rewrite_of_none() {
+        // A file written before `Inherit` stored `"type":"none"` or left auth
+        // out; both must still load, and the new state round-trips by name.
+        let none: Auth = serde_json::from_str(r#"{"type":"none"}"#).unwrap();
+        assert!(matches!(none, Auth::None));
+
+        let json = serde_json::to_value(Auth::Inherit).unwrap();
+        assert_eq!(json, serde_json::json!({ "type": "inherit" }));
+        let back: Auth = serde_json::from_value(json).unwrap();
+        assert!(matches!(back, Auth::Inherit));
+    }
 
     #[test]
     fn oauth_config_is_flattened_into_the_auth_object() {

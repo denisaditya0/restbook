@@ -83,6 +83,9 @@ pub(crate) enum BodyKind {
 pub(crate) enum AuthKind {
     #[default]
     None,
+    /// Take the collection's auth. Exposed in the Auth tab when a request
+    /// sits in a collection; the model carries the state already.
+    Inherit,
     Basic,
     Bearer,
     ApiKey,

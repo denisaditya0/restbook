@@ -618,8 +618,6 @@ fn seed_store(store: &MemoryStore) {
     );
 
     let collection = Collection {
-        id: "col-sample".to_owned(),
-        name: "Sample API".to_owned(),
         items: vec![CollectionItem::Folder(Folder {
             id: "fold-echo".to_owned(),
             name: "Echo".to_owned(),
@@ -629,6 +627,7 @@ fn seed_store(store: &MemoryStore) {
                 request: fixture_request(),
             })],
         })],
+        ..Collection::new("col-sample", "Sample API")
     };
     seeded(store.save_collection(&collection), "collection");
 

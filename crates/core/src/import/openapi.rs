@@ -42,15 +42,13 @@ pub fn parse(text: &str, fallback_name: &str) -> crate::Result<BulkImport> {
     })?;
 
     let mut result = BulkImport::default();
-    let mut collection = Collection {
-        id: new_id(),
-        name: document
+    let mut collection = Collection::new(
+        new_id(),
+        document
             .pointer("/info/title")
             .and_then(Value::as_str)
-            .unwrap_or(fallback_name)
-            .to_owned(),
-        items: Vec::new(),
-    };
+            .unwrap_or(fallback_name),
+    );
 
     let Some(paths) = document.get("paths").and_then(Value::as_object) else {
         result.skipped.push(Skip {

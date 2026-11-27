@@ -1604,13 +1604,12 @@ mod tests {
                 .unwrap();
             store
                 .save_collection(&Collection {
-                    id: "col-1".to_owned(),
-                    name: "Example".to_owned(),
                     items: vec![CollectionItem::Request(SavedRequest {
                         id: "req-1".to_owned(),
                         name: "List".to_owned(),
                         request: RequestDef::new(Method::Get, "https://example.com/things"),
                     })],
+                    ..Collection::new("col-1", "Example")
                 })
                 .unwrap();
             store.set_active_environment(Some("dev")).unwrap();

@@ -237,7 +237,7 @@ pub(crate) fn reference_fields(request: &RequestDef) -> Vec<String> {
                 fields.push(token.clone());
             }
         }
-        Auth::None => {}
+        Auth::None | Auth::Inherit => {}
     }
 
     fields

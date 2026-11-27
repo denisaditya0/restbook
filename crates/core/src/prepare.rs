@@ -138,6 +138,9 @@ fn apply_auth(
 ) -> Result<()> {
     match auth {
         Auth::None => {}
+        // Nothing resolves `Inherit` until the send carries its collection's
+        // context, so a bare request adds no auth.
+        Auth::Inherit => {}
         Auth::Basic { username, password } => {
             let username = resolve_with(username, ctx, generators)?;
             let password = resolve_with(password, ctx, generators)?;

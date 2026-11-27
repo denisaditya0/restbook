@@ -303,7 +303,7 @@ fn secret_values(request: &RequestDef) -> Vec<String> {
         Auth::ApiKey { value, .. } => values.push(value.clone()),
         // The OAuth token is supplied at send time and never persisted, so
         // there is nothing in the request to hide here.
-        Auth::None | Auth::OAuth2 { .. } => {}
+        Auth::None | Auth::Inherit | Auth::OAuth2 { .. } => {}
     }
     values.retain(|value| !value.is_empty());
     values

@@ -74,7 +74,7 @@ fn visit_auth(auth: &mut Auth, owner: &str, f: &mut impl FnMut(SecretSlot<'_>)) 
         Auth::Bearer { token } => token,
         Auth::ApiKey { value, .. } => value,
         Auth::OAuth2 { config, .. } => &mut config.client_secret,
-        Auth::None => return,
+        Auth::None | Auth::Inherit => return,
     };
     if value.is_empty() || is_template(value) {
         return;
@@ -125,13 +125,12 @@ mod tests {
 
     fn collection_with(request: RequestDef) -> Collection {
         Collection {
-            id: "col-1".to_owned(),
-            name: "Acme".to_owned(),
             items: vec![CollectionItem::Request(SavedRequest {
                 id: "r1".to_owned(),
                 name: "Login".to_owned(),
                 request,
             })],
+            ..Collection::new("col-1", "Acme")
         }
     }
 

@@ -2518,9 +2518,8 @@ mod tests {
 
         fn collection(id: &str, items: Vec<CollectionItem>) -> Collection {
             Collection {
-                id: id.to_owned(),
-                name: format!("collection {id}"),
                 items,
+                ..Collection::new(id, format!("collection {id}"))
             }
         }
 

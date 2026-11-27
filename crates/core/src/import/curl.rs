@@ -121,6 +121,7 @@ pub fn to_curl(request: &RequestDef) -> String {
             parts.push(quote(&format!("Authorization: Bearer {token}")));
         }
         Auth::None
+        | Auth::Inherit
         | Auth::OAuth2 {
             access_token: None, ..
         }
