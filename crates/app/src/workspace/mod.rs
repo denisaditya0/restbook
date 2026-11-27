@@ -2437,6 +2437,39 @@ mod tests {
             assert!(entries.is_empty(), "an unsent tab must not be restored");
         }
 
+        /// Closing a draft tab must remove its row, so a reopen has no orphan
+        /// Unsaved entry left over from a request the user closed.
+        #[gpui_kit::test]
+        fn closing_a_draft_tab_does_not_leave_its_row_behind(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("close-draft-no-orphan");
+            let (workspace, cx) = cx.add_window_view(Workspace::new);
+
+            load_editor(cx, &workspace, plain("https://api.test/{{missing}}"));
+            cx.update(|_, cx| workspace.update(cx, |workspace, cx| workspace.send(cx)));
+            cx.run_until_parked();
+
+            let (id, drafts) = cx.update(|_, cx| {
+                let workspace = workspace.read(cx);
+                assert!(workspace.tabs[0].draft.is_some(), "Send mints a draft");
+                (
+                    workspace.tabs[0].id,
+                    workspace.store.drafts().unwrap_or_default(),
+                )
+            });
+            assert_eq!(drafts.len(), 1, "one draft row before the close");
+
+            cx.update(|_, cx| workspace.update(cx, |workspace, cx| workspace.close_tab(id, cx)));
+            cx.run_until_parked();
+
+            let drafts = cx.update(|_, cx| workspace.read(cx).store.drafts().unwrap_or_default());
+            assert!(
+                drafts.is_empty(),
+                "closing a draft tab must delete its row, not leave an orphan"
+            );
+        }
+
         /// The real window root: component state (notifications, dialogs) lives
         /// on `base::Root`, which a bare `add_window_view` does not install.
         fn open_with_root(cx: &mut TestAppContext) -> (Entity<Workspace>, &mut VisualTestContext) {
