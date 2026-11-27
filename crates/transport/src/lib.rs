@@ -766,7 +766,12 @@ mod tests {
     fn prepared(method: Method, url: &str, body: Body) -> PreparedRequest {
         let mut request = RequestDef::new(method, url);
         request.body = body;
-        restbook_core::prepare(&request, &VarContext::new()).unwrap()
+        restbook_core::prepare(
+            &request,
+            &VarContext::new(),
+            restbook_core::Inherited::default(),
+        )
+        .unwrap()
     }
 
     /// A cause chain is what separates `Connection refused` from reqwest's
@@ -1034,7 +1039,12 @@ mod tests {
         request.auth = Auth::Bearer {
             token: "abc".to_owned(),
         };
-        let prepared = restbook_core::prepare(&request, &VarContext::new()).unwrap();
+        let prepared = restbook_core::prepare(
+            &request,
+            &VarContext::new(),
+            restbook_core::Inherited::default(),
+        )
+        .unwrap();
         assert!(prepared
             .headers
             .contains(&("authorization".to_owned(), "Bearer abc".to_owned())));
@@ -1184,7 +1194,12 @@ mod tests {
         ] {
             request.headers.push(restbook_core::Kv::new(key, value));
         }
-        restbook_core::prepare(&request, &VarContext::new()).unwrap()
+        restbook_core::prepare(
+            &request,
+            &VarContext::new(),
+            restbook_core::Inherited::default(),
+        )
+        .unwrap()
     }
 
     /// The user's credentials belong to the origin that issued them, so a hop

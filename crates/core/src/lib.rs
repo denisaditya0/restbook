@@ -31,7 +31,7 @@ pub use oauth::{
     TokenRequest, TokenResponse,
 };
 pub use prepare::{
-    default_headers, prepare, PartData, PreparedBody, PreparedPart, PreparedRequest,
+    default_headers, prepare, Inherited, PartData, PreparedBody, PreparedPart, PreparedRequest,
 };
 pub use store::{Draft, HistoryEntry, HistoryFilter, HistoryHit, Origin, Store};
 pub use template::{resolve, VarContext};

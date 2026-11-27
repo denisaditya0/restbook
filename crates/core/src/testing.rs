@@ -191,13 +191,14 @@ impl Transport for FakeTransport {
 mod tests {
     use super::*;
     use crate::model::{Body, Method, RequestDef};
-    use crate::prepare::prepare;
+    use crate::prepare::{prepare, Inherited};
     use crate::template::VarContext;
 
     fn prepared() -> PreparedRequest {
         prepare(
             &RequestDef::new(Method::Get, "https://example.com/things"),
             &VarContext::new(),
+            Inherited::default(),
         )
         .unwrap()
     }
@@ -230,7 +231,7 @@ mod tests {
         missing.body = Body::None;
         let record = transport
             .execute(
-                prepare(&missing, &VarContext::new()).unwrap(),
+                prepare(&missing, &VarContext::new(), Inherited::default()).unwrap(),
                 CancelToken::new(),
             )
             .await
