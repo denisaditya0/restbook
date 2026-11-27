@@ -13,6 +13,10 @@ mod params;
 mod parts_table;
 mod settings;
 
+// The Collections pane edits a collection's auth with the same mapping the Auth
+// tab uses, so the two cannot drift on what a scheme writes.
+pub(crate) use self::auth::{auth_fields, auth_from};
+
 use gpui_kit::component::input::{EditorState, InputState};
 use gpui_kit::*;
 

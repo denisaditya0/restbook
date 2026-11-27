@@ -5,6 +5,7 @@
 //! canvas; the tree walks and edits live in [`tree`] so they stay testable
 //! without an `App` or a `Window`.
 
+mod settings;
 mod tree;
 
 use std::collections::HashSet;
@@ -75,6 +76,10 @@ pub(crate) enum Event {
     Import,
     /// The header asked to export. The workspace owns the picker and the write.
     Export,
+    /// The settings disclosure saved a collection's variables, auth, or headers.
+    /// The workspace re-reads the active tab's collection scope so the next send
+    /// and the inspector see the new rows.
+    CollectionChanged,
 }
 
 /// One line for the interaction log, derived from the event itself. Exhaustive,
@@ -92,6 +97,7 @@ impl Event {
             Event::SaveRequest => Some("event: save request from collections".to_owned()),
             Event::Import => Some("event: import file".to_owned()),
             Event::Export => Some("event: export".to_owned()),
+            Event::CollectionChanged => Some("event: collection settings saved".to_owned()),
             // Logged by `Workspace::notice`, which owns the flash too.
             Event::Notice(_) => None,
         }
@@ -365,6 +371,13 @@ pub(crate) struct CollectionsPanel {
     /// Bumped on every mutation of `collections`, and on a collapse toggle
     /// (which changes the flattened row set); keys `flat_cache`.
     revision: u64,
+    /// The selected collection's settings disclosure, loaded once per target.
+    /// `None` when the selected row is not a collection root.
+    settings: Option<settings::CollectionSettings>,
+    /// A collection whose settings are queued to load after the frame.
+    settings_pending: Option<String>,
+    /// Whether the disclosure body is open. Collapsed shows only its header.
+    settings_open: bool,
     focus_handle: FocusHandle,
 }
 
@@ -539,6 +552,9 @@ impl CollectionsPanel {
             composing: false,
             flat_cache: None,
             revision: 0,
+            settings: None,
+            settings_pending: None,
+            settings_open: false,
             focus_handle: cx.focus_handle(),
         }
     }
@@ -2003,6 +2019,7 @@ fn row_menu(
 impl Render for CollectionsPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bg = self.palette.sidebar;
+        self.sync_settings(window, cx);
         v_flex()
             .size_full()
             .bg(bg)
@@ -2017,6 +2034,7 @@ impl Render for CollectionsPanel {
             .children(self.composing.then(|| self.render_new_collection(cx)))
             .children((!self.drafts.is_empty()).then(|| self.render_unsaved(cx)))
             .child(self.render_list(window, cx))
+            .children(self.render_settings(cx))
     }
 }
 

@@ -13,8 +13,8 @@ use gpui_kit::*;
 
 use restbook_core::testing::{FakeTransport, Reply};
 use restbook_core::{
-    Body, Collection, CollectionItem, Draft, Environment, Folder, HistoryEntry, Kv, Method, Origin,
-    RequestDef, ResponseRecord, SavedRequest, Store,
+    Auth, Body, Collection, CollectionItem, Draft, Environment, Folder, HistoryEntry, Kv, Method,
+    Origin, RequestDef, ResponseRecord, SavedRequest, Store,
 };
 use restbook_store::MemoryStore;
 
@@ -471,9 +471,15 @@ fn build_pane(
         PanelName::Environment => PaneView::Environment(cx.new(|cx| {
             EnvironmentPanel::new(fixture.variables.clone(), fixture.document(), window, cx)
         })),
-        PanelName::Collections => PaneView::Collections(cx.new(|cx| {
-            CollectionsPanel::new(fixture.store.clone(), fixture.document(), window, cx)
-        })),
+        PanelName::Collections => {
+            let panel = cx.new(|cx| {
+                CollectionsPanel::new(fixture.store.clone(), fixture.document(), window, cx)
+            });
+            // The disclosure only shows for a selected collection, so the
+            // capture selects the fixture's own.
+            panel.update(cx, |panel, cx| panel.preview_select_collection(cx));
+            PaneView::Collections(panel)
+        }
     })
 }
 
@@ -627,6 +633,17 @@ fn seed_store(store: &MemoryStore) {
                 request: fixture_request(),
             })],
         })],
+        variables: vec![
+            Kv::new("base_url", FIXTURE_URL),
+            Kv {
+                secret: true,
+                ..Kv::new("api_key", "fixture-key")
+            },
+        ],
+        auth: Auth::Bearer {
+            token: "fixture-token".to_owned(),
+        },
+        headers: vec![Kv::new("x-collection", "sample")],
         ..Collection::new("col-sample", "Sample API")
     };
     seeded(store.save_collection(&collection), "collection");

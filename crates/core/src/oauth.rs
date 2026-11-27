@@ -25,7 +25,7 @@ pub enum OAuthGrant {
 }
 
 /// An OAuth 2.0 client's settings, persisted with the request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OAuthConfig {
     #[serde(default)]
     pub grant: OAuthGrant,
