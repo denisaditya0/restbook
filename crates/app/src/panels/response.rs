@@ -183,6 +183,10 @@ pub(crate) struct ResponsePanel {
     /// made in another pane bumps it, which is the only signal this pane gets
     /// that its list is stale without a send.
     history_revision: u64,
+    /// Bumped on every read and on every document switch. A background read is
+    /// applied only if this still matches, so a result for a request already
+    /// left cannot paint over the new tab's rows.
+    history_epoch: u64,
     /// Pretty-print JSON payloads. On by default; the format dropdown toggles
     /// it and names what "pretty" means for this payload.
     pretty: bool,
@@ -895,6 +899,7 @@ impl ResponsePanel {
             history_origin: Origin::default(),
             history_stamp: None,
             history_revision: 0,
+            history_epoch: 0,
             pretty,
             tab: ResponseTab::Body,
             display: None,
@@ -969,13 +974,7 @@ impl ResponsePanel {
             self.history_origin = origin;
             self.history_stamp = stamp;
             self.history_revision = revision;
-            let started = std::time::Instant::now();
-            self.reload_history();
-            log::debug!(
-                target: "restbook_app::perf",
-                "response history reload took {}ms",
-                started.elapsed().as_millis(),
-            );
+            self.reload_history(cx);
         }
 
         // The redraw has its own reason. A failure or a cancel leaves the query
@@ -1017,8 +1016,10 @@ impl ResponsePanel {
         self.history_revision = 0;
         // The rows belong to the document being left. Clearing the key alone
         // is not enough: the empty document reports exactly these defaults, so
-        // `sync_history` would see no change and keep the old tab's sends.
+        // `sync_history` would see no change and keep the old tab's sends. The
+        // epoch bump drops a read already in flight for the document being left.
         self.history.clear();
+        self.history_epoch = self.history_epoch.wrapping_add(1);
         self.painted = (ResponseState::Idle, None);
         let view = self
             .view
@@ -1052,19 +1053,48 @@ impl ResponsePanel {
         }
     }
 
-    /// Re-read the rows for the current request.
-    ///
     /// Re-read the rows for the current request, through the same scope the
     /// History pane uses.
-    fn reload_history(&mut self) {
-        self.history = crate::panels::history::scoped_rows(
-            self.store.as_ref(),
-            &self.history_origin,
-            &self.history_query,
-            &restbook_core::HistoryFilter::default(),
-            HISTORY_ROWS,
-        )
-        .unwrap_or_default();
+    ///
+    /// The read runs on the background executor behind the store's connection
+    /// mutex, so an encrypted query cannot stall a paint. The epoch makes the
+    /// last read win: a result for a superseded request is dropped rather than
+    /// flashed on.
+    fn reload_history(&mut self, cx: &mut Context<Self>) {
+        self.history_epoch = self.history_epoch.wrapping_add(1);
+        let epoch = self.history_epoch;
+        let store = self.store.clone();
+        let origin = self.history_origin.clone();
+        let query = self.history_query.clone();
+        let started = std::time::Instant::now();
+
+        cx.spawn(async move |this, cx| {
+            let rows = cx
+                .background_spawn(async move {
+                    crate::panels::history::scoped_rows(
+                        store.as_ref(),
+                        &origin,
+                        &query,
+                        &restbook_core::HistoryFilter::default(),
+                        HISTORY_ROWS,
+                    )
+                    .unwrap_or_default()
+                })
+                .await;
+            log::debug!(
+                target: "restbook_app::perf",
+                "response history reload took {}ms",
+                started.elapsed().as_millis(),
+            );
+            this.update(cx, |panel, cx| {
+                if panel.history_epoch == epoch {
+                    panel.history = rows;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// What kind of text the payload is, for the format dropdown. Only the
@@ -3810,6 +3840,7 @@ mod render_tests {
         seed_history(&store, url, 201);
 
         let (view, cx) = open_with(&mut cx, None, store, None);
+        cx.run_until_parked();
         let found = view.update(cx, |panel, _| panel.history.len());
         assert_eq!(found, 2, "the reopened tab should see both stored sends");
 
@@ -3835,11 +3866,21 @@ mod render_tests {
         seed_history(&store, "http://sample/one-line", 403);
 
         let (view, cx) = open_with(&mut cx, None, store, None);
+        cx.run_until_parked();
         let before = view.update(cx, |panel, _| panel.history.len());
         assert_eq!(before, 1, "the tab starts with the rows for its URL");
 
+        // A read for this request is in flight when the last tab closes. It must
+        // not land after the switch and re-offer rows for a request that is gone.
         let empty = cx.update(|_, cx| cx.new(|_| Document::new()));
-        view.update(cx, |panel, cx| panel.set_document(empty, cx));
+        view.update(cx, |panel, cx| {
+            panel
+                .document
+                .update(cx, |document, _| document.touch_history());
+            panel.sync_history(cx);
+            panel.set_document(empty, cx);
+        });
+        cx.run_until_parked();
 
         let after = view.update(cx, |panel, _| panel.history.len());
         assert_eq!(after, 0, "a closed request has no earlier sends to offer");
@@ -3909,6 +3950,7 @@ mod render_tests {
         );
 
         let (view, vcx) = open_owned(&mut cx, None, store.clone(), None, first, jar(&[]));
+        vcx.run_until_parked();
         assert_eq!(
             view.update(vcx, |panel, _| panel.history.len()),
             2,
@@ -3927,6 +3969,7 @@ mod render_tests {
             },
             jar(&[]),
         );
+        vcx.run_until_parked();
         assert_eq!(
             other.update(vcx, |panel, _| panel.history.len()),
             0,
@@ -3959,6 +4002,7 @@ mod render_tests {
             .id;
 
         let (view, vcx) = open_owned(&mut cx, None, store.clone(), None, owner, jar(&[]));
+        vcx.run_until_parked();
         assert_eq!(view.update(vcx, |panel, _| panel.history.len()), 1);
 
         store.delete_history(id).unwrap();
@@ -3969,6 +4013,7 @@ mod render_tests {
             });
             panel.sync_history(cx);
         });
+        vcx.run_until_parked();
 
         assert_eq!(
             view.update(vcx, |panel, _| panel.history.len()),
