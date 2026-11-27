@@ -24,6 +24,24 @@ Contributors and pull requests are added to the release page by `release.yml`;
 do not write them here.
 -->
 
+## 0.2.6
+
+- **A collection can share variables, auth, and headers with its requests.**
+  Requests saved in a collection resolve {{variables}} from it and inherit its
+  auth and default headers, so setup written once applies to every request in
+  that collection.
+- **The Auth tab has an explicit Inherit state.** A request inside a collection
+  shows Inherit instead of silently falling back, and a request created there
+  starts on Inherit.
+- **A request overrides what it inherits.** Its own headers are applied first
+  and win over the collection's by name, and its own auth replaces the
+  collection's.
+- **Collection defaults are edited in the sidebar.** Select a collection to set
+  its variables, auth, and default headers without leaving the app.
+- **A collection secret stays masked.** A variable marked secret is hidden in
+  the inspector and in exports, and an imported request that inherits its
+  collection's auth keeps doing so.
+
 ## 0.2.5
 
 - **A response stays with the tab that sent it.** Send a request, switch to
