@@ -28,7 +28,7 @@ use crate::completion::Autocomplete;
 use crate::document::Document;
 use crate::icons::{self, IconName};
 use crate::notice::Notice;
-use crate::panels::editor::{EditorEvent, EditorTab, RequestEditor};
+use crate::panels::editor::{EditorEvent, EditorTab, InheritedDefaults, RequestEditor};
 use crate::theme::{Metrics, Palette};
 use crate::variables::{references, Variables};
 use crate::workspace::{RequestStamp, TabAction, TabEntry, TabId};
@@ -488,6 +488,18 @@ impl RequestPanel {
         });
         self.pending_painted = pending;
         cx.notify();
+    }
+
+    /// Hand the editor the collection its active request belongs to. The canvas
+    /// resolves it, like the tab list and the variable scope; the pane only shows
+    /// it, in the Auth and Headers tabs.
+    pub(crate) fn set_inherited(
+        &mut self,
+        inherited: Option<InheritedDefaults>,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor
+            .update(cx, |editor, cx| editor.set_inherited(inherited, cx));
     }
 
     /// Fold a document change into the editor, adopting its request and the
@@ -1791,5 +1803,107 @@ mod enter_tests {
 
         let url = cx.update(|_, cx| panel.read(cx).editor.read(cx).url_value(cx));
         assert_eq!(url, "{{$uuid}}");
+    }
+}
+
+#[cfg(test)]
+mod render_tests {
+    // Named imports only: `use super::*` would drag in GPUI's `test` macro and
+    // shadow the built-in `#[test]`.
+    use std::sync::Arc;
+
+    use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
+    use restbook_core::{Auth, Kv, Method, RequestDef};
+    use restbook_store::MemoryStore;
+
+    use super::{Document, InheritedDefaults, RequestPanel, TabEntry, Variables};
+    use crate::panels::editor::EditorTab;
+
+    /// One strip entry: the pane draws no editor at all with no tab open.
+    fn entry() -> TabEntry {
+        TabEntry {
+            id: 1,
+            method: Method::Get,
+            label: "one".into(),
+            url: String::new().into(),
+            current: String::new(),
+            saved: None,
+            node: None,
+            draft: None,
+            insecure: false,
+            pending: false,
+        }
+    }
+
+    /// One frame, flushed the way a real window flushes it.
+    fn draw(cx: &mut VisualTestContext) {
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        cx.run_until_parked();
+    }
+
+    /// The two inheritance surfaces paint only where there is something to
+    /// inherit: the Auth tab names the scheme, and the Headers tab offers the
+    /// collection's rows. A draft has neither.
+    #[gpui_kit::test]
+    fn the_editor_shows_only_the_collection_it_inherits_from(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let mut request = RequestDef::new(Method::Get, "https://sample/echo");
+        request.auth = Auth::Inherit;
+        let document = cx.update(|cx| {
+            cx.new(|_| {
+                let mut document = Document::new();
+                document.request = request;
+                document
+            })
+        });
+        // A blank first document, then a switch, so the editor adopts the
+        // request the way a real tab change does.
+        let blank = cx.update(|cx| cx.new(|_| Document::new()));
+        let variables =
+            cx.update(|cx| cx.new(|cx| Variables::new(Arc::new(MemoryStore::new()), cx)));
+
+        let (panel, cx) =
+            cx.add_window_view(|window, cx| RequestPanel::new(blank, variables, window, cx));
+        panel.update(cx, |panel, cx| {
+            panel.set_tabs(vec![entry()], 0, cx);
+            panel.set_document(document.clone(), cx);
+            panel.editor.update(cx, |editor, cx| {
+                editor.tab = EditorTab::Auth;
+                cx.notify();
+            });
+        });
+        draw(cx);
+        // Nothing to inherit yet: the note explains the empty state.
+        assert!(cx.debug_bounds("auth-inherited").is_some());
+
+        let inherited = InheritedDefaults {
+            collection: "Sample API".to_owned(),
+            auth: Auth::Bearer {
+                token: "fixture-token".to_owned(),
+            },
+            headers: vec![Kv::new("x-collection", "sample")],
+        };
+        panel.update(cx, |panel, cx| panel.set_inherited(Some(inherited), cx));
+        draw(cx);
+        assert!(cx.debug_bounds("auth-inherited").is_some());
+
+        panel.update(cx, |panel, cx| {
+            panel.editor.update(cx, |editor, cx| {
+                editor.tab = EditorTab::Headers;
+                cx.notify();
+            });
+        });
+        draw(cx);
+        assert!(cx.debug_bounds("headers-collection-toggle").is_some());
+
+        panel.update(cx, |panel, cx| panel.set_inherited(None, cx));
+        draw(cx);
+        assert!(
+            cx.debug_bounds("headers-collection-toggle").is_none(),
+            "a request with no collection has no inherited headers to list"
+        );
     }
 }

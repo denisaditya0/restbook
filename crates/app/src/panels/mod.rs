@@ -16,6 +16,7 @@ pub(crate) mod request;
 pub(crate) mod response;
 
 pub(crate) use collections::CollectionsPanel;
+pub(crate) use editor::InheritedDefaults;
 pub(crate) use environment::EnvironmentPanel;
 pub(crate) use history::HistoryPanel;
 pub(crate) use request::RequestPanel;

@@ -24,6 +24,7 @@ use crate::panels::environment::EnvironmentPanel;
 use crate::panels::history::HistoryPanel;
 use crate::panels::request::RequestPanel;
 use crate::panels::response::ResponsePanel;
+use crate::panels::InheritedDefaults;
 use crate::theme::{self, Metrics, Palette};
 use crate::variables::Variables;
 use crate::workspace::settings::{Settings, SETTINGS_FILE};
@@ -448,6 +449,17 @@ fn build_pane(
             panel.update(cx, |panel, cx| {
                 panel.set_tabs(fixture.tabs.clone(), fixture.active_tab, cx);
                 panel.set_document(fixture.document(), cx);
+                // The canvas resolves this for the live window; the fixture's
+                // active tab is the saved request in the fixture collection.
+                let collection = fixture_collection();
+                panel.set_inherited(
+                    Some(InheritedDefaults {
+                        collection: collection.name.clone(),
+                        auth: collection.auth.clone(),
+                        headers: collection.headers.clone(),
+                    }),
+                    cx,
+                );
             });
             PaneView::Request(panel)
         }
@@ -499,6 +511,9 @@ fn fixture_request() -> RequestDef {
     };
     // Insecure so the URL row and the strip both carry the U64 marker.
     request.insecure = true;
+    // Saved inside the fixture collection, so it takes that collection's auth
+    // and headers unless it sets its own.
+    request.auth = Auth::Inherit;
     request
 }
 
@@ -596,6 +611,34 @@ fn fixture_response(status: u16, duration: chrono::Duration) -> ResponseRecord {
     }
 }
 
+/// The collection the fixtures read: a folder holding the fixture request, a
+/// variable pair, one default header, and the Bearer auth the request inherits.
+fn fixture_collection() -> Collection {
+    Collection {
+        items: vec![CollectionItem::Folder(Folder {
+            id: "fold-echo".to_owned(),
+            name: "Echo".to_owned(),
+            items: vec![CollectionItem::Request(SavedRequest {
+                id: FIXTURE_NODE.to_owned(),
+                name: "Echo (preview)".to_owned(),
+                request: fixture_request(),
+            })],
+        })],
+        variables: vec![
+            Kv::new("base_url", FIXTURE_URL),
+            Kv {
+                secret: true,
+                ..Kv::new("api_key", "fixture-key")
+            },
+        ],
+        auth: Auth::Bearer {
+            token: "fixture-token".to_owned(),
+        },
+        headers: vec![Kv::new("x-collection", "sample")],
+        ..Collection::new("col-sample", "Sample API")
+    }
+}
+
 /// The rows the non-response panes draw: one environment (active), a global, a
 /// collection with a folder and the fixture request, one unsaved draft, and a
 /// short send log the response pane's history control can list.
@@ -623,29 +666,7 @@ fn seed_store(store: &MemoryStore) {
         "globals",
     );
 
-    let collection = Collection {
-        items: vec![CollectionItem::Folder(Folder {
-            id: "fold-echo".to_owned(),
-            name: "Echo".to_owned(),
-            items: vec![CollectionItem::Request(SavedRequest {
-                id: FIXTURE_NODE.to_owned(),
-                name: "Echo (preview)".to_owned(),
-                request: fixture_request(),
-            })],
-        })],
-        variables: vec![
-            Kv::new("base_url", FIXTURE_URL),
-            Kv {
-                secret: true,
-                ..Kv::new("api_key", "fixture-key")
-            },
-        ],
-        auth: Auth::Bearer {
-            token: "fixture-token".to_owned(),
-        },
-        headers: vec![Kv::new("x-collection", "sample")],
-        ..Collection::new("col-sample", "Sample API")
-    };
+    let collection = fixture_collection();
     seeded(store.save_collection(&collection), "collection");
 
     let draft = Draft {
