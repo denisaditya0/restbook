@@ -21,7 +21,7 @@ use gpui_kit::component::{h_flex, v_flex, WindowExt as _};
 use gpui_kit::*;
 
 use restbook_core::{
-    Collection, CollectionItem, Draft, Folder, Method, RequestDef, SavedRequest, Store,
+    Auth, Collection, CollectionItem, Draft, Folder, Kv, Method, RequestDef, SavedRequest, Store,
 };
 
 use self::tree::{
@@ -834,6 +834,15 @@ impl CollectionsPanel {
     /// it.
     pub(crate) fn saved_request(&self, id: &str) -> Option<RequestDef> {
         tree::find_saved(&self.collections, id).map(|saved| saved.request.clone())
+    }
+
+    /// The auth and headers a saved request inherits from its collection, keyed
+    /// by the request's node id. `None` for an orphan or a draft: it has no
+    /// collection to inherit from. Cloned because the caller prepares outside
+    /// the pane borrow.
+    pub(crate) fn inherited_for(&self, node: &str) -> Option<(Auth, Vec<Kv>)> {
+        let collection = tree::owner(&self.collections, node)?;
+        Some((collection.auth.clone(), collection.headers.clone()))
     }
 
     /// Every place a save can land, for the first-save dialog's picker.

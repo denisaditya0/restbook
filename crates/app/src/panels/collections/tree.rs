@@ -527,16 +527,17 @@ fn resolve_items_mut<'a>(
     }
 }
 
-/// The id of the top-level collection that holds `id`, whether `id` is the
-/// collection itself or a folder or request nested inside it.
+/// The collection a node lives in, whether the node is the collection itself or
+/// a folder or request nested inside it.
+pub(super) fn owner<'a>(collections: &'a [Collection], id: &str) -> Option<&'a Collection> {
+    collections
+        .iter()
+        .find(|collection| collection.id == id || find_in_items(&collection.items, id).is_some())
+}
+
+/// The id of the top-level collection that holds `id`.
 pub(super) fn owner_collection(collections: &[Collection], id: &str) -> Option<String> {
-    collections.iter().find_map(|collection| {
-        if collection.id == id || find_in_items(&collection.items, id).is_some() {
-            Some(collection.id.clone())
-        } else {
-            None
-        }
-    })
+    owner(collections, id).map(|collection| collection.id.clone())
 }
 
 /// The name of a collection or folder with `id`, for prefilling a rename.
@@ -731,7 +732,7 @@ mod tests {
     use super::{
         default_destination, destination_of, destination_rows, display_name, filter_paths,
         find_in_items_all, has_move_target, import_into, initial, insert_into, item_id, move_item,
-        move_to, node_name, owner_collection, remove_item, rename_item, resolve_selection,
+        move_to, node_name, owner, owner_collection, remove_item, rename_item, resolve_selection,
         Destination, Selection, SortOrder,
     };
 
@@ -1157,6 +1158,23 @@ mod tests {
         assert_eq!(owner_collection(&tree, "fold-1").as_deref(), Some("col-1"));
         assert_eq!(owner_collection(&tree, "col-1").as_deref(), Some("col-1"));
         assert_eq!(owner_collection(&tree, "missing"), None);
+    }
+
+    #[test]
+    fn owner_returns_the_collection_so_a_send_can_inherit_its_fields() {
+        let mut tree = sample();
+        let index = tree.iter().position(|each| each.id == "col-1").unwrap();
+        tree[index].auth = restbook_core::Auth::Bearer {
+            token: "abc".to_owned(),
+        };
+        tree[index]
+            .headers
+            .push(restbook_core::Kv::new("X-Client", "restbook"));
+
+        let found = owner(&tree, "req-2").expect("the nested request has an owner");
+        assert!(matches!(found.auth, restbook_core::Auth::Bearer { .. }));
+        assert_eq!(found.headers[0].key, "X-Client");
+        assert!(owner(&tree, "missing").is_none());
     }
 
     #[test]

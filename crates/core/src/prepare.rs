@@ -11,7 +11,7 @@ use url::Url;
 
 use crate::error::{Error, Result};
 use crate::generator::Generators;
-use crate::model::{ApiKeyLocation, Auth, Body, Method, RequestDef};
+use crate::model::{ApiKeyLocation, Auth, Body, Kv, Method, RequestDef};
 use crate::template::{resolve_with, VarContext};
 
 #[derive(Debug, Clone)]
@@ -65,14 +65,29 @@ pub fn default_headers() -> Vec<(String, String)> {
     ]
 }
 
-pub fn prepare(request: &RequestDef, ctx: &VarContext) -> Result<PreparedRequest> {
-    prepare_with(request, ctx, &Generators::now())
+/// What a saved request inherits from the collection it lives in. Empty for a
+/// draft or a standalone request, which has no collection.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Inherited<'a> {
+    /// Resolved when the request's own auth is [`Auth::Inherit`].
+    pub auth: Option<&'a Auth>,
+    /// Added after the request's own headers and before the defaults.
+    pub headers: &'a [Kv],
+}
+
+pub fn prepare(
+    request: &RequestDef,
+    ctx: &VarContext,
+    inherited: Inherited<'_>,
+) -> Result<PreparedRequest> {
+    prepare_with(request, ctx, &Generators::now(), inherited)
 }
 
 pub fn prepare_with(
     request: &RequestDef,
     ctx: &VarContext,
     generators: &Generators,
+    inherited: Inherited<'_>,
 ) -> Result<PreparedRequest> {
     let raw_url = resolve_with(&request.url, ctx, generators)?;
     let mut url =
@@ -89,6 +104,20 @@ pub fn prepare_with(
     // Defaults come after the user's rows so an override always wins. The
     // comparison is case-insensitive, the way HTTP names are: `user-agent` and
     // `User-Agent` are the same header.
+    // The collection's headers sit between the request's own rows and the
+    // defaults: a name the request set wins, and one nobody set falls through.
+    for header in inherited.headers.iter().filter(|header| header.enabled) {
+        let key = resolve_with(&header.key, ctx, generators)?;
+        let value = resolve_with(&header.value, ctx, generators)?;
+        check_header(&key, &value)?;
+        if !headers
+            .iter()
+            .any(|(existing, _)| existing.eq_ignore_ascii_case(&key))
+        {
+            headers.push((key, value));
+        }
+    }
+
     for (key, value) in default_headers() {
         if !headers
             .iter()
@@ -109,7 +138,14 @@ pub fn prepare_with(
         ));
     }
 
-    apply_auth(&request.auth, ctx, generators, &mut headers, &mut query)?;
+    apply_auth(
+        &request.auth,
+        inherited.auth,
+        ctx,
+        generators,
+        &mut headers,
+        &mut query,
+    )?;
 
     if !query.is_empty() {
         let mut pairs = url.query_pairs_mut();
@@ -131,6 +167,7 @@ pub fn prepare_with(
 
 fn apply_auth(
     auth: &Auth,
+    inherited: Option<&Auth>,
     ctx: &VarContext,
     generators: &Generators,
     headers: &mut Vec<(String, String)>,
@@ -138,9 +175,16 @@ fn apply_auth(
 ) -> Result<()> {
     match auth {
         Auth::None => {}
-        // Nothing resolves `Inherit` until the send carries its collection's
-        // context, so a bare request adds no auth.
-        Auth::Inherit => {}
+        Auth::Inherit => {
+            // One level only: a collection's auth cannot inherit again, and a
+            // request with no collection sends no auth.
+            match inherited {
+                Some(auth) if !matches!(auth, Auth::Inherit) => {
+                    apply_auth(auth, None, ctx, generators, headers, query)?;
+                }
+                _ => {}
+            }
+        }
         Auth::Basic { username, password } => {
             let username = resolve_with(username, ctx, generators)?;
             let password = resolve_with(password, ctx, generators)?;
@@ -264,7 +308,7 @@ mod tests {
             .with_scope([("host", "api.example.com")])
             .with_scope([("page", "2")]);
 
-        let prepared = prepare(&request, &ctx).unwrap();
+        let prepared = prepare(&request, &ctx, Inherited::default()).unwrap();
         assert_eq!(
             prepared.url.as_str(),
             "https://api.example.com/v1/items?page=2"
@@ -279,7 +323,7 @@ mod tests {
             password: "pass".into(),
         };
 
-        let prepared = prepare(&request, &VarContext::new()).unwrap();
+        let prepared = prepare(&request, &VarContext::new(), Inherited::default()).unwrap();
         assert!(prepared
             .headers
             .contains(&("authorization".to_owned(), "Basic dXNlcjpwYXNz".to_owned())));
@@ -288,7 +332,7 @@ mod tests {
     #[test]
     fn defaults_fill_in_what_the_user_did_not_override() {
         let request = RequestDef::new(Method::Get, "https://example.com");
-        let prepared = prepare(&request, &VarContext::new()).unwrap();
+        let prepared = prepare(&request, &VarContext::new(), Inherited::default()).unwrap();
 
         for (key, value) in default_headers() {
             assert!(
@@ -306,7 +350,7 @@ mod tests {
         let mut request = RequestDef::new(Method::Get, "https://example.com");
         request.headers.push(Kv::new("user-agent", "mine/1.0"));
 
-        let prepared = prepare(&request, &VarContext::new()).unwrap();
+        let prepared = prepare(&request, &VarContext::new(), Inherited::default()).unwrap();
         assert_eq!(
             prepared
                 .headers
@@ -327,14 +371,14 @@ mod tests {
             .headers
             .push(Kv::new("x-test", "value\r\nx-evil: 1"));
 
-        let error = prepare(&request, &VarContext::new()).unwrap_err();
+        let error = prepare(&request, &VarContext::new(), Inherited::default()).unwrap_err();
         assert!(matches!(error, Error::InvalidHeader(_)));
     }
 
     #[test]
     fn missing_variable_fails_before_sending() {
         let request = RequestDef::new(Method::Get, "https://{{nope}}/");
-        assert!(prepare(&request, &VarContext::new()).is_err());
+        assert!(prepare(&request, &VarContext::new(), Inherited::default()).is_err());
     }
 
     #[test]
@@ -346,7 +390,7 @@ mod tests {
         };
 
         let ctx = VarContext::new().with_scope([("token", "abc")]);
-        let prepared = prepare(&request, &ctx).unwrap();
+        let prepared = prepare(&request, &ctx, Inherited::default()).unwrap();
         assert!(prepared
             .headers
             .contains(&("authorization".to_owned(), "Bearer abc".to_owned())));
@@ -360,7 +404,7 @@ mod tests {
             access_token: None,
         };
 
-        let error = prepare(&request, &VarContext::new()).unwrap_err();
+        let error = prepare(&request, &VarContext::new(), Inherited::default()).unwrap_err();
         assert!(matches!(error, Error::OAuth(_)));
         assert_eq!(
             error.to_string(),
@@ -373,9 +417,112 @@ mod tests {
         let request = RequestDef::new(Method::Get, "https://example.com/{{$uuid}}");
 
         let now = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
-        let prepared = prepare_with(&request, &VarContext::new(), &Generators::at(now, 7)).unwrap();
+        let prepared = prepare_with(
+            &request,
+            &VarContext::new(),
+            &Generators::at(now, 7),
+            Inherited::default(),
+        )
+        .unwrap();
 
         let id = prepared.url.path().trim_start_matches('/');
         assert_eq!(uuid::Uuid::parse_str(id).unwrap().get_version_num(), 4);
+    }
+
+    #[test]
+    fn an_inherited_auth_comes_from_the_collection() {
+        let mut request = RequestDef::new(Method::Get, "https://example.com");
+        request.auth = Auth::Inherit;
+        let auth = Auth::Bearer {
+            token: "abc".into(),
+        };
+
+        let prepared = prepare(
+            &request,
+            &VarContext::new(),
+            Inherited {
+                auth: Some(&auth),
+                headers: &[],
+            },
+        )
+        .unwrap();
+        assert!(prepared
+            .headers
+            .contains(&("authorization".to_owned(), "Bearer abc".to_owned())));
+    }
+
+    #[test]
+    fn a_request_with_inherit_and_no_collection_sends_no_auth() {
+        // A draft or standalone request has no collection to inherit from, and a
+        // collection whose own auth is `Inherit` stops at one level.
+        let mut request = RequestDef::new(Method::Get, "https://example.com");
+        request.auth = Auth::Inherit;
+        let inherited_auth = Auth::Inherit;
+
+        for inherited in [
+            Inherited::default(),
+            Inherited {
+                auth: Some(&inherited_auth),
+                headers: &[],
+            },
+        ] {
+            let prepared = prepare(&request, &VarContext::new(), inherited).unwrap();
+            assert!(!prepared
+                .headers
+                .iter()
+                .any(|(key, _)| key.eq_ignore_ascii_case("authorization")));
+        }
+    }
+
+    #[test]
+    fn an_inherited_header_yields_to_the_request_and_beats_the_default() {
+        let mut request = RequestDef::new(Method::Get, "https://example.com");
+        request.headers.push(Kv::new("User-Agent", "mine/1.0"));
+        let inherited_headers = [
+            Kv::new("user-agent", "theirs/2.0"),
+            Kv::new("x-client", "restbook"),
+        ];
+
+        let prepared = prepare(
+            &request,
+            &VarContext::new(),
+            Inherited {
+                auth: None,
+                headers: &inherited_headers,
+            },
+        )
+        .unwrap();
+
+        let values = |name: &str| {
+            prepared
+                .headers
+                .iter()
+                .filter(|(key, _)| key.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.as_str())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(values("user-agent"), ["mine/1.0"]);
+        assert_eq!(values("x-client"), ["restbook"]);
+        assert!(!values("accept").is_empty());
+    }
+
+    #[test]
+    fn an_inherited_header_value_resolves_a_variable() {
+        let request = RequestDef::new(Method::Get, "https://example.com");
+        let inherited_headers = [Kv::new("X-Client", "{{client}}")];
+        let ctx = VarContext::new().with_scope([("client", "restbook")]);
+
+        let prepared = prepare(
+            &request,
+            &ctx,
+            Inherited {
+                auth: None,
+                headers: &inherited_headers,
+            },
+        )
+        .unwrap();
+        assert!(prepared
+            .headers
+            .contains(&("X-Client".to_owned(), "restbook".to_owned())));
     }
 }
