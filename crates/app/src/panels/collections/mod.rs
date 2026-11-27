@@ -772,7 +772,12 @@ impl CollectionsPanel {
             Some(target) => target.clone(),
             None => tree::default_destination(&self.collections, &self.selection)?,
         };
-        let request = self.document.read(cx).request.clone();
+        // A request created inside a collection inherits its auth by default,
+        // the way Postman and Bruno do; an update keeps the user's own choice.
+        let mut request = self.document.read(cx).request.clone();
+        if matches!(request.auth, Auth::None) {
+            request.auth = Auth::Inherit;
+        }
         let name = name
             .map(str::trim)
             .filter(|name| !name.is_empty())
@@ -2072,7 +2077,7 @@ mod tests {
         AppContext as _, Focusable as _, KeyDownEvent, Keystroke, Modifiers, PlatformInput,
         TestAppContext, VisualTestContext,
     };
-    use restbook_core::{Collection, CollectionItem, Folder, Store};
+    use restbook_core::{Auth, Collection, CollectionItem, Folder, Store};
     use restbook_store::{FolderStore, MemoryStore};
 
     use super::{selection_target, CollectionsPanel, Destination, RowTarget, Selection};
@@ -2156,6 +2161,88 @@ mod tests {
             collections[0].items.len(),
             1,
             "the request went to the root"
+        );
+    }
+
+    /// A request created inside a collection inherits the collection's auth by
+    /// default, the way Postman and Bruno model it; the user opts out with
+    /// `None`.
+    #[gpui_kit::test]
+    fn a_new_request_saved_into_a_collection_inherits_its_auth(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        crate::test_support::init_ui(cx);
+
+        let store = Arc::new(MemoryStore::new());
+        store
+            .save_collection(&Collection {
+                auth: Auth::Bearer {
+                    token: "collection-token".to_owned(),
+                },
+                ..Collection::new("col-a", "A")
+            })
+            .unwrap();
+
+        let for_panel: Arc<dyn Store> = store.clone();
+        // A brand-new live request has no auth of its own.
+        let document = cx.update(|cx| cx.new(|_| Document::new()));
+        let (panel, cx) =
+            cx.add_window_view(|window, cx| CollectionsPanel::new(for_panel, document, window, cx));
+
+        let target = cx.update(|_, cx| panel.read(cx).destinations()[0].target.clone());
+        let landed = panel.update(cx, |panel, cx| {
+            panel.save_current(None, Some("Saved"), Some(&target), cx)
+        });
+        assert!(landed.is_some(), "the save did not land");
+
+        let collections = store.collections().unwrap();
+        let CollectionItem::Request(saved) = &collections[0].items[0] else {
+            panic!("the request is missing");
+        };
+        assert!(
+            matches!(saved.request.auth, Auth::Inherit),
+            "a new request must inherit the collection's auth by default"
+        );
+    }
+
+    /// Saving over an existing node keeps the request's own auth, so the
+    /// inherit default never overrides an explicit `None`.
+    #[gpui_kit::test]
+    fn an_update_keeps_the_requests_own_auth(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        crate::test_support::init_ui(cx);
+
+        let store = Arc::new(MemoryStore::new());
+        store
+            .save_collection(&Collection {
+                items: vec![CollectionItem::Request(restbook_core::SavedRequest {
+                    id: "req-a".to_owned(),
+                    name: "Request A".to_owned(),
+                    request: restbook_core::RequestDef::new(
+                        restbook_core::Method::Get,
+                        "https://a",
+                    ),
+                })],
+                ..Collection::new("col-a", "A")
+            })
+            .unwrap();
+
+        let for_panel: Arc<dyn Store> = store.clone();
+        let document = cx.update(|cx| cx.new(|_| Document::new()));
+        let (panel, cx) =
+            cx.add_window_view(|window, cx| CollectionsPanel::new(for_panel, document, window, cx));
+
+        let landed = panel.update(cx, |panel, cx| {
+            panel.save_current(Some("req-a"), None, None, cx)
+        });
+        assert_eq!(landed.as_deref(), Some("req-a"), "the update did not land");
+
+        let collections = store.collections().unwrap();
+        let CollectionItem::Request(saved) = &collections[0].items[0] else {
+            panic!("the request is missing");
+        };
+        assert!(
+            matches!(saved.request.auth, Auth::None),
+            "an update must not turn an explicit None into Inherit"
         );
     }
 
