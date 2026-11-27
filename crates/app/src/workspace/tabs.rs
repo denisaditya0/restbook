@@ -1207,6 +1207,7 @@ impl Workspace {
             .request
             .update(cx, |panel, cx| panel.adopt_request(blank, cx));
         self.set_active_document(document, cx);
+        self.refresh_variable_scope(cx);
         self.push_tabs(cx);
     }
 
@@ -1237,6 +1238,7 @@ impl Workspace {
         if let Some(document) = self.documents.get(&id).cloned() {
             self.set_active_document(document, cx);
         }
+        self.refresh_variable_scope(cx);
     }
 
     /// Make `document` the one the panes observe. Re-subscribes the draft writer
@@ -1274,6 +1276,22 @@ impl Workspace {
         self.panes
             .request
             .update(cx, |panel, cx| panel.set_tabs(tabs, active, cx));
+    }
+
+    /// Hand the active tab's collection variables to `Variables`, so a send,
+    /// the inspector, and completion all see the Collection tier. A draft, an
+    /// orphan, or the empty window has no owner and so carries no rows.
+    pub(crate) fn refresh_variable_scope(&mut self, cx: &mut Context<Self>) {
+        let node = self
+            .tabs
+            .get(self.tabs.active())
+            .and_then(|tab| tab.node.clone());
+        let vars = match node {
+            Some(node) => self.panes.collections.read(cx).variables_for(&node),
+            None => Vec::new(),
+        };
+        self.variables
+            .update(cx, |variables, cx| variables.set_collection(vars, cx));
     }
 }
 
