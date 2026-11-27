@@ -144,15 +144,16 @@ States: **P** pristine (blank page) · **U** unfiled (typed or pasted, never sen
 | Send | nothing (empty URL) | mint → D, then history `Draft{id}` | history `Draft{id}` | history `Saved{node}` |
 | Save | → S, new node | → S, new node | → S: reassign history to the new node, delete the row | same node id |
 | Save As | → S, new node | → S, new node | → S, new node, reassign | → S, new node; the old node keeps its history |
-| Close tab | gone | gone | row deleted; its history keeps `Draft{id}` and surfaces under *All* only | node stays |
+| Close tab | gone | confirm, then gone | confirm, then the row is deleted; its history keeps `Draft{id}` and surfaces under *All* only | node stays; confirm only if edited |
 | Switch | — | in-memory snapshot | snapshot + row | snapshot; node unchanged |
 | Quit | gone | gone | row flushed | prompt if edited |
 | Restart | not restored | not restored | restored from the row | restored from the node |
 
 An edit never changes the id; **U → D** mints one at Send; **D → S** replaces the
 draft id with the node id (`reassign_history_origin`), so a draft's sends follow
-it into the collection. Deleting an open draft or node drops its tab to **U**, so
-it cannot save back to a dead id.
+it into the collection. Deleting an open node drops its tab to **U**, so it
+cannot save back to a dead id; a draft row goes with its tab, or follows it to
+the node on Save.
 
 ## Quitting the window
 

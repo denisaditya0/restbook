@@ -59,7 +59,9 @@ repo is two people meaning different things by one of them.
   id and no collection node. A request typed or pasted but never sent is in
   memory only and is not persisted.
 - **`Origin`** — whether a history row came from `Standalone`, `Saved { node }`, or
-  `Draft { draft }`. The app writes `Saved` or `Draft`; `Standalone` is legacy only.
+  `Draft { draft }`. The app writes `Saved` or `Draft`; `Standalone` is legacy
+  only for a stored row. In memory an ownerless tab is `Standalone`, and it is
+  never persisted as an origin.
 - **hit** — a `HistoryHit`: the columns a search row needs, not the whole entry.
 - **`Command`** — a palette entry in `panels/command_palette.rs`. Distinct from
   **action** — a typed keybinding target in `actions.rs`. They are two vocabularies.
