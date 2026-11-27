@@ -10,7 +10,7 @@ use std::sync::Arc;
 use gpui_kit::*;
 
 use restbook_core::{
-    prepare, Auth, CancelToken, Error, Failure, HistoryEntry, OAuthConfig, OAuthGrant,
+    prepare, Auth, CancelToken, Error, Failure, HistoryEntry, Inherited, OAuthConfig, OAuthGrant,
     OAuthTransport, Origin, Progress, Store, Transport,
 };
 
@@ -161,7 +161,21 @@ impl Workspace {
         // value, so a failure here is a race (an environment deleted between
         // the read and the click), not the normal unknown-name path.
         let scopes = self.variables.read(cx).scoped(&request);
-        let prepared = match prepare(&request, &scopes.context()) {
+        // A saved request inherits its collection's auth and headers; a draft or
+        // standalone request has no owner and inherits nothing.
+        let inherited_owner = self
+            .tabs
+            .position(send_id)
+            .and_then(|index| self.tabs[index].node.clone())
+            .and_then(|node| self.panes.collections.read(cx).inherited_for(&node));
+        let inherited = match &inherited_owner {
+            Some((auth, headers)) => Inherited {
+                auth: Some(auth),
+                headers: headers.as_slice(),
+            },
+            None => Inherited::default(),
+        };
+        let prepared = match prepare(&request, &scopes.context(), inherited) {
             Ok(prepared) => prepared,
             Err(error) => {
                 document.update(cx, |document, cx| {

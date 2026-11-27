@@ -8,9 +8,9 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use restbook_core::import::{self, ImportFormat, Options};
 use restbook_core::{
-    prepare, Body, CancelToken, Error, HistoryEntry, Kv, Method, OAuthConfig, OAuthGrant,
-    OAuthTransport, Origin, Progress, ProgressSnapshot, RequestDef, Result, Store, Transport,
-    VarContext,
+    prepare, Body, CancelToken, Error, HistoryEntry, Inherited, Kv, Method, OAuthConfig,
+    OAuthGrant, OAuthTransport, Origin, Progress, ProgressSnapshot, RequestDef, Result, Store,
+    Transport, VarContext,
 };
 use restbook_store::{FolderStore, JsonlStore};
 use restbook_transport::ReqwestTransport;
@@ -379,7 +379,7 @@ async fn send(store: &dyn Store, args: SendArgs) -> Result<()> {
         };
     }
 
-    let prepared = prepare(&request, &context)?;
+    let prepared = prepare(&request, &context, Inherited::default())?;
     let transport = ReqwestTransport::new()?;
     let response = if args.progress {
         let progress = Progress::new();
