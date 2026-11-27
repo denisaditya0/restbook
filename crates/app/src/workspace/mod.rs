@@ -628,6 +628,7 @@ impl Workspace {
                         this.pending_export = true;
                         cx.notify();
                     }
+                    CollectionsEvent::CollectionChanged => this.refresh_variable_scope(cx),
                 }
             },
         )
