@@ -40,12 +40,18 @@ struct Saved {
 }
 
 /// The open tabs, in strip order, and which one was on screen.
+///
+/// `closed_all` makes an empty session a state rather than a first run: a user
+/// who closed every tab gets the empty editor back, while a file that predates
+/// tabs (no field) or a pristine blank page still opens one blank tab.
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct SavedTabs {
     #[serde(default)]
     pub entries: Vec<SavedTab>,
     #[serde(default)]
     pub active: usize,
+    #[serde(default)]
+    pub closed_all: bool,
 }
 
 /// One restorable tab. A bound tab names its collection node; a draft names its
@@ -67,6 +73,7 @@ pub(crate) fn save(path: &Path, state: &DockAreaState, tabs: &SavedTabs) {
         tabs: SavedTabs {
             entries: tabs.entries.clone(),
             active: tabs.active,
+            closed_all: tabs.closed_all,
         },
     };
     let Ok(json) = serde_json::to_string_pretty(&saved) else {
@@ -552,6 +559,7 @@ impl Workspace {
         SavedTabs {
             entries,
             active: active.unwrap_or(0),
+            closed_all: self.tabs.is_empty(),
         }
     }
 
@@ -682,6 +690,7 @@ mod tab_tests {
                 SavedTab::Draft { id: 7 },
             ],
             active: 1,
+            closed_all: false,
         };
 
         save(&path, &DockAreaState::default(), &saved);

@@ -2085,6 +2085,67 @@ mod tests {
         }
     }
 
+    /// A session that ended with every tab closed is a state the next launch
+    /// must reproduce: the window opens on the empty editor, not a blank page.
+    /// A first run, and a record whose tabs were all dropped, still open one.
+    mod restore_tabs {
+        use gpui_kit::TestAppContext;
+
+        use super::super::persistence::{SavedTab, SavedTabs};
+        use super::super::Workspace;
+
+        fn record(entries: Vec<SavedTab>, closed_all: bool) -> SavedTabs {
+            SavedTabs {
+                entries,
+                active: 0,
+                closed_all,
+            }
+        }
+
+        #[gpui_kit::test]
+        fn closing_every_tab_reopens_none(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("restore-no-tabs");
+            let (workspace, cx) = cx.add_window_view(Workspace::new);
+
+            let tabs = cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.restore_tabs(record(Vec::new(), true), cx);
+                    workspace.tabs.len()
+                })
+            });
+            assert_eq!(tabs, 0, "a closed-everything launch keeps the empty editor");
+        }
+
+        #[gpui_kit::test]
+        fn a_first_run_and_a_dropped_record_keep_the_fresh_tab(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            crate::test_support::init_ui(cx);
+            let _dir = crate::test_support::DataDir::new("restore-fresh-tab");
+            let (workspace, cx) = cx.add_window_view(Workspace::new);
+
+            let (first_run, dropped) = cx.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.restore_tabs(record(Vec::new(), false), cx);
+                    let first_run = workspace.tabs.len();
+                    workspace.restore_tabs(
+                        record(
+                            vec![SavedTab::Bound {
+                                node: "gone".into(),
+                            }],
+                            false,
+                        ),
+                        cx,
+                    );
+                    (first_run, workspace.tabs.len())
+                })
+            });
+            assert_eq!(first_run, 1, "a first run opens on one blank tab");
+            assert_eq!(dropped, 1, "a dropped tab leaves the fresh tab in place");
+        }
+    }
+
     /// A saved tab inherits its collection's variables for a send and for the
     /// inspector. The canvas resolves the owner and hands the rows to
     /// `Variables`, so a request whose URL is `{{base}}` resolves at the

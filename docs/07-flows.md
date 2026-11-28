@@ -47,7 +47,10 @@ same tab. Only a tab with an owner is recorded — a bound request, or a draft
 whose row exists — so a request typed or pasted and never sent is not restored.
 A tab whose collection node was deleted while the app was closed, or a draft
 whose row is gone, is dropped rather than reopened against nothing, and one
-message names how many were dropped.
+message names how many were dropped. A run that closes every tab records
+`closed_all`, so the next launch opens on the empty editor; a record with no
+tabs and no such flag — a first run, or a file from before tabs were restored —
+still opens one blank tab.
 
 Switching tabs swaps the whole `Document`, not a snapshot of one: each tab owns
 its request and its response, and `select_tab` hands the new entity to every pane
