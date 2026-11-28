@@ -401,7 +401,12 @@ src/panels/
   command_palette.rs     the fixed command table (each row's keys included) and the
                          dialog opener
   request.rs             method dropdown, URL bar, Send/Cancel, editor tabs
-  response.rs            status summary + Body / Headers / Cookies tabs
+  response.rs            the pane: status summary + Body / Headers / Cookies render
+  response/
+    display.rs           decode, highlight, find helpers, DisplayCache
+    find.rs              the find row and its stepping
+    cookies.rs           cookie rows and the inline edit
+    failure.rs           the failure card and its hint
   editor/
     mod.rs               RequestEditor: one RequestDef, five tab bodies
     params.rs headers.rs body.rs auth.rs settings.rs

@@ -121,7 +121,12 @@ runner. Build commands are `cargo` plus the `scripts/dev.*` wrappers.
 │           └── panels/          ONE MODULE PER PANE
 │               ├── mod.rs           pane exports
 │               ├── request.rs       request tabs, URL bar, editor tabs
-│               ├── response.rs      summary + Body/Headers/Cookies
+│               ├── response.rs      the pane: summary + Body/Headers/Cookies render
+│               ├── response/        the helpers the pane renders
+│               │   ├── display.rs   decode, highlight, find helpers, DisplayCache
+│               │   ├── find.rs      the find row and its stepping
+│               │   ├── cookies.rs   cookie rows and the inline edit
+│               │   └── failure.rs   the failure card and its hint
 │               ├── history.rs       store search + rows
 │               ├── collections/     saved requests and their tree
 │               │   ├── mod.rs       the pane: events, save/rename/delete, drafts
