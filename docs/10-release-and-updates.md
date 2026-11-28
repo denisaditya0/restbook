@@ -303,7 +303,7 @@ title with neither is listed as `(change)`. Lines run in PR order. With no
 previous tag, or no merged PRs, the page falls back to the changelog entry.
 
 The **manifest's `notes`** is the `## <version>` section of `CHANGELOG.md`, which
-is also what the update dialog shows. It stays in the user's words rather than
+is also what the update dialog and Settings › Updates show. It stays in the user's words rather than
 PR titles, because it is read inside the app and not on the releases page. A
 missing `CHANGELOG.md`, a missing section for the tag's version, or an empty one
 **fails the publish** rather than shipping an update with no description;
@@ -341,8 +341,9 @@ label moves.
   release channel installs itself on every machine.
 - Settings › Updates always checks on demand, shows the compiled version, and
   names the manifest URL it reads. It renders its own state inline — one button
-  whose meaning follows it (Check now, Download & install, busy), and one sentence
-  in the tone the state deserves.
+  whose meaning follows it (Check now, Download & install, busy), one sentence
+  in the tone the state deserves, and, when a newer version exists, the
+  changelog entry it would bring.
 - `Outcome::Available` with no asset for this platform is still reported in
   Settings, with the platform named: "newer exists, but nothing to install
   here". The launch offer skips that case, because it cannot be acted on.

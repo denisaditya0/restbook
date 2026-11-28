@@ -14,6 +14,7 @@ use gpui_kit::component::setting::{
     NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage,
     Settings as SettingsPanel,
 };
+use gpui_kit::component::text::TextView;
 use gpui_kit::component::{h_flex, v_flex, Disableable as _, WindowExt as _};
 use gpui_kit::*;
 
@@ -632,6 +633,26 @@ fn version_field(updates: &Entity<Updates>, cx: &mut App) -> AnyElement {
                 .child(sentence),
         );
     }
+    if let updates::Status::Available {
+        notes: Some(notes), ..
+    } = &status
+    {
+        if !notes.trim().is_empty() {
+            column = column
+                .child(
+                    div()
+                        .text_size(px(metrics.font_xs))
+                        .text_color(palette.muted)
+                        .child("Release notes"),
+                )
+                .child(
+                    div().id("settings-update-notes").max_h(px(240.)).child(
+                        TextView::markdown("settings-update-notes-text", notes.clone())
+                            .scrollable(true),
+                    ),
+                );
+        }
+    }
     column.into_any_element()
 }
 
@@ -1082,6 +1103,7 @@ mod tests {
 
         let (text, tone) = update_sentence(&Status::Available {
             latest: "0.2.0".to_owned(),
+            notes: None,
             asset: Some(asset()),
         })
         .unwrap();
@@ -1096,6 +1118,7 @@ mod tests {
         // an install the page can offer.
         let (text, tone) = update_sentence(&Status::Available {
             latest: "0.2.0".to_owned(),
+            notes: None,
             asset: None,
         })
         .unwrap();
