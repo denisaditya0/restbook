@@ -124,8 +124,10 @@ runner. Build commands are `cargo` plus the `scripts/dev.*` wrappers.
 │               ├── response.rs      summary + Body/Headers/Cookies
 │               ├── history.rs       store search + rows
 │               ├── collections/     saved requests and their tree
-│               │   ├── mod.rs       the pane: rows, events, save/rename/delete
-│               │   └── tree.rs      filter, sort, insert, remove, move, lookups
+│               │   ├── mod.rs       the pane: events, save/rename/delete, drafts
+│               │   ├── rows.rs      one visible row: collection, folder, or request
+│               │   ├── tree.rs      filter, sort, insert, remove, move, lookups
+│               │   └── settings.rs  the selected collection's inherited defaults
 │               ├── environment.rs   variable sets
 │               ├── command_palette.rs
 │               └── editor/          the tab bodies and their widgets

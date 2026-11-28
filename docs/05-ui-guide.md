@@ -393,8 +393,10 @@ src/workspace/
 src/panels/
   history.rs             sidebar: store search, rows, Picked event
   collections/
-    mod.rs               the pane: rows, events, save, rename, delete, drafts
+    mod.rs               the pane: events, save, rename, delete, drafts
+    rows.rs              the row renderers: collection, folder, request
     tree.rs              the tree: filter, sort, insert, remove, move, lookups
+    settings.rs          the selected collection's inherited defaults
   environment.rs         environment/globals editor + variable inspector
   command_palette.rs     the fixed command table (each row's keys included) and the
                          dialog opener
