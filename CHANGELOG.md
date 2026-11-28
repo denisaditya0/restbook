@@ -24,6 +24,15 @@ Contributors and pull requests are added to the release page by `release.yml`;
 do not write them here.
 -->
 
+## 0.2.8
+
+- **Settings shows what a new version changes.** The update offer now includes
+  the release notes for the version it is offering, so you can read what
+  changed before you install it.
+- **Closing every tab finally sticks.** Quit with every tab closed and the next
+  launch opens on the empty editor instead of one blank tab; a first run, or a
+  layout saved before tabs were remembered, still opens one blank tab.
+
 ## 0.2.7
 
 - **Switching tabs writes less to disk.** A tab switch now saves only the open
