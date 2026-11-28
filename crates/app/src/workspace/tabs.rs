@@ -359,10 +359,12 @@ enum DocState {
 impl Workspace {
     /// Replace the single blank page with the tabs the last run had open.
     ///
-    /// When nothing survives, the fresh tab the window opened with is left
-    /// alone: that is exactly a first run. Dropped tabs are reported once rather
-    /// than per tab, and only when something did open — a message over an empty
-    /// window would explain a loss the user cannot see.
+    /// A run that ended with every tab closed is a state, not a first run: the
+    /// window opens on the empty editor rather than resurrecting a blank page.
+    /// A fresh tab is left alone when a record has no tabs and no close-all
+    /// flag (a first run, or a file written before tabs were recorded), and
+    /// when every saved tab was dropped because its request was deleted — there
+    /// the loss is reported once over the fresh tab.
     pub(crate) fn restore_tabs(&mut self, saved: SavedTabs, cx: &mut Context<Self>) {
         let drafts = self.store.drafts().unwrap_or_default();
         let (tabs, dropped, active) = resolve_saved_tabs(
@@ -371,6 +373,11 @@ impl Workspace {
             &drafts,
         );
         if tabs.is_empty() {
+            if saved.entries.is_empty() && saved.closed_all {
+                self.tabs = TabState::new(Vec::new());
+                self.documents.clear();
+                self.adopt_active(cx);
+            }
             return;
         }
         self.tabs = TabState::new(tabs);
@@ -1359,6 +1366,7 @@ mod tests {
         let saved = SavedTabs {
             entries: vec![bound("node-1")],
             active: 0,
+            closed_all: false,
         };
         let request = RequestDef::new(Method::Post, "https://api.test/items");
 
@@ -1383,6 +1391,7 @@ mod tests {
         let saved = SavedTabs {
             entries: vec![bound("node-1")],
             active: 0,
+            closed_all: false,
         };
 
         let (tabs, dropped, _) = resolve_saved_tabs(&saved, |_| None, &[]);
@@ -1398,6 +1407,7 @@ mod tests {
         let saved = SavedTabs {
             entries: vec![SavedTab::Draft { id: 7 }],
             active: 0,
+            closed_all: false,
         };
         let drafts = vec![draft(7, "https://api.test/draft")];
 
@@ -1416,6 +1426,7 @@ mod tests {
         let saved = SavedTabs {
             entries: vec![SavedTab::Draft { id: 8 }],
             active: 0,
+            closed_all: false,
         };
 
         let (tabs, dropped, _) =
@@ -1437,6 +1448,7 @@ mod tests {
                 bound("b"),
             ],
             active: 3,
+            closed_all: false,
         };
         let drafts = vec![draft(2, "https://api.test/draft")];
 
