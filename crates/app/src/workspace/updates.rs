@@ -83,10 +83,16 @@ impl Workspace {
                 .on_click({
                     let updates = updates.clone();
                     let latest = latest.clone();
+                    let notes = notes.clone();
                     let asset = asset.clone();
                     move |_, window, cx| {
                         updates.update(cx, |updates, cx| {
-                            updates.install_offered(latest.clone(), asset.clone(), cx)
+                            updates.install_offered(
+                                latest.clone(),
+                                notes.clone(),
+                                asset.clone(),
+                                cx,
+                            )
                         });
                         window.close_dialog(cx);
                     }
@@ -149,6 +155,8 @@ pub(crate) enum Status {
     },
     Available {
         latest: String,
+        /// The `CHANGELOG.md` section for `latest`, when the manifest had one.
+        notes: Option<String>,
         /// `None` when the release published nothing for this platform: newer
         /// exists, but not one this machine can install.
         asset: Option<Asset>,
@@ -224,13 +232,13 @@ impl Updates {
             Ok(updater::Outcome::UpToDate { current }) => Status::UpToDate { current },
             Ok(updater::Outcome::Available {
                 latest,
-                // The offer dialog is handed the notes straight from the
-                // outcome (`PendingUpdate`); the status is read by the Settings
-                // page, which needs only the version and whether a build
-                // exists. Carrying the prose here too made it dead weight.
-                notes: _,
+                notes,
                 asset,
-            }) => Status::Available { latest, asset },
+            }) => Status::Available {
+                latest,
+                notes,
+                asset,
+            },
             Err(error) => Status::Failed(format!("Couldn’t check for updates. {error}")),
         };
         cx.notify();
@@ -242,9 +250,16 @@ impl Updates {
     /// only set by a check run in this entity. The offer runs its check in the
     /// workspace's task, so the status is seeded here first and the rest of the
     /// path — download, verify, hand to the OS — stays the one implementation.
-    pub(crate) fn install_offered(&mut self, latest: String, asset: Asset, cx: &mut Context<Self>) {
+    pub(crate) fn install_offered(
+        &mut self,
+        latest: String,
+        notes: Option<String>,
+        asset: Asset,
+        cx: &mut Context<Self>,
+    ) {
         self.status = Status::Available {
             latest,
+            notes,
             asset: Some(asset.clone()),
         };
         self.install(asset, cx);
@@ -322,6 +337,7 @@ mod tests {
         assert!(with(Status::Checking).asset().is_none());
         assert!(with(Status::Available {
             latest: "0.2.0".to_owned(),
+            notes: None,
             asset: None,
         })
         .asset()
